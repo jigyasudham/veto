@@ -12,8 +12,10 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { saveSession, restoreSession, listSessions, getDbPath } from './memory/local.js';
+import { routeTask, getRateStatus } from './router/index.js';
+import type { AgentType, Platform } from './router/index.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 const server = new Server(
   { name: 'veto', version: VERSION },
@@ -102,6 +104,58 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: [],
       },
     },
+    {
+      name: 'veto_route_task',
+      description:
+        'Scores a task for complexity (0-100) and returns the optimal tier, model recommendation, and rate status. Use before any substantial task to let the router decide which model to use.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          task: {
+            type: 'string',
+            description: 'The task description to score and route.',
+          },
+          agent_type: {
+            type: 'string',
+            description: 'Optional agent type — some agents are tier-locked regardless of score.',
+            enum: [
+              'lead-developer', 'system-architect', 'security-scanner',
+              'devil-advocate', 'decision-engine', 'risk-assessor',
+              'coder', 'tester', 'reviewer', 'database', 'documentation',
+              'file-manager', 'git-agent', 'search-agent', 'secrets', 'reporter',
+              'dynamic',
+            ],
+          },
+          files_affected: {
+            type: 'number',
+            description: 'Number of files the task will touch (influences complexity score).',
+          },
+          force_council: {
+            type: 'boolean',
+            description: 'Set true to force a Tier 3 / council-required routing.',
+          },
+          context: {
+            type: 'string',
+            description: 'Current context text — router will return a compression plan.',
+          },
+          preferred_platform: {
+            type: 'string',
+            description: 'Preferred AI platform. Router may override if rate-limited.',
+            enum: ['claude', 'gemini', 'codex'],
+          },
+        },
+        required: ['task'],
+      },
+    },
+    {
+      name: 'veto_rate_status',
+      description: 'Returns current request counts and rate limit status for all AI platforms tracked by Veto.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
   ],
 }));
 
@@ -121,8 +175,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 status: 'running',
                 version: VERSION,
                 server: 'veto',
-                phase: 1,
-                capabilities: ['session_save', 'session_restore'],
+                phase: 2,
+                capabilities: ['session_save', 'session_restore', 'router', 'rate_monitor'],
                 db_path: getDbPath(),
                 uptime_ms: process.uptime() * 1000,
                 timestamp: new Date().toISOString(),
@@ -233,6 +287,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               null,
               2
             ),
+          },
+        ],
+      };
+    }
+
+    case 'veto_route_task': {
+      const result = routeTask(String(args?.task ?? ''), {
+        agentType: args?.agent_type ? (String(args.agent_type) as AgentType) : undefined,
+        filesAffected: typeof args?.files_affected === 'number' ? args.files_affected : undefined,
+        forceCouncil: args?.force_council === true,
+        context: args?.context ? String(args.context) : undefined,
+        preferredPlatform: args?.preferred_platform ? (String(args.preferred_platform) as Platform) : 'claude',
+      });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    }
+
+    case 'veto_rate_status': {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(getRateStatus(), null, 2),
           },
         ],
       };

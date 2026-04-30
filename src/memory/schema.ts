@@ -71,11 +71,21 @@ export const CREATE_TABLES = `
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS rate_usage (
+    id            TEXT PRIMARY KEY,
+    platform      TEXT NOT NULL,
+    date_key      TEXT NOT NULL,
+    request_count INTEGER DEFAULT 0,
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(platform, date_key)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_sessions_platform   ON sessions(platform);
   CREATE INDEX IF NOT EXISTS idx_decisions_session   ON decisions(session_id);
   CREATE INDEX IF NOT EXISTS idx_files_session       ON files_modified(session_id);
   CREATE INDEX IF NOT EXISTS idx_learning_task_type  ON learning_data(task_type);
   CREATE INDEX IF NOT EXISTS idx_patterns_key        ON patterns(pattern_key);
+  CREATE INDEX IF NOT EXISTS idx_rate_usage_platform ON rate_usage(platform, date_key);
 `;
 
 export type SessionRow = {
