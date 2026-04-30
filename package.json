@@ -1,0 +1,30 @@
+{
+  "name": "veto",
+  "version": "0.1.0",
+  "description": "47 agents. 28 skills. 3 AIs. Self-learning. Zero extra cost.",
+  "keywords": ["mcp", "ai", "claude", "agents", "memory", "council"],
+  "author": "Jigyasu Dham <jigyasudham18@gmail.com>",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "veto": "./dist/cli.js"
+  },
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/server.js",
+    "init": "tsx src/cli.ts init"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  }
+}
