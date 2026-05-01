@@ -368,6 +368,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         architect: JSON.stringify(result.votes.architect),
         ux: JSON.stringify(result.votes.ux),
         devil: JSON.stringify(result.votes.devil),
+        legal: JSON.stringify(result.votes.legal),
+        security: JSON.stringify(result.votes.security),
         recommended: result.recommended,
       });
 
@@ -389,6 +391,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   architect: result.votes.architect.verdict,
                   ux: result.votes.ux.verdict,
                   devil: result.votes.devil.verdict,
+                  legal: result.votes.legal.verdict,
+                  security: result.votes.security.verdict,
                 },
               },
               null,

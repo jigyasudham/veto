@@ -15,11 +15,20 @@ export function decide(votes: Votes): {
     ['System Architect', votes.architect],
     ['UX Designer', votes.ux],
     ["Devil's Advocate", votes.devil],
+    ['Legal & Compliance', votes.legal],
+    ['Security', votes.security],
   ];
+
+  // Expert agents — their block is always RED regardless of other votes
+  const CRITICAL = new Set(['Lead Developer', 'System Architect', 'Legal & Compliance', 'Security']);
 
   const blockers = entries.filter(([, v]) => v.verdict === 'block');
   const warners = entries.filter(([, v]) => v.verdict === 'warn');
   const approvers = entries.filter(([, v]) => v.verdict === 'approve');
+
+  const criticalBlockers = blockers.filter(([name]) => CRITICAL.has(name));
+  const secondaryBlockers = blockers.filter(([name]) => !CRITICAL.has(name));
+  const criticalApprovers = approvers.filter(([name]) => CRITICAL.has(name));
 
   const block_reasons = blockers.map(([, v]) => v.reason);
   const warnings: string[] = [
@@ -30,12 +39,14 @@ export function decide(votes: Votes): {
 
   let final_verdict: CouncilVerdict;
 
-  if (blockers.length >= 2 && approvers.length >= 2) {
-    // Genuine split — neither side has majority
-    final_verdict = 'DEADLOCK';
-  } else if (blockers.length >= 1) {
+  if (criticalBlockers.length >= 1) {
+    // Any expert domain agent blocks → RED, no debate
     final_verdict = 'RED';
-  } else if (warners.length >= 1) {
+  } else if (secondaryBlockers.length >= 2 && criticalApprovers.length >= 2) {
+    // Business/UX objections vs technical approval — genuine split
+    final_verdict = 'DEADLOCK';
+  } else if (secondaryBlockers.length >= 1 || warners.length >= 1) {
+    // At least one concern but no hard expert block
     final_verdict = 'YELLOW';
   } else {
     final_verdict = 'GREEN';
@@ -67,6 +78,8 @@ export function formatDebate(
     architect: '🏛️ ',
     ux: '🎨',
     devil: '😈',
+    legal: '⚖️ ',
+    security: '🔒',
   };
 
   const AGENT_LABELS: Record<keyof Votes, string> = {
@@ -75,6 +88,8 @@ export function formatDebate(
     architect: 'Architect: ',
     ux: 'UX:        ',
     devil: 'Devil:     ',
+    legal: 'Legal:     ',
+    security: 'Security:  ',
   };
 
   const VERDICT_BADGE: Record<string, string> = {
@@ -98,7 +113,7 @@ export function formatDebate(
     '',
   ];
 
-  const keys: Array<keyof Votes> = ['lead_dev', 'pm', 'architect', 'ux', 'devil'];
+  const keys: Array<keyof Votes> = ['lead_dev', 'pm', 'architect', 'ux', 'devil', 'legal', 'security'];
 
   for (const key of keys) {
     const vote = votes[key];

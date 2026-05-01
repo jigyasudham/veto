@@ -22,6 +22,8 @@ export interface DebateResult {
     architect: AgentVote;
     ux: AgentVote;
     devil: AgentVote;
+    legal: AgentVote;
+    security: AgentVote;
   };
   recommended: string;
   block_reasons: string[];

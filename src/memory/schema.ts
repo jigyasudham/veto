@@ -46,6 +46,8 @@ export const CREATE_TABLES = `
     architect   TEXT,
     ux          TEXT,
     devil       TEXT,
+    legal       TEXT,
+    security    TEXT,
     recommended TEXT,
     debated_at  TEXT NOT NULL
   );

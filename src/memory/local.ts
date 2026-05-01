@@ -21,7 +21,16 @@ export function getDb(): DatabaseSync {
   _db.exec('PRAGMA foreign_keys = ON');
   _db.exec(CREATE_TABLES);
   migrateCouncilOutcomes(_db);
+  migrateCouncilColumns(_db);
   return _db;
+}
+
+// Adds legal and security columns if they don't exist (Phase 3 → Phase 3.1 migration)
+function migrateCouncilColumns(db: DatabaseSync): void {
+  const cols = db.prepare('PRAGMA table_info(council_outcomes)').all() as Array<{ name: string }>;
+  const names = new Set(cols.map(c => c.name));
+  if (!names.has('legal')) db.exec('ALTER TABLE council_outcomes ADD COLUMN legal TEXT');
+  if (!names.has('security')) db.exec('ALTER TABLE council_outcomes ADD COLUMN security TEXT');
 }
 
 // Migrates council_outcomes if it was created with NOT NULL session_id (Phase 1/2 schema)
@@ -117,6 +126,8 @@ export type SaveCouncilOutcomeInput = {
   architect: string;
   ux: string;
   devil: string;
+  legal: string;
+  security: string;
   recommended: string;
 };
 
@@ -125,10 +136,11 @@ export function saveCouncilOutcome(input: SaveCouncilOutcomeInput): string {
   const id = randomUUID();
   const now = new Date().toISOString();
   db.prepare(`
-    INSERT INTO council_outcomes (id, session_id, task, verdict, lead_dev, pm, architect, ux, devil, recommended, debated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO council_outcomes
+      (id, session_id, task, verdict, lead_dev, pm, architect, ux, devil, legal, security, recommended, debated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, input.session_id ?? null, input.task, input.verdict,
     input.lead_dev, input.pm, input.architect, input.ux, input.devil,
-    input.recommended, now);
+    input.legal, input.security, input.recommended, now);
   return id;
 }
