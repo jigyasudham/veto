@@ -15,8 +15,10 @@ import { saveSession, restoreSession, listSessions, getDbPath, saveCouncilOutcom
 import { runDebate } from './council/index.js';
 import { routeTask, getRateStatus } from './router/index.js';
 import type { AgentType, Platform } from './router/index.js';
+import { executeParallel, executeOne } from './agents/executor.js';
+import type { AgentTask, WorkerAgentType } from './agents/types.js';
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 
 const server = new Server(
   { name: 'veto', version: VERSION },
@@ -180,6 +182,83 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['task'],
       },
     },
+    {
+      name: 'veto_agent_plan',
+      description: 'Gets a domain-expert execution plan from a specific worker agent. Returns approach, ordered steps, checklist, patterns, and pitfalls for the task.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          agent: {
+            type: 'string',
+            description: 'The worker agent to consult.',
+            enum: ['coder','reviewer','tester','debugger','refactor','database','api','frontend','backend','devops','performance','migration','security-scanner','auth','privacy','secrets','dependency-audit','penetration'],
+          },
+          task: { type: 'string', description: 'The task for the agent to plan.' },
+          context: { type: 'string', description: 'Optional additional context.' },
+        },
+        required: ['agent', 'task'],
+      },
+    },
+    {
+      name: 'veto_code_review',
+      description: 'Runs the Code Reviewer agent on provided code. Returns scored findings (complexity, error handling, magic numbers, nesting, dead code) with severity and fixes.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'The code to review.' },
+          context: { type: 'string', description: 'Optional: file name, module description, or review focus.' },
+        },
+        required: ['code'],
+      },
+    },
+    {
+      name: 'veto_security_scan',
+      description: 'Runs the Security Scanner (OWASP Top 10) on provided code. Returns vulnerabilities with severity, CWE/OWASP category, and remediation steps.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          code: { type: 'string', description: 'The code to scan.' },
+          context: { type: 'string', description: 'Optional: language, framework, or specific concerns.' },
+        },
+        required: ['code'],
+      },
+    },
+    {
+      name: 'veto_secrets_scan',
+      description: 'Scans text or code for exposed credentials — API keys, tokens, passwords, connection strings, private keys. Returns findings with masked values and line numbers.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'The text or code to scan for secrets.' },
+        },
+        required: ['text'],
+      },
+    },
+    {
+      name: 'veto_execute_parallel',
+      description: 'Runs multiple worker agents simultaneously via Promise.all. Use to get domain expert input from several agents in one round-trip — e.g. coder + tester + security-scanner all planning the same feature together.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tasks: {
+            type: 'array',
+            description: 'List of agent tasks to run in parallel.',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Unique ID for this task (use any string).' },
+                agent: { type: 'string', description: 'Worker agent type.' },
+                task: { type: 'string', description: 'Task description for this agent.' },
+                code: { type: 'string', description: 'Optional code to analyze (triggers analyze() instead of plan()).' },
+                context: { type: 'string', description: 'Optional additional context.' },
+              },
+              required: ['id', 'agent', 'task'],
+            },
+          },
+        },
+        required: ['tasks'],
+      },
+    },
   ],
 }));
 
@@ -199,8 +278,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 status: 'running',
                 version: VERSION,
                 server: 'veto',
-                phase: 3,
-                capabilities: ['session_save', 'session_restore', 'router', 'rate_monitor', 'council_debate'],
+                phase: 4,
+                capabilities: ['session_save', 'session_restore', 'router', 'rate_monitor', 'council_debate', 'agent_plan', 'code_review', 'security_scan', 'secrets_scan', 'parallel_exec'],
                 db_path: getDbPath(),
                 uptime_ms: process.uptime() * 1000,
                 timestamp: new Date().toISOString(),
@@ -400,6 +479,86 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ),
           },
         ],
+      };
+    }
+
+    case 'veto_agent_plan': {
+      const agentType = String(args?.agent ?? '') as WorkerAgentType;
+      const task = String(args?.task ?? '').trim();
+      if (!task) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'task is required.' }) }], isError: true };
+      }
+      const result = await executeOne({ id: 'plan-1', agent: agentType, task, context: args?.context ? String(args.context) : undefined });
+      if (result.error) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result.plan ?? result.analysis, null, 2) }] };
+    }
+
+    case 'veto_code_review': {
+      const code = String(args?.code ?? '').trim();
+      if (!code) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'code is required.' }) }], isError: true };
+      }
+      const result = await executeOne({ id: 'review-1', agent: 'reviewer', task: 'review this code', code, context: args?.context ? String(args.context) : undefined });
+      if (result.error) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result.analysis, null, 2) }] };
+    }
+
+    case 'veto_security_scan': {
+      const code = String(args?.code ?? '').trim();
+      if (!code) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'code is required.' }) }], isError: true };
+      }
+      const result = await executeOne({ id: 'scan-1', agent: 'security-scanner', task: 'scan this code for security issues', code, context: args?.context ? String(args.context) : undefined });
+      if (result.error) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result.analysis, null, 2) }] };
+    }
+
+    case 'veto_secrets_scan': {
+      const text = String(args?.text ?? '').trim();
+      if (!text) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'text is required.' }) }], isError: true };
+      }
+      const result = await executeOne({ id: 'secrets-1', agent: 'secrets', task: 'scan for exposed credentials', code: text });
+      if (result.error) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result.analysis, null, 2) }] };
+    }
+
+    case 'veto_execute_parallel': {
+      const rawTasks = Array.isArray(args?.tasks) ? args.tasks : [];
+      if (rawTasks.length === 0) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'tasks array is required and must not be empty.' }) }], isError: true };
+      }
+      const tasks: AgentTask[] = rawTasks.map((t: Record<string, unknown>) => ({
+        id: String(t.id ?? ''),
+        agent: String(t.agent ?? '') as WorkerAgentType,
+        task: String(t.task ?? ''),
+        code: t.code ? String(t.code) : undefined,
+        context: t.context ? String(t.context) : undefined,
+      }));
+      const results = await executeParallel(tasks);
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            count: results.length,
+            total_duration_ms: results.reduce((s, r) => s + r.duration_ms, 0),
+            results: results.map(r => ({
+              id: r.id,
+              agent: r.agent,
+              duration_ms: r.duration_ms,
+              error: r.error,
+              output: r.plan ?? r.analysis,
+            })),
+          }, null, 2),
+        }],
       };
     }
 
