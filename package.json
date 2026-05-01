@@ -1,13 +1,13 @@
 {
   "name": "veto",
-  "version": "0.1.0",
-  "description": "47 agents. 28 skills. 3 AIs. Self-learning. Zero extra cost.",
+  "version": "0.8.0",
+  "description": "50 agents. 28 skills. 3 AIs. Self-learning. Zero extra cost.",
   "keywords": ["mcp", "ai", "claude", "agents", "memory", "council"],
   "author": "Jigyasu Dham <jigyasudham18@gmail.com>",
   "license": "MIT",
   "type": "module",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.5.0"
   },
   "bin": {
     "veto": "./dist/cli.js"
