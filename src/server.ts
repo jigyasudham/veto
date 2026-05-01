@@ -23,8 +23,9 @@ import { routeTask, getRateStatus, recordOutcome, getLearningStats, applyLearned
 import type { AgentType, Platform } from './router/index.js';
 import { executeParallel, executeOne } from './agents/executor.js';
 import type { AgentTask, WorkerAgentType } from './agents/types.js';
+import { handoff, continueSession, getPlatformSetup } from './adapters/index.js';
 
-const VERSION = '0.6.0';
+const VERSION = '0.7.0';
 
 const server = new Server(
   { name: 'veto', version: VERSION },
@@ -439,6 +440,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: [],
       },
     },
+    {
+      name: 'veto_handoff',
+      description: 'Saves the current session and returns step-by-step instructions to continue on another AI platform (Gemini or Codex). Call this when Claude is approaching its rate limit. The receiving platform calls veto_continue to restore full context instantly.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', description: 'What was accomplished this session — one or two sentences.' },
+          context: { type: 'string', description: 'Key context the next platform needs: active decisions, file paths, constraints.' },
+          task_state: { type: 'string', description: 'Current task state — what is done, what is in progress, what is next.' },
+          from_platform: { type: 'string', enum: ['claude', 'gemini', 'codex'], description: 'Platform handing off (default: claude).' },
+          to_platform: { type: 'string', enum: ['gemini', 'codex', 'claude'], description: 'Target platform. If omitted, Veto picks the platform with the most headroom.' },
+          project_dir: { type: 'string', description: 'Absolute path to the current project directory.' },
+          token_count: { type: 'number', description: 'Approximate tokens used this session.' },
+        },
+        required: ['summary', 'context'],
+      },
+    },
+    {
+      name: 'veto_continue',
+      description: 'Restores the most recent session on any platform. Call this immediately after switching platforms — Veto returns the full context, summary, and next action. Nothing needs to be re-explained.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          session_id: { type: 'string', description: 'Optional. Session ID from veto_handoff. If omitted, the most recent saved session is restored.' },
+        },
+        required: [],
+      },
+    },
+    {
+      name: 'veto_platform_setup',
+      description: 'Returns the exact MCP config and setup steps to connect a specific AI platform to this Veto server.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          platform: { type: 'string', enum: ['claude', 'gemini', 'codex'], description: 'The platform to get setup instructions for.' },
+          veto_server_path: { type: 'string', description: 'Absolute path to the built veto server (dist/server.js).' },
+        },
+        required: ['platform', 'veto_server_path'],
+      },
+    },
   ],
 }));
 
@@ -458,8 +499,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 status: 'running',
                 version: VERSION,
                 server: 'veto',
-                phase: 6,
-                capabilities: ['session_save', 'session_restore', 'router', 'rate_monitor', 'council_debate', 'agent_plan', 'code_review', 'security_scan', 'secrets_scan', 'parallel_exec', 'memory_store', 'memory_search', 'project_map', 'pattern_store', 'memory_export', 'memory_import', 'learning_stats', 'learning_apply', 'record_outcome'],
+                phase: 7,
+                capabilities: ['session_save', 'session_restore', 'router', 'rate_monitor', 'council_debate', 'agent_plan', 'code_review', 'security_scan', 'secrets_scan', 'parallel_exec', 'memory_store', 'memory_search', 'project_map', 'pattern_store', 'memory_export', 'memory_import', 'learning_stats', 'learning_apply', 'record_outcome', 'handoff', 'continue', 'platform_setup'],
                 db_path: getDbPath(),
                 uptime_ms: process.uptime() * 1000,
                 timestamp: new Date().toISOString(),
@@ -869,6 +910,57 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }, null, 2),
         }],
       };
+    }
+
+    case 'veto_handoff': {
+      const summary = String(args?.summary ?? '').trim();
+      const context = String(args?.context ?? '').trim();
+      if (!summary || !context) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'summary and context are required.' }) }], isError: true };
+      }
+      const result = handoff({
+        summary,
+        context,
+        task_state: args?.task_state ? String(args.task_state) : undefined,
+        from_platform: args?.from_platform ? String(args.from_platform) as Platform : 'claude',
+        to_platform: args?.to_platform ? String(args.to_platform) as Platform : undefined,
+        project_dir: args?.project_dir ? String(args.project_dir) : undefined,
+        token_count: typeof args?.token_count === 'number' ? args.token_count : 0,
+      });
+      return { content: [{ type: 'text', text: result.instructions + '\n\n' + JSON.stringify({ session_id: result.session_id, to_platform: result.to_platform, saved_at: result.saved_at, reason: result.reason }, null, 2) }] };
+    }
+
+    case 'veto_continue': {
+      const result = continueSession(args?.session_id ? String(args.session_id) : undefined);
+      if (!result.found) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: result.message }, null, 2) }], isError: true };
+      }
+      return {
+        content: [{
+          type: 'text',
+          text: result.message + '\n\n' + JSON.stringify({
+            session_id: result.session_id,
+            platform: result.platform,
+            summary: result.summary,
+            context: result.context,
+            task_state: result.task_state,
+            next_action: result.next_action,
+            project_dir: result.project_dir,
+            token_count: result.token_count,
+            restored_at: result.restored_at,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'veto_platform_setup': {
+      const platform = String(args?.platform ?? '').trim() as Platform;
+      const vetoServerPath = String(args?.veto_server_path ?? '').trim();
+      if (!platform || !vetoServerPath) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'platform and veto_server_path are required.' }) }], isError: true };
+      }
+      const setup = getPlatformSetup(platform, vetoServerPath);
+      return { content: [{ type: 'text', text: JSON.stringify(setup, null, 2) }] };
     }
 
     case 'veto_record_outcome': {
