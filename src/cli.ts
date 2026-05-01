@@ -9,7 +9,7 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '0.1.0';
+const VERSION = '0.8.0';
 const VETO_DIR = join(homedir(), '.veto');
 
 // Simple inline colors (no chalk needed for the init wizard to avoid ESM issues)
@@ -31,7 +31,7 @@ function printBanner() {
   console.log(c.bold(c.cyan('   ╚████╔╝ ███████╗   ██║   ╚██████╔╝')));
   console.log(c.bold(c.cyan('    ╚═══╝  ╚══════╝   ╚═╝    ╚═════╝')));
   console.log('');
-  console.log(c.dim(`  47 agents. 28 skills. 3 AIs. Self-learning. Zero extra cost.`));
+  console.log(c.dim(`  50 agents. 28 skills. 3 AIs. Self-learning. Zero extra cost.`));
   console.log(c.dim(`  v${VERSION}`));
   console.log('');
 }
@@ -80,10 +80,12 @@ async function initCommand() {
   const serverPath = join(distDir, 'server.js').replace(/\\/g, '/');
 
   console.log('');
-  console.log(c.bold('  ┌─ Add Veto to Claude Code ─────────────────────────────────────┐'));
+  console.log(c.bold('  ┌─ Add Veto to your AI CLI ──────────────────────────────────────┐'));
   console.log(c.bold('  │') + '                                                                ' + c.bold('│'));
-  console.log(c.bold('  │') + '  Edit your Claude Code MCP config:                            ' + c.bold('│'));
-  console.log(c.bold('  │') + c.dim('  ~/.claude/mcp_servers.json  (or claude_desktop_config.json)') + '  ' + c.bold('│'));
+  console.log(c.bold('  │') + '  Add to your MCP config (works on all three platforms):       ' + c.bold('│'));
+  console.log(c.bold('  │') + c.dim('  Claude:  ~/.claude/mcp_servers.json') + '                          ' + c.bold('│'));
+  console.log(c.bold('  │') + c.dim('  Gemini:  ~/.gemini/settings.json') + '                             ' + c.bold('│'));
+  console.log(c.bold('  │') + c.dim('  Codex:   ~/.codex/config.json') + '                                ' + c.bold('│'));
   console.log(c.bold('  │') + '                                                                ' + c.bold('│'));
   console.log(c.bold('  │') + c.cyan('  {') + '                                                           ' + c.bold('│'));
   console.log(c.bold('  │') + c.cyan('    "mcpServers": {') + '                                            ' + c.bold('│'));
@@ -99,9 +101,9 @@ async function initCommand() {
   console.log(c.green('  ✓ Veto is ready!'));
   console.log('');
   console.log('  Next steps:');
-  console.log(c.dim('  1.') + ' Add the config above to Claude Code');
-  console.log(c.dim('  2.') + ' Restart Claude Code');
-  console.log(c.dim('  3.') + ' Ask Claude: "Run veto_status to confirm Veto is connected"');
+  console.log(c.dim('  1.') + ' Add the config above to your AI CLI config file');
+  console.log(c.dim('  2.') + ' Restart the CLI');
+  console.log(c.dim('  3.') + ' Run: veto_status  — should return { "status": "running", "version": "0.8.0" }');
   console.log('');
 }
 
