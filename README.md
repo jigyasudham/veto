@@ -1,6 +1,6 @@
 # veto
 
-> **47 agents. 28 skills. 3 AIs. Self-learning. Zero extra cost.**
+> **50 agents. 28 skills. 3 AIs. Self-learning. Zero extra cost.**
 
 An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, and Gemini CLI using your existing subscriptions — giving every AI a council of specialist agents, persistent cross-platform memory, a self-learning router, and the ability to say no to bad decisions.
 
@@ -27,38 +27,85 @@ Then add to your Claude Code MCP config (`~/.claude/mcp_servers.json`):
 
 ---
 
-## What's Built (Phase 1)
+## What's Built (v0.5.0 — Phase 5 Complete)
 
-- MCP server skeleton — connects to Claude Code via stdio
-- SQLite memory (zero setup, works offline) using Node.js built-in `node:sqlite`
-- `veto_status` — server health check
-- `veto_session_save` — compress and save session context
-- `veto_session_restore` — restore any previous session by ID
-- `veto_sessions_list` — list all saved sessions
+### Memory (Phase 1)
+- SQLite at `~/.veto/veto.db` — zero setup, works offline
+- `veto_session_save` / `veto_session_restore` / `veto_sessions_list`
+
+### Router (Phase 2)
+- Local complexity scoring (0–100, zero tokens)
+- Rate limit monitoring across all 3 AI platforms
+- Context compression (typical 92% reduction)
+- `veto_route_task` / `veto_rate_status`
+
+### Council (Phase 3)
+- 7 specialist agents debate every task in parallel before execution
+- GREEN / YELLOW / RED / DEADLOCK verdicts
+- `veto_council_debate`
+
+### Core Agents (Phase 4)
+- 18 worker agents: 12 development + 6 security
+- Parallel execution engine
+- `veto_agent_plan` / `veto_code_review` / `veto_security_scan` / `veto_secrets_scan` / `veto_execute_parallel`
+
+### Memory System (Phase 5)
+- 5 memory agents: context manager, decision logger, project mapper, pattern learner, knowledge base
+- Searchable knowledge base with full-text search
+- Project structure map — navigate codebase without filesystem scans
+- Coding pattern store with confidence scoring
+- File-based cross-machine export/import (no external services)
+- `veto_memory_store` / `veto_memory_search` / `veto_project_map_update` / `veto_project_map_get` / `veto_pattern_store` / `veto_patterns_list` / `veto_memory_export` / `veto_memory_import`
+
+---
+
+## Cross-Machine Memory Transfer
+
+No accounts. No cloud services. No configuration.
+
+```
+Machine A  →  veto_memory_export  →  veto-export.json
+              copy file any way you like (Dropbox, USB, scp)
+Machine B  →  veto_memory_import  →  all sessions, knowledge, patterns restored
+              veto_session_restore  →  continue exactly where you stopped
+```
+
+---
+
+## Platform Support
+
+| Platform | MCP Support | Works with Veto |
+|---|---|---|
+| Claude Code | Native | ✅ Full support |
+| Gemini CLI | Experimental | ✅ Works |
+| Codex CLI | Plugin system | ✅ Works |
+| ChatGPT web/app | None | ❌ No MCP support |
 
 ---
 
 ## Roadmap
 
 | Phase | Status | Feature |
-|-------|--------|---------|
-| 1 | ✅ Done | MCP skeleton + SQLite memory + session save/restore |
-| 2 | Planned | Router — complexity scorer, rate limit monitor, tier assignment |
-| 3 | Planned | Council — 6 agents debate every task before execution |
-| 4 | Planned | 47 worker agents + 28 skills |
-| 5 | Planned | Memory agents + cross-session continuity |
-| 6 | Planned | Self-learning — 4 learning loops |
-| 7 | Planned | Cross-platform — Codex + Gemini adapters |
-| 8 | Planned | Full release + benchmarks |
+|---|---|---|
+| 1 — Foundation | ✅ Complete | MCP server + SQLite + session save/restore |
+| 2 — Router | ✅ Complete | Complexity scorer + rate monitor + tier assignment |
+| 3 — Council | ✅ Complete | 7-agent council + GREEN/YELLOW/RED/DEADLOCK |
+| 4 — Core Agents | ✅ Complete | 18 worker agents + parallel execution + 10 skills |
+| 5 — Memory System | ✅ Complete | 5 memory agents + knowledge base + project map + export/import |
+| 6 — Self-Learning | 🔜 Next | 4 learning loops + router self-adjustment |
+| 7 — Cross-Platform | ⏳ Planned | Codex + Gemini adapters + AI switch in < 3s |
+| 8 — Complete | ⏳ Planned | All 50 agents, 28 skills, benchmarks, demo GIFs |
+| 9 — Launch | ⏳ Planned | GitHub public + HN + Reddit + Product Hunt |
 
 ---
 
 ## Tech Stack
 
-- **Language:** TypeScript
-- **Runtime:** Node.js 22+
-- **MCP SDK:** `@modelcontextprotocol/sdk`
-- **Memory:** `node:sqlite` (built-in, zero deps)
+- **Language:** TypeScript (strict mode)
+- **Runtime:** Node.js 22.5+ (uses built-in `node:sqlite`)
+- **MCP SDK:** `@modelcontextprotocol/sdk` (official)
+- **Memory:** SQLite via `node:sqlite` — zero native compilation, works offline
+- **Cross-machine:** File-based JSON export/import — no external services
 - **Distribution:** npm / npx
 
 ---

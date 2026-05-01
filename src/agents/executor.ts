@@ -22,6 +22,13 @@ import * as secrets from './security/secrets.js';
 import * as dependencyAudit from './security/dependency-audit.js';
 import * as penetration from './security/penetration.js';
 
+// Memory agents
+import * as contextManager from './memory/context-manager.js';
+import * as decisionLogger from './memory/decision-logger.js';
+import * as projectMapper from './memory/project-mapper.js';
+import * as patternLearner from './memory/pattern-learner.js';
+import * as knowledgeBase from './memory/knowledge-base.js';
+
 // Agents that support analyze()
 const ANALYZE_CAPABLE: Set<WorkerAgentType> = new Set([
   'reviewer',
@@ -55,6 +62,11 @@ function resolveAgent(agentType: WorkerAgentType): AgentModule {
     case 'secrets':          return secrets;
     case 'dependency-audit': return dependencyAudit;
     case 'penetration':      return penetration;
+    case 'context-manager':  return contextManager;
+    case 'decision-logger':  return decisionLogger;
+    case 'project-mapper':   return projectMapper;
+    case 'pattern-learner':  return patternLearner;
+    case 'knowledge-base':   return knowledgeBase;
     default:
       throw new Error(`Unknown agent type: ${agentType}`);
   }

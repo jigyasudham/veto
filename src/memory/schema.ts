@@ -81,12 +81,38 @@ export const CREATE_TABLES = `
     UNIQUE(platform, date_key)
   );
 
-  CREATE INDEX IF NOT EXISTS idx_sessions_platform   ON sessions(platform);
-  CREATE INDEX IF NOT EXISTS idx_decisions_session   ON decisions(session_id);
-  CREATE INDEX IF NOT EXISTS idx_files_session       ON files_modified(session_id);
-  CREATE INDEX IF NOT EXISTS idx_learning_task_type  ON learning_data(task_type);
-  CREATE INDEX IF NOT EXISTS idx_patterns_key        ON patterns(pattern_key);
-  CREATE INDEX IF NOT EXISTS idx_rate_usage_platform ON rate_usage(platform, date_key);
+  CREATE TABLE IF NOT EXISTS knowledge_base (
+    id             TEXT PRIMARY KEY,
+    type           TEXT NOT NULL DEFAULT 'solution',
+    title          TEXT NOT NULL,
+    content        TEXT NOT NULL,
+    tags           TEXT,
+    project_dir    TEXT,
+    session_id     TEXT,
+    relevance      REAL DEFAULT 1.0,
+    accessed_count INTEGER DEFAULT 0,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS project_map (
+    id          TEXT PRIMARY KEY,
+    project_dir TEXT NOT NULL UNIQUE,
+    structure   TEXT NOT NULL,
+    key_modules TEXT,
+    tech_stack  TEXT,
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_sessions_platform    ON sessions(platform);
+  CREATE INDEX IF NOT EXISTS idx_decisions_session    ON decisions(session_id);
+  CREATE INDEX IF NOT EXISTS idx_files_session        ON files_modified(session_id);
+  CREATE INDEX IF NOT EXISTS idx_learning_task_type   ON learning_data(task_type);
+  CREATE INDEX IF NOT EXISTS idx_patterns_key         ON patterns(pattern_key);
+  CREATE INDEX IF NOT EXISTS idx_rate_usage_platform  ON rate_usage(platform, date_key);
+  CREATE INDEX IF NOT EXISTS idx_knowledge_type       ON knowledge_base(type);
+  CREATE INDEX IF NOT EXISTS idx_knowledge_project    ON knowledge_base(project_dir);
+  CREATE INDEX IF NOT EXISTS idx_project_map_dir      ON project_map(project_dir);
 `;
 
 export type SessionRow = {
@@ -119,5 +145,30 @@ export type PatternRow = {
   pattern_val: string;
   confidence: number;
   seen_count: number;
+  updated_at: string;
+};
+
+export type KnowledgeType = 'solution' | 'pattern' | 'context' | 'error' | 'reference' | 'decision';
+
+export type KnowledgeRow = {
+  id: string;
+  type: KnowledgeType;
+  title: string;
+  content: string;
+  tags: string | null;
+  project_dir: string | null;
+  session_id: string | null;
+  relevance: number;
+  accessed_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectMapRow = {
+  id: string;
+  project_dir: string;
+  structure: string;
+  key_modules: string | null;
+  tech_stack: string | null;
   updated_at: string;
 };

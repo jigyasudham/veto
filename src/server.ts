@@ -11,14 +11,20 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { saveSession, restoreSession, listSessions, getDbPath, saveCouncilOutcome } from './memory/local.js';
+import {
+  saveSession, restoreSession, listSessions, getDbPath, saveCouncilOutcome,
+  storeKnowledge, searchKnowledge, deleteKnowledge,
+  updateProjectMap, getProjectMap,
+  upsertPattern, getPatterns,
+} from './memory/local.js';
+import { exportMemory, importMemory, getLocalDbSize } from './memory/sync.js';
 import { runDebate } from './council/index.js';
 import { routeTask, getRateStatus } from './router/index.js';
 import type { AgentType, Platform } from './router/index.js';
 import { executeParallel, executeOne } from './agents/executor.js';
 import type { AgentTask, WorkerAgentType } from './agents/types.js';
 
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 
 const server = new Server(
   { name: 'veto', version: VERSION },
@@ -191,7 +197,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           agent: {
             type: 'string',
             description: 'The worker agent to consult.',
-            enum: ['coder','reviewer','tester','debugger','refactor','database','api','frontend','backend','devops','performance','migration','security-scanner','auth','privacy','secrets','dependency-audit','penetration'],
+            enum: ['coder','reviewer','tester','debugger','refactor','database','api','frontend','backend','devops','performance','migration','security-scanner','auth','privacy','secrets','dependency-audit','penetration','context-manager','decision-logger','project-mapper','pattern-learner','knowledge-base'],
           },
           task: { type: 'string', description: 'The task for the agent to plan.' },
           context: { type: 'string', description: 'Optional additional context.' },
@@ -259,6 +265,142 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['tasks'],
       },
     },
+    {
+      name: 'veto_memory_store',
+      description: 'Stores a knowledge entry (solution, pattern, error, reference, or decision) in the local knowledge base for retrieval across sessions. Search before storing to avoid duplicates.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Precise, searchable title. Bad: "Fixed bug". Good: "Fix: Node sqlite fails on Windows without --experimental-sqlite".' },
+          content: { type: 'string', description: 'Self-contained content: problem → root cause → solution. Future agents must understand it without original context.' },
+          type: {
+            type: 'string',
+            description: 'Entry type.',
+            enum: ['solution', 'pattern', 'context', 'error', 'reference', 'decision'],
+          },
+          tags: { type: 'array', items: { type: 'string' }, description: 'Search tags (3–5 recommended). Examples: ["typescript", "auth", "jwt"].' },
+          project_dir: { type: 'string', description: 'Absolute project path. Include for project-specific knowledge; omit for general programming knowledge.' },
+          session_id: { type: 'string', description: 'Optional: associate this knowledge entry with an active session.' },
+          relevance: { type: 'number', description: 'Initial relevance score 0.0–1.0 (default 1.0).' },
+        },
+        required: ['title', 'content'],
+      },
+    },
+    {
+      name: 'veto_memory_search',
+      description: 'Searches the local knowledge base for entries matching a query. Call at the start of every task to find prior solutions before solving from scratch.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search terms (full-text search on title and content).' },
+          type: {
+            type: 'string',
+            description: 'Filter by entry type.',
+            enum: ['solution', 'pattern', 'context', 'error', 'reference', 'decision'],
+          },
+          project_dir: { type: 'string', description: 'Filter to a specific project directory.' },
+          limit: { type: 'number', description: 'Max results to return (default 10, max 50).' },
+        },
+        required: [],
+      },
+    },
+    {
+      name: 'veto_memory_delete',
+      description: 'Deletes a knowledge entry by ID. Use to remove stale or duplicate entries found via veto_memory_search.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The knowledge entry ID (from veto_memory_search results).' },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'veto_project_map_update',
+      description: 'Updates the project structure map for a directory. Call after creating, deleting, or moving files. The map enables fast codebase navigation without filesystem scans.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          project_dir: { type: 'string', description: 'Absolute path to the project root.' },
+          structure: { type: 'string', description: 'JSON string representing the directory tree. Example: {"src/":{"agents/":["coder.ts","reviewer.ts"],"router/":["index.ts"]}}' },
+          key_modules: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'The 10–20 most important files with their roles. Example: ["src/server.ts (MCP entry point)", "src/router/index.ts (task router)"].',
+          },
+          tech_stack: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Frameworks and key libraries. Example: ["TypeScript", "Node.js 22", "Express", "SQLite"].',
+          },
+        },
+        required: ['project_dir', 'structure'],
+      },
+    },
+    {
+      name: 'veto_project_map_get',
+      description: 'Returns the stored project structure map for a directory. Use to navigate the codebase without scanning the filesystem.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          project_dir: { type: 'string', description: 'Absolute path to the project root.' },
+        },
+        required: ['project_dir'],
+      },
+    },
+    {
+      name: 'veto_pattern_store',
+      description: 'Stores or updates a coding pattern observed in the codebase. Patterns are keyed by category.pattern-name and confidence increases with repeated observation.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          pattern_key: { type: 'string', description: 'Pattern identifier in category.pattern-name format. Example: "code.async-pattern" or "naming.variable-case".' },
+          pattern_val: { type: 'string', description: 'The observed pattern value. Example: "async/await with try/catch, no raw Promise chains".' },
+          confidence: { type: 'number', description: 'Confidence score 0.0–1.0 (default 1.0). Increases automatically on repeated observation.' },
+        },
+        required: ['pattern_key', 'pattern_val'],
+      },
+    },
+    {
+      name: 'veto_patterns_list',
+      description: 'Returns stored coding patterns. Filter by prefix to get patterns in a specific category (e.g. prefix="naming." for all naming conventions).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          prefix: { type: 'string', description: 'Optional prefix filter. Example: "code." or "naming." or "testing.".' },
+          limit: { type: 'number', description: 'Max patterns to return (default 20).' },
+        },
+        required: [],
+      },
+    },
+    {
+      name: 'veto_memory_export',
+      description: 'Exports all local memory (sessions, knowledge, patterns, decisions, project maps) to a portable JSON file. Copy the file to another machine and run veto_memory_import there to resume work. No external services required.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          output_path: {
+            type: 'string',
+            description: 'Where to write the export file. Defaults to ~/.veto/veto-export.json. Use a path on shared storage (Dropbox, OneDrive, USB) to make transfer easy.',
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: 'veto_memory_import',
+      description: 'Imports memory from a JSON file exported by veto_memory_export on another machine. Merges into local SQLite using INSERT OR IGNORE — existing local rows are never overwritten. Call veto_sessions_list after import to confirm sessions arrived.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          input_path: {
+            type: 'string',
+            description: 'Path to the export JSON file. Defaults to ~/.veto/veto-export.json.',
+          },
+        },
+        required: [],
+      },
+    },
   ],
 }));
 
@@ -278,8 +420,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 status: 'running',
                 version: VERSION,
                 server: 'veto',
-                phase: 4,
-                capabilities: ['session_save', 'session_restore', 'router', 'rate_monitor', 'council_debate', 'agent_plan', 'code_review', 'security_scan', 'secrets_scan', 'parallel_exec'],
+                phase: 5,
+                capabilities: ['session_save', 'session_restore', 'router', 'rate_monitor', 'council_debate', 'agent_plan', 'code_review', 'security_scan', 'secrets_scan', 'parallel_exec', 'memory_store', 'memory_search', 'project_map', 'pattern_store', 'memory_export', 'memory_import'],
                 db_path: getDbPath(),
                 uptime_ms: process.uptime() * 1000,
                 timestamp: new Date().toISOString(),
@@ -560,6 +702,145 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }, null, 2),
         }],
       };
+    }
+
+    case 'veto_memory_store': {
+      const title = String(args?.title ?? '').trim();
+      const content = String(args?.content ?? '').trim();
+      if (!title || !content) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'title and content are required.' }) }], isError: true };
+      }
+      const id = storeKnowledge({
+        title,
+        content,
+        type: args?.type ? String(args.type) as import('./memory/schema.js').KnowledgeType : 'solution',
+        tags: Array.isArray(args?.tags) ? args.tags.map(String) : undefined,
+        project_dir: args?.project_dir ? String(args.project_dir) : undefined,
+        session_id: args?.session_id ? String(args.session_id) : undefined,
+        relevance: typeof args?.relevance === 'number' ? args.relevance : 1.0,
+      });
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, id, message: 'Knowledge stored.' }, null, 2) }] };
+    }
+
+    case 'veto_memory_search': {
+      const results = searchKnowledge({
+        query: args?.query ? String(args.query) : undefined,
+        type: args?.type ? String(args.type) as import('./memory/schema.js').KnowledgeType : undefined,
+        project_dir: args?.project_dir ? String(args.project_dir) : undefined,
+        limit: typeof args?.limit === 'number' ? args.limit : 10,
+      });
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            count: results.length,
+            results: results.map(r => ({
+              id: r.id,
+              type: r.type,
+              title: r.title,
+              content: r.content,
+              tags: r.tags ? JSON.parse(r.tags) : [],
+              project_dir: r.project_dir,
+              relevance: r.relevance,
+              accessed_count: r.accessed_count,
+              created_at: r.created_at,
+            })),
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'veto_memory_delete': {
+      const id = String(args?.id ?? '').trim();
+      if (!id) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'id is required.' }) }], isError: true };
+      }
+      const deleted = deleteKnowledge(id);
+      return { content: [{ type: 'text', text: JSON.stringify({ success: deleted, message: deleted ? 'Entry deleted.' : 'Entry not found.' }, null, 2) }] };
+    }
+
+    case 'veto_project_map_update': {
+      const project_dir = String(args?.project_dir ?? '').trim();
+      const structure = String(args?.structure ?? '').trim();
+      if (!project_dir || !structure) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir and structure are required.' }) }], isError: true };
+      }
+      const id = updateProjectMap({
+        project_dir,
+        structure,
+        key_modules: Array.isArray(args?.key_modules) ? args.key_modules.map(String) : undefined,
+        tech_stack: Array.isArray(args?.tech_stack) ? args.tech_stack.map(String) : undefined,
+      });
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, id, message: 'Project map updated.' }, null, 2) }] };
+    }
+
+    case 'veto_project_map_get': {
+      const project_dir = String(args?.project_dir ?? '').trim();
+      if (!project_dir) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
+      }
+      const row = getProjectMap(project_dir);
+      if (!row) {
+        return { content: [{ type: 'text', text: JSON.stringify({ found: false, message: 'No project map found. Call veto_project_map_update to create one.' }, null, 2) }] };
+      }
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            found: true,
+            project_dir: row.project_dir,
+            structure: JSON.parse(row.structure),
+            key_modules: row.key_modules ? JSON.parse(row.key_modules) : [],
+            tech_stack: row.tech_stack ? JSON.parse(row.tech_stack) : [],
+            updated_at: row.updated_at,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'veto_pattern_store': {
+      const pattern_key = String(args?.pattern_key ?? '').trim();
+      const pattern_val = String(args?.pattern_val ?? '').trim();
+      if (!pattern_key || !pattern_val) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'pattern_key and pattern_val are required.' }) }], isError: true };
+      }
+      upsertPattern({
+        pattern_key,
+        pattern_val,
+        confidence: typeof args?.confidence === 'number' ? args.confidence : 1.0,
+      });
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Pattern stored.' }, null, 2) }] };
+    }
+
+    case 'veto_patterns_list': {
+      const prefix = args?.prefix ? String(args.prefix) : undefined;
+      const limit = typeof args?.limit === 'number' ? args.limit : 20;
+      const patterns = getPatterns(prefix, limit);
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            count: patterns.length,
+            patterns: patterns.map(p => ({
+              key: p.pattern_key,
+              val: p.pattern_val,
+              confidence: p.confidence,
+              seen_count: p.seen_count,
+              updated_at: p.updated_at,
+            })),
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'veto_memory_export': {
+      const result = exportMemory(args?.output_path ? String(args.output_path) : undefined);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+
+    case 'veto_memory_import': {
+      const result = importMemory(args?.input_path ? String(args.input_path) : undefined);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
 
     default:

@@ -3,7 +3,9 @@ export type WorkerAgentType =
   | 'database' | 'api' | 'frontend' | 'backend' | 'devops'
   | 'performance' | 'migration'
   | 'security-scanner' | 'auth' | 'privacy' | 'secrets'
-  | 'dependency-audit' | 'penetration';
+  | 'dependency-audit' | 'penetration'
+  | 'context-manager' | 'decision-logger' | 'project-mapper'
+  | 'pattern-learner' | 'knowledge-base';
 
 export type FindingSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
