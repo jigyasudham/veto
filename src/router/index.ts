@@ -4,14 +4,14 @@ import { scoreComplexity } from './complexity-scorer.js';
 import { selectModel } from './model-selector.js';
 import { getRateStatus, trackRequest, getRoutingAdvice } from './rate-monitor.js';
 import { compressContext, estimateTokens } from './context-compressor.js';
-import { recordOutcome, getLearningStats } from './learning-updater.js';
+import { recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights } from './learning-updater.js';
 
 export type { ComplexityResult, ComplexityFactors } from './complexity-scorer.js';
 export type { AgentType, Tier, ModelRecommendation } from './model-selector.js';
 export type { Platform, RateLimitEntry, RateStatus } from './rate-monitor.js';
 export type { CompressionStrategy, CompressionResult } from './context-compressor.js';
-export type { LearningStats } from './learning-updater.js';
-export { estimateTokens, getRateStatus, trackRequest, recordOutcome, getLearningStats };
+export type { LearningStats, LearnedThresholds, AgentPerformanceStat, TaskTypeBreakdown, CouncilInsight } from './learning-updater.js';
+export { estimateTokens, getRateStatus, trackRequest, recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights };
 
 export type RouteOptions = {
   agentType?: import('./model-selector.js').AgentType;
@@ -32,7 +32,8 @@ export type RouteResult = {
 };
 
 export function routeTask(task: string, options: RouteOptions = {}): RouteResult {
-  const complexity = scoreComplexity(task, options.filesAffected, options.forceCouncil);
+  const learned = getLearnedThresholds();
+  const complexity = scoreComplexity(task, options.filesAffected, options.forceCouncil, learned.source === 'learned' ? learned : undefined);
   const model = selectModel(complexity.score, options.agentType ?? 'dynamic');
 
   const preferred = options.preferredPlatform ?? 'claude';

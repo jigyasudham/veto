@@ -5,7 +5,10 @@ export type WorkerAgentType =
   | 'security-scanner' | 'auth' | 'privacy' | 'secrets'
   | 'dependency-audit' | 'penetration'
   | 'context-manager' | 'decision-logger' | 'project-mapper'
-  | 'pattern-learner' | 'knowledge-base';
+  | 'pattern-learner' | 'knowledge-base'
+  | 'researcher' | 'tech-advisor' | 'cost-analyzer'
+  | 'competitor-analyzer' | 'risk-assessor' | 'estimator'
+  | 'ethics-bias';
 
 export type FindingSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
