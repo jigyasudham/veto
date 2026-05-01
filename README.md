@@ -11,7 +11,7 @@ An MCP server that runs locally on your machine, plugs into Claude Code, Codex C
 | Requirement | Version | Notes |
 |---|---|---|
 | **Node.js** | 22.5.0 or higher | Required — uses the built-in `node:sqlite` module (no native compilation). Download at [nodejs.org](https://nodejs.org). |
-| **Claude Code** | Latest | The MCP client Veto connects to. Already installed if you're reading this. |
+| **At least one AI CLI** | Latest | Claude Code, Gemini CLI, or Codex CLI — whichever you use. Veto works with all three. See below. |
 
 **Check your Node version:**
 ```bash
@@ -20,12 +20,15 @@ node --version   # must be v22.5.0 or higher
 
 If you're on an older version, update Node before continuing — Veto will fail silently on Node 18 or 20 because `node:sqlite` does not exist in those versions.
 
-**Optional — only needed if you want cross-platform switching:**
+**Install whichever AI CLI(s) you use — Veto works with all of them:**
 
-| Platform | Install |
-|---|---|
-| Gemini CLI | `npm install -g @google/gemini-cli` then `gemini auth` |
-| Codex CLI | `npm install -g @openai/codex` then set `OPENAI_API_KEY` |
+| Platform | Install | Auth |
+|---|---|---|
+| **Claude Code** | [claude.ai/code](https://claude.ai/code) | Sign in via browser |
+| **Gemini CLI** | `npm install -g @google/gemini-cli` | `gemini auth` |
+| **Codex CLI** | `npm install -g @openai/codex` | `export OPENAI_API_KEY=your-key` |
+
+You only need one to get started. Install more to enable cross-platform handoff.
 
 ---
 
