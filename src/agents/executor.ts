@@ -29,6 +29,15 @@ import * as projectMapper from './memory/project-mapper.js';
 import * as patternLearner from './memory/pattern-learner.js';
 import * as knowledgeBase from './memory/knowledge-base.js';
 
+// Research agents
+import * as researcher from './research/researcher.js';
+import * as techAdvisor from './research/tech-advisor.js';
+import * as costAnalyzer from './research/cost-analyzer.js';
+import * as competitorAnalyzer from './research/competitor-analyzer.js';
+import * as riskAssessor from './research/risk-assessor.js';
+import * as estimator from './research/estimator.js';
+import * as ethicsBias from './research/ethics-bias.js';
+
 // Agents that support analyze()
 const ANALYZE_CAPABLE: Set<WorkerAgentType> = new Set([
   'reviewer',
@@ -66,7 +75,14 @@ function resolveAgent(agentType: WorkerAgentType): AgentModule {
     case 'decision-logger':  return decisionLogger;
     case 'project-mapper':   return projectMapper;
     case 'pattern-learner':  return patternLearner;
-    case 'knowledge-base':   return knowledgeBase;
+    case 'knowledge-base':      return knowledgeBase;
+    case 'researcher':          return researcher;
+    case 'tech-advisor':        return techAdvisor;
+    case 'cost-analyzer':       return costAnalyzer;
+    case 'competitor-analyzer': return competitorAnalyzer;
+    case 'risk-assessor':       return riskAssessor;
+    case 'estimator':           return estimator;
+    case 'ethics-bias':         return ethicsBias;
     default:
       throw new Error(`Unknown agent type: ${agentType}`);
   }

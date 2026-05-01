@@ -19,12 +19,12 @@ import {
 } from './memory/local.js';
 import { exportMemory, importMemory, getLocalDbSize } from './memory/sync.js';
 import { runDebate } from './council/index.js';
-import { routeTask, getRateStatus } from './router/index.js';
+import { routeTask, getRateStatus, recordOutcome, getLearningStats, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights } from './router/index.js';
 import type { AgentType, Platform } from './router/index.js';
 import { executeParallel, executeOne } from './agents/executor.js';
 import type { AgentTask, WorkerAgentType } from './agents/types.js';
 
-const VERSION = '0.5.0';
+const VERSION = '0.6.0';
 
 const server = new Server(
   { name: 'veto', version: VERSION },
@@ -197,7 +197,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           agent: {
             type: 'string',
             description: 'The worker agent to consult.',
-            enum: ['coder','reviewer','tester','debugger','refactor','database','api','frontend','backend','devops','performance','migration','security-scanner','auth','privacy','secrets','dependency-audit','penetration','context-manager','decision-logger','project-mapper','pattern-learner','knowledge-base'],
+            enum: ['coder','reviewer','tester','debugger','refactor','database','api','frontend','backend','devops','performance','migration','security-scanner','auth','privacy','secrets','dependency-audit','penetration','context-manager','decision-logger','project-mapper','pattern-learner','knowledge-base','researcher','tech-advisor','cost-analyzer','competitor-analyzer','risk-assessor','estimator','ethics-bias'],
           },
           task: { type: 'string', description: 'The task for the agent to plan.' },
           context: { type: 'string', description: 'Optional additional context.' },
@@ -401,6 +401,44 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: [],
       },
     },
+    {
+      name: 'veto_record_outcome',
+      description: 'Records a task outcome (quality score) to feed the self-learning router. Call after completing any task. After 20+ outcomes, call veto_learning_apply to update tier thresholds.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          task_type: { type: 'string', description: 'Short consistent label for the task category (e.g. "write-unit-tests", "fix-auth-bug"). Use the same label for similar tasks to enable pattern detection.' },
+          complexity: { type: 'number', description: 'The complexity score from veto_route_task (0–100).' },
+          model_tier: { type: 'number', description: 'The tier that was actually used (1, 2, or 3).', enum: [1, 2, 3] },
+          output_quality: { type: 'number', description: 'Output quality score 0–100. 90–100=excellent, 70–89=good, 50–69=acceptable, 30–49=poor, 0–29=failed.' },
+          agent: { type: 'string', description: 'The worker agent type used (optional but useful for agent performance tracking).' },
+          tokens_used: { type: 'number', description: 'Approximate tokens used (optional).' },
+        },
+        required: ['task_type', 'complexity', 'model_tier', 'output_quality'],
+      },
+    },
+    {
+      name: 'veto_learning_stats',
+      description: 'Returns the self-learning router dashboard: tier distribution, per-agent quality stats, suggested threshold adjustments, and council insights. Use to understand how the router is performing and where to improve.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          include_agent_stats: { type: 'boolean', description: 'Include per-agent quality breakdown (default true).' },
+          include_task_types: { type: 'boolean', description: 'Include per-task-type breakdown (default false, verbose).' },
+          include_council_insights: { type: 'boolean', description: 'Include council decision → debugging correlation (default false).' },
+        },
+        required: [],
+      },
+    },
+    {
+      name: 'veto_learning_apply',
+      description: 'Applies learned tier thresholds to the router based on recorded task outcomes. Requires at least 20 recorded outcomes. The router immediately uses the new thresholds on the next veto_route_task call.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
   ],
 }));
 
@@ -420,8 +458,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 status: 'running',
                 version: VERSION,
                 server: 'veto',
-                phase: 5,
-                capabilities: ['session_save', 'session_restore', 'router', 'rate_monitor', 'council_debate', 'agent_plan', 'code_review', 'security_scan', 'secrets_scan', 'parallel_exec', 'memory_store', 'memory_search', 'project_map', 'pattern_store', 'memory_export', 'memory_import'],
+                phase: 6,
+                capabilities: ['session_save', 'session_restore', 'router', 'rate_monitor', 'council_debate', 'agent_plan', 'code_review', 'security_scan', 'secrets_scan', 'parallel_exec', 'memory_store', 'memory_search', 'project_map', 'pattern_store', 'memory_export', 'memory_import', 'learning_stats', 'learning_apply', 'record_outcome'],
                 db_path: getDbPath(),
                 uptime_ms: process.uptime() * 1000,
                 timestamp: new Date().toISOString(),
@@ -831,6 +869,51 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }, null, 2),
         }],
       };
+    }
+
+    case 'veto_record_outcome': {
+      const task_type = String(args?.task_type ?? '').trim();
+      const complexity = typeof args?.complexity === 'number' ? args.complexity : 50;
+      const model_tier = (typeof args?.model_tier === 'number' ? args.model_tier : 2) as 1 | 2 | 3;
+      const output_quality = typeof args?.output_quality === 'number' ? args.output_quality : 70;
+      if (!task_type) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'task_type is required.' }) }], isError: true };
+      }
+      recordOutcome(task_type, complexity, model_tier, args?.agent ? String(args.agent) : 'dynamic', output_quality, typeof args?.tokens_used === 'number' ? args.tokens_used : 0);
+      const stats = getLearningStats();
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Outcome recorded.', total_outcomes: stats.total_tasks, next_step: stats.total_tasks >= 20 ? 'You have 20+ outcomes. Call veto_learning_apply to update router thresholds.' : `Need ${20 - stats.total_tasks} more outcomes before veto_learning_apply can adjust thresholds.` }, null, 2) }] };
+    }
+
+    case 'veto_learning_stats': {
+      const includeAgentStats = args?.include_agent_stats !== false;
+      const includeTaskTypes = args?.include_task_types === true;
+      const includeCouncil = args?.include_council_insights === true;
+
+      const stats = getLearningStats();
+      const result: Record<string, unknown> = {
+        total_outcomes: stats.total_tasks,
+        tier_breakdown: stats.tier_breakdown,
+        current_thresholds: { tier1_max: 30, tier2_max: 70, note: 'defaults — call veto_learning_apply to update from data' },
+        suggested_thresholds: stats.suggested_thresholds,
+        ready_to_apply: stats.total_tasks >= 20,
+      };
+
+      if (includeAgentStats) {
+        result['agent_performance'] = getAgentPerformanceStats();
+      }
+      if (includeTaskTypes) {
+        result['task_type_breakdown'] = getTaskTypeBreakdown();
+      }
+      if (includeCouncil) {
+        result['council_insights'] = getCouncilInsights();
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+
+    case 'veto_learning_apply': {
+      const result = applyLearnedThresholds();
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
 
     case 'veto_memory_export': {

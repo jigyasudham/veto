@@ -40,8 +40,11 @@ const COUNCIL_TRIGGERS = [
 export function scoreComplexity(
   task: string,
   filesAffected = 1,
-  forceCouncil = false
+  forceCouncil = false,
+  thresholds?: { tier1_max: number; tier2_max: number }
 ): ComplexityResult {
+  const TIER1_MAX = thresholds?.tier1_max ?? 30;
+  const TIER2_MAX = thresholds?.tier2_max ?? 70;
   const lower = task.toLowerCase();
   const words = lower.split(/\s+/).filter(Boolean);
 
@@ -82,7 +85,7 @@ export function scoreComplexity(
   const raw = word_count_score + keyword_score + depth_score + files_score + council_bonus;
   // Council tasks always land in Tier 3 — floor at 71
   const score = Math.min(100, council_required ? Math.max(71, raw) : raw);
-  const tier: 1 | 2 | 3 = score <= 30 ? 1 : score <= 70 ? 2 : 3;
+  const tier: 1 | 2 | 3 = score <= TIER1_MAX ? 1 : score <= TIER2_MAX ? 2 : 3;
 
   return {
     score,
