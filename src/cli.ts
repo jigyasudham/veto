@@ -5,9 +5,8 @@
 process.removeAllListeners('warning');
 
 import { mkdirSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 
 const VERSION = '0.8.0';
 const VETO_DIR = join(homedir(), '.veto');
@@ -73,12 +72,7 @@ async function initCommand() {
     process.exit(1);
   }
 
-  // 3. Print Claude Code config snippet
-  // Point to server.js (the MCP server), not cli.js (the init wizard)
-  const cliFile = fileURLToPath(import.meta.url);
-  const distDir = dirname(cliFile);
-  const serverPath = join(distDir, 'server.js').replace(/\\/g, '/');
-
+  // 3. Print config snippet using the stable "veto-server" bin command
   console.log('');
   console.log(c.bold('  ┌─ Add Veto to your AI CLI or IDE ───────────────────────────────┐'));
   console.log(c.bold('  │') + '                                                                ' + c.bold('│'));
@@ -95,8 +89,7 @@ async function initCommand() {
   console.log(c.bold('  │') + c.cyan('  {') + '                                                           ' + c.bold('│'));
   console.log(c.bold('  │') + c.cyan('    "mcpServers": {') + '                                            ' + c.bold('│'));
   console.log(c.bold('  │') + c.cyan('      "veto": {') + '                                               ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('        "command": "node",') + '                                    ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan(`        "args": ["${serverPath}"]`) + '              ' + c.bold('│'));
+  console.log(c.bold('  │') + c.cyan('        "command": "veto-server"') + '                               ' + c.bold('│'));
   console.log(c.bold('  │') + c.cyan('      }') + '                                                       ' + c.bold('│'));
   console.log(c.bold('  │') + c.cyan('    }') + '                                                         ' + c.bold('│'));
   console.log(c.bold('  │') + c.cyan('  }') + '                                                           ' + c.bold('│'));
@@ -107,8 +100,7 @@ async function initCommand() {
   console.log(c.bold('  │') + c.cyan('    "servers": {') + '                                              ' + c.bold('│'));
   console.log(c.bold('  │') + c.cyan('      "veto": {') + '                                               ' + c.bold('│'));
   console.log(c.bold('  │') + c.cyan('        "type": "stdio",') + '                                      ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('        "command": "node",') + '                                    ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan(`        "args": ["${serverPath}"]`) + '              ' + c.bold('│'));
+  console.log(c.bold('  │') + c.cyan('        "command": "veto-server"') + '                               ' + c.bold('│'));
   console.log(c.bold('  │') + c.cyan('      }') + '                                                       ' + c.bold('│'));
   console.log(c.bold('  │') + c.cyan('    }') + '                                                         ' + c.bold('│'));
   console.log(c.bold('  │') + c.cyan('  }') + '                                                           ' + c.bold('│'));
@@ -120,7 +112,7 @@ async function initCommand() {
   console.log('  Next steps:');
   console.log(c.dim('  1.') + ' Add the config above to your AI CLI or IDE config file');
   console.log(c.dim('  2.') + ' Restart the CLI or IDE');
-  console.log(c.dim('  3.') + ' Run: veto_status  — should return { "status": "running", "version": "0.8.0" }');
+  console.log(c.dim('  3.') + ' Run: veto_status  — should return { "status": "running", "version": "' + VERSION + '" }');
   console.log('');
 }
 

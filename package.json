@@ -17,7 +17,8 @@
     "node": ">=22.5.0"
   },
   "bin": {
-    "veto": "dist/cli.js"
+    "veto": "dist/cli.js",
+    "veto-server": "dist/server.js"
   },
   "main": "./dist/server.js",
   "scripts": {

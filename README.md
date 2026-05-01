@@ -49,15 +49,26 @@ The `init` command prints the exact config snippet for your platform. Paste it i
 | **Windsurf** | `~/.codeium/windsurf/mcp_config.json` |
 | **VS Code** | `.vscode/mcp.json` |
 
-Claude Code, Gemini, Codex, Cursor, and Windsurf all use `"mcpServers"`. VS Code uses `"servers"` with `"type": "stdio"`:
+Claude Code, Gemini, Codex, Cursor, and Windsurf all use `"mcpServers"`:
+
+```json
+{
+  "mcpServers": {
+    "veto": {
+      "command": "veto-server"
+    }
+  }
+}
+```
+
+VS Code uses `"servers"` with `"type": "stdio"`:
 
 ```json
 {
   "servers": {
     "veto": {
       "type": "stdio",
-      "command": "node",
-      "args": ["/path/to/dist/server.js"]
+      "command": "veto-server"
     }
   }
 }
