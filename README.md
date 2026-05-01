@@ -95,7 +95,7 @@ Machine B  →  veto_memory_import  →  all sessions, knowledge, patterns resto
 | 6 — Self-Learning | 🔜 Next | 4 learning loops + router self-adjustment |
 | 7 — Cross-Platform | ⏳ Planned | Codex + Gemini adapters + AI switch in < 3s |
 | 8 — Complete | ⏳ Planned | All 50 agents, 28 skills, benchmarks, demo GIFs |
-| 9 — Launch | ⏳ Planned | GitHub public + HN + Reddit + Product Hunt |
+| 9 — Launch | ⏳ Planned | Public release |
 
 ---
 
