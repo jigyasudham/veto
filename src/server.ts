@@ -25,7 +25,7 @@ import { executeParallel, executeOne } from './agents/executor.js';
 import type { AgentTask, WorkerAgentType } from './agents/types.js';
 import { handoff, continueSession, getPlatformSetup } from './adapters/index.js';
 
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 
 const server = new Server(
   { name: 'veto', version: VERSION },
@@ -198,7 +198,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           agent: {
             type: 'string',
             description: 'The worker agent to consult.',
-            enum: ['coder','reviewer','tester','debugger','refactor','database','api','frontend','backend','devops','performance','migration','security-scanner','auth','privacy','secrets','dependency-audit','penetration','context-manager','decision-logger','project-mapper','pattern-learner','knowledge-base','researcher','tech-advisor','cost-analyzer','competitor-analyzer','risk-assessor','estimator','ethics-bias'],
+            enum: ['coder','reviewer','tester','debugger','refactor','database','api','frontend','backend','devops','performance','migration','security-scanner','auth','privacy','secrets','dependency-audit','penetration','context-manager','decision-logger','project-mapper','pattern-learner','knowledge-base','researcher','tech-advisor','cost-analyzer','competitor-analyzer','risk-assessor','estimator','ethics-bias','code-quality','documentation','accessibility','compatibility','error-handling','task-planner','task-coordinator','file-manager','git-agent','search-agent','reporter','automation'],
           },
           task: { type: 'string', description: 'The task for the agent to plan.' },
           context: { type: 'string', description: 'Optional additional context.' },
@@ -499,7 +499,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 status: 'running',
                 version: VERSION,
                 server: 'veto',
-                phase: 7,
+                phase: 8,
                 capabilities: ['session_save', 'session_restore', 'router', 'rate_monitor', 'council_debate', 'agent_plan', 'code_review', 'security_scan', 'secrets_scan', 'parallel_exec', 'memory_store', 'memory_search', 'project_map', 'pattern_store', 'memory_export', 'memory_import', 'learning_stats', 'learning_apply', 'record_outcome', 'handoff', 'continue', 'platform_setup'],
                 db_path: getDbPath(),
                 uptime_ms: process.uptime() * 1000,

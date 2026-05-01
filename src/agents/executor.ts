@@ -38,12 +38,32 @@ import * as riskAssessor from './research/risk-assessor.js';
 import * as estimator from './research/estimator.js';
 import * as ethicsBias from './research/ethics-bias.js';
 
+// Quality agents
+import * as codeQuality from './quality/code-quality.js';
+import * as documentation from './quality/documentation.js';
+import * as accessibility from './quality/accessibility.js';
+import * as compatibility from './quality/compatibility.js';
+import * as errorHandling from './quality/error-handling.js';
+
+// Workflow agents
+import * as taskPlanner from './workflow/task-planner.js';
+import * as taskCoordinator from './workflow/task-coordinator.js';
+import * as fileManager from './workflow/file-manager.js';
+import * as gitAgent from './workflow/git-agent.js';
+import * as searchAgent from './workflow/search-agent.js';
+import * as reporter from './workflow/reporter.js';
+import * as automation from './workflow/automation.js';
+
 // Agents that support analyze()
 const ANALYZE_CAPABLE: Set<WorkerAgentType> = new Set([
   'reviewer',
   'security-scanner',
   'secrets',
   'dependency-audit',
+  'code-quality',
+  'documentation',
+  'accessibility',
+  'error-handling',
 ]);
 
 type AgentModule = {
@@ -83,6 +103,18 @@ function resolveAgent(agentType: WorkerAgentType): AgentModule {
     case 'risk-assessor':       return riskAssessor;
     case 'estimator':           return estimator;
     case 'ethics-bias':         return ethicsBias;
+    case 'code-quality':        return codeQuality;
+    case 'documentation':       return documentation;
+    case 'accessibility':       return accessibility;
+    case 'compatibility':       return compatibility;
+    case 'error-handling':      return errorHandling;
+    case 'task-planner':        return taskPlanner;
+    case 'task-coordinator':    return taskCoordinator;
+    case 'file-manager':        return fileManager;
+    case 'git-agent':           return gitAgent;
+    case 'search-agent':        return searchAgent;
+    case 'reporter':            return reporter;
+    case 'automation':          return automation;
     default:
       throw new Error(`Unknown agent type: ${agentType}`);
   }
