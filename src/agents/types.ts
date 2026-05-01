@@ -8,7 +8,10 @@ export type WorkerAgentType =
   | 'pattern-learner' | 'knowledge-base'
   | 'researcher' | 'tech-advisor' | 'cost-analyzer'
   | 'competitor-analyzer' | 'risk-assessor' | 'estimator'
-  | 'ethics-bias';
+  | 'ethics-bias'
+  | 'code-quality' | 'documentation' | 'accessibility' | 'compatibility' | 'error-handling'
+  | 'task-planner' | 'task-coordinator' | 'file-manager' | 'git-agent'
+  | 'search-agent' | 'reporter' | 'automation';
 
 export type FindingSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
