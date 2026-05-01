@@ -35,7 +35,7 @@ You only need one to get started. Install more to enable cross-platform handoff.
 ## Quick Start
 
 ```bash
-npx veto@latest init
+npx @jigyasudham/veto@latest init
 ```
 
 The `init` command prints the exact config snippet for your platform. Paste it into your MCP config file:

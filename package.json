@@ -1,5 +1,5 @@
 {
-  "name": "veto",
+  "name": "@jigyasudham/veto",
   "version": "0.8.0",
   "description": "50 agents. 28 skills. 3 AIs. Self-learning. Zero extra cost.",
   "keywords": ["mcp", "ai", "claude", "agents", "memory", "council"],
