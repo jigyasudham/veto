@@ -12,7 +12,7 @@ An MCP server that runs locally on your machine, plugs into Claude Code, Codex C
 npx veto@latest init
 ```
 
-Then add to your Claude Code MCP config (`~/.claude/mcp_servers.json`):
+Add to your Claude Code MCP config (`~/.claude/mcp_servers.json`):
 
 ```json
 {
@@ -27,86 +27,122 @@ Then add to your Claude Code MCP config (`~/.claude/mcp_servers.json`):
 
 ---
 
-## What's Built (v0.5.0 — Phase 5 Complete)
+## What Veto Does
 
-### Memory (Phase 1)
-- SQLite at `~/.veto/veto.db` — zero setup, works offline
-- `veto_session_save` / `veto_session_restore` / `veto_sessions_list`
+**Council** — Before any significant task, 7 specialist agents debate it in parallel and return a GREEN / YELLOW / RED / DEADLOCK verdict. Bad decisions get blocked before any code is written.
 
-### Router (Phase 2)
-- Local complexity scoring (0–100, zero tokens)
-- Rate limit monitoring across all 3 AI platforms
-- Context compression (typical 92% reduction)
-- `veto_route_task` / `veto_rate_status`
+**Router** — Every task is scored locally (zero tokens) and sent to the right model tier. Rate limits are tracked across all 3 platforms. The router self-adjusts over time from recorded outcomes.
 
-### Council (Phase 3)
-- 7 specialist agents debate every task in parallel before execution
-- GREEN / YELLOW / RED / DEADLOCK verdicts
-- `veto_council_debate`
+**50 Agents** — Domain experts for every task type. Each agent knows when it is the right tool and when to defer to another.
 
-### Core Agents (Phase 4)
-- 18 worker agents: 12 development + 6 security
-- Parallel execution engine
-- `veto_agent_plan` / `veto_code_review` / `veto_security_scan` / `veto_secrets_scan` / `veto_execute_parallel`
+**Memory** — Sessions, decisions, knowledge, and coding patterns persist across every conversation and every platform.
 
-### Memory System (Phase 5)
-- 5 memory agents: context manager, decision logger, project mapper, pattern learner, knowledge base
-- Searchable knowledge base with full-text search
-- Project structure map — navigate codebase without filesystem scans
-- Coding pattern store with confidence scoring
-- File-based cross-machine export/import (no external services)
-- `veto_memory_store` / `veto_memory_search` / `veto_project_map_update` / `veto_project_map_get` / `veto_pattern_store` / `veto_patterns_list` / `veto_memory_export` / `veto_memory_import`
+**Cross-platform handoff** — Claude hitting its rate limit? Call `veto_handoff`, open Gemini or Codex, call `veto_continue`. Full context restored in seconds. Nothing re-explained.
 
 ---
 
-## Cross-Machine Memory Transfer
+## The 50 Agents
 
-No accounts. No cloud services. No configuration.
+### Council Layer (8) — runs before any code is written
+`Lead Developer` · `Product Manager` · `System Architect` · `UX Designer` · `Devil's Advocate` · `Legal & Compliance` · `Security` · `Decision Engine`
 
+### Development (12)
+`Coder` · `Code Reviewer` · `Tester` · `Debugger` · `Refactor` · `Database` · `API` · `Frontend` · `Backend` · `DevOps` · `Performance` · `Migration`
+
+### Security (6)
+`Security Scanner` · `Auth Agent` · `Data Privacy` · `Secrets Agent` · `Dependency Audit` · `Penetration Tester`
+
+### Memory (5)
+`Context Manager` · `Decision Logger` · `Project Mapper` · `Pattern Learner` · `Knowledge Base`
+
+### Research (7)
+`Researcher` · `Tech Advisor` · `Cost Analyzer` · `Competitor Analyzer` · `Risk Assessor` · `Estimator` · `Ethics & Bias`
+
+### Quality (5)
+`Code Quality` · `Documentation` · `Accessibility` · `Compatibility` · `Error Handling`
+
+### Workflow (7)
+`Task Planner` · `Task Coordinator` · `File Manager` · `Git Agent` · `Search Agent` · `Reporter` · `Automation`
+
+---
+
+## MCP Tools (29)
+
+| Category | Tools |
+|---|---|
+| Session | `veto_status` · `veto_session_save` · `veto_session_restore` · `veto_sessions_list` |
+| Router | `veto_route_task` · `veto_rate_status` |
+| Council | `veto_council_debate` |
+| Agents | `veto_agent_plan` · `veto_code_review` · `veto_security_scan` · `veto_secrets_scan` · `veto_execute_parallel` |
+| Memory | `veto_memory_store` · `veto_memory_search` · `veto_memory_delete` · `veto_project_map_update` · `veto_project_map_get` · `veto_pattern_store` · `veto_patterns_list` · `veto_memory_export` · `veto_memory_import` |
+| Learning | `veto_record_outcome` · `veto_learning_stats` · `veto_learning_apply` |
+| Handoff | `veto_handoff` · `veto_continue` · `veto_platform_setup` |
+
+---
+
+## Cross-Platform Handoff
+
+No accounts. No cloud services. Works on the same machine or across machines.
+
+**Rate limit mid-task:**
+```
+Claude at 90%  →  veto_handoff { summary, context }
+Open Gemini    →  veto_continue
+Full context restored. Continue exactly where you stopped.
+```
+
+**Switch machines:**
 ```
 Machine A  →  veto_memory_export  →  veto-export.json
-              copy file any way you like (Dropbox, USB, scp)
-Machine B  →  veto_memory_import  →  all sessions, knowledge, patterns restored
-              veto_session_restore  →  continue exactly where you stopped
+               copy file any way (Dropbox, USB, scp)
+Machine B  →  veto_memory_import
+               veto_session_restore  →  resume instantly
 ```
+
+**Platform support:**
+
+| Platform | Works with Veto |
+|---|---|
+| Claude Code | ✅ Native MCP |
+| Gemini CLI | ✅ MCP support |
+| Codex CLI | ✅ MCP support |
+| ChatGPT web | ❌ No MCP |
 
 ---
 
-## Platform Support
+## Self-Learning Router
 
-| Platform | MCP Support | Works with Veto |
-|---|---|---|
-| Claude Code | Native | ✅ Full support |
-| Gemini CLI | Experimental | ✅ Works |
-| Codex CLI | Plugin system | ✅ Works |
-| ChatGPT web/app | None | ❌ No MCP support |
+The router gets smarter as you use it:
+
+1. Complete a task → `veto_record_outcome` with quality score (0–100)
+2. After 20+ outcomes → `veto_learning_apply`
+3. Tier thresholds adjust — over-routed tasks self-correct over time
 
 ---
 
 ## Roadmap
 
-| Phase | Status | Feature |
+| Phase | Status | Version |
 |---|---|---|
-| 1 — Foundation | ✅ Complete | MCP server + SQLite + session save/restore |
-| 2 — Router | ✅ Complete | Complexity scorer + rate monitor + tier assignment |
-| 3 — Council | ✅ Complete | 7-agent council + GREEN/YELLOW/RED/DEADLOCK |
-| 4 — Core Agents | ✅ Complete | 18 worker agents + parallel execution + 10 skills |
-| 5 — Memory System | ✅ Complete | 5 memory agents + knowledge base + project map + export/import |
-| 6 — Self-Learning | 🔜 Next | 4 learning loops + router self-adjustment |
-| 7 — Cross-Platform | ⏳ Planned | Codex + Gemini adapters + AI switch in < 3s |
-| 8 — Complete | ⏳ Planned | All 50 agents, 28 skills, benchmarks, demo GIFs |
-| 9 — Launch | ⏳ Planned | Public release |
+| 1 — Foundation | ✅ Complete | v0.1.0 |
+| 2 — Router | ✅ Complete | v0.2.0 |
+| 3 — Council | ✅ Complete | v0.3.0 |
+| 4 — Core Agents | ✅ Complete | v0.4.0 |
+| 5 — Memory System | ✅ Complete | v0.5.0 |
+| 6 — Self-Learning | ✅ Complete | v0.6.0 |
+| 7 — Cross-Platform | ✅ Complete | v0.7.0 |
+| 8 — All 50 Agents | ✅ Complete | v0.8.0 |
+| 9 — Launch | ⏳ Planned | v1.0.0 |
 
 ---
 
 ## Tech Stack
 
 - **Language:** TypeScript (strict mode)
-- **Runtime:** Node.js 22.5+ (uses built-in `node:sqlite`)
+- **Runtime:** Node.js 22.5+
 - **MCP SDK:** `@modelcontextprotocol/sdk` (official)
 - **Memory:** SQLite via `node:sqlite` — zero native compilation, works offline
 - **Cross-machine:** File-based JSON export/import — no external services
-- **Distribution:** npm / npx
 
 ---
 
