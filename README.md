@@ -38,12 +38,24 @@ You only need one to get started. Install more to enable cross-platform handoff.
 npx veto@latest init
 ```
 
-Add to your Claude Code MCP config (`~/.claude/mcp_servers.json`):
+The `init` command prints the exact config snippet for your platform. Paste it into your MCP config file:
+
+| Platform | Config file |
+|---|---|
+| **Claude Code** | `~/.claude/mcp_servers.json` |
+| **Gemini CLI** | `~/.gemini/settings.json` |
+| **Codex CLI** | `~/.codex/config.json` |
+| **Cursor** | `~/.cursor/mcp.json` |
+| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` |
+| **VS Code** | `.vscode/mcp.json` |
+
+Claude Code, Gemini, Codex, Cursor, and Windsurf all use `"mcpServers"`. VS Code uses `"servers"` with `"type": "stdio"`:
 
 ```json
 {
-  "mcpServers": {
+  "servers": {
     "veto": {
+      "type": "stdio",
       "command": "node",
       "args": ["/path/to/dist/server.js"]
     }
@@ -132,7 +144,9 @@ Machine B  →  veto_memory_import
 | Claude Code | ✅ Native MCP |
 | Gemini CLI | ✅ MCP support |
 | Codex CLI | ✅ MCP support |
-| ChatGPT web | ❌ No MCP |
+| Cursor | ✅ MCP support |
+| Windsurf | ✅ MCP support |
+| VS Code | ✅ MCP support |
 
 ---
 
@@ -158,7 +172,6 @@ The router gets smarter as you use it:
 | 6 — Self-Learning | ✅ Complete | v0.6.0 |
 | 7 — Cross-Platform | ✅ Complete | v0.7.0 |
 | 8 — All 50 Agents | ✅ Complete | v0.8.0 |
-| 9 — Launch | ⏳ Planned | v1.0.0 |
 
 ---
 
