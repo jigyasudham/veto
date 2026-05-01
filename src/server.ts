@@ -11,11 +11,12 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { saveSession, restoreSession, listSessions, getDbPath } from './memory/local.js';
+import { saveSession, restoreSession, listSessions, getDbPath, saveCouncilOutcome } from './memory/local.js';
+import { runDebate } from './council/index.js';
 import { routeTask, getRateStatus } from './router/index.js';
 import type { AgentType, Platform } from './router/index.js';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 
 const server = new Server(
   { name: 'veto', version: VERSION },
@@ -156,6 +157,29 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: [],
       },
     },
+    {
+      name: 'veto_council_debate',
+      description:
+        'Runs the Veto Council — 5 specialist agents (Lead Dev, PM, Architect, UX, Devil\'s Advocate) debate your task in parallel and return a GREEN / YELLOW / RED / DEADLOCK verdict before any code is written. Call this before architecture decisions, security-sensitive work, database migrations, or any task the router scores above 71.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          task: {
+            type: 'string',
+            description: 'The task or decision to debate. Be specific — include approach, tech stack, and constraints.',
+          },
+          context: {
+            type: 'string',
+            description: 'Optional: additional context such as codebase state, prior decisions, or constraints.',
+          },
+          session_id: {
+            type: 'string',
+            description: 'Optional: session ID to associate this council outcome with an active session.',
+          },
+        },
+        required: ['task'],
+      },
+    },
   ],
 }));
 
@@ -175,8 +199,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 status: 'running',
                 version: VERSION,
                 server: 'veto',
-                phase: 2,
-                capabilities: ['session_save', 'session_restore', 'router', 'rate_monitor'],
+                phase: 3,
+                capabilities: ['session_save', 'session_restore', 'router', 'rate_monitor', 'council_debate'],
                 db_path: getDbPath(),
                 uptime_ms: process.uptime() * 1000,
                 timestamp: new Date().toISOString(),
@@ -316,6 +340,60 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           {
             type: 'text',
             text: JSON.stringify(getRateStatus(), null, 2),
+          },
+        ],
+      };
+    }
+
+    case 'veto_council_debate': {
+      const task = String(args?.task ?? '').trim();
+      if (!task) {
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'task is required.' }) }],
+          isError: true,
+        };
+      }
+
+      const result = await runDebate({
+        task,
+        context: args?.context ? String(args.context) : undefined,
+      });
+
+      const outcomeId = saveCouncilOutcome({
+        session_id: args?.session_id ? String(args.session_id) : undefined,
+        task,
+        verdict: result.final_verdict,
+        lead_dev: JSON.stringify(result.votes.lead_dev),
+        pm: JSON.stringify(result.votes.pm),
+        architect: JSON.stringify(result.votes.architect),
+        ux: JSON.stringify(result.votes.ux),
+        devil: JSON.stringify(result.votes.devil),
+        recommended: result.recommended,
+      });
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: result.formatted_output + '\n\n' + JSON.stringify(
+              {
+                outcome_id: outcomeId,
+                final_verdict: result.final_verdict,
+                block_reasons: result.block_reasons,
+                warnings: result.warnings,
+                recommended: result.recommended,
+                debated_at: result.debated_at,
+                votes: {
+                  lead_dev: result.votes.lead_dev.verdict,
+                  pm: result.votes.pm.verdict,
+                  architect: result.votes.architect.verdict,
+                  ux: result.votes.ux.verdict,
+                  devil: result.votes.devil.verdict,
+                },
+              },
+              null,
+              2
+            ),
           },
         ],
       };

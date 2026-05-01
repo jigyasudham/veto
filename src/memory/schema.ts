@@ -38,7 +38,7 @@ export const CREATE_TABLES = `
 
   CREATE TABLE IF NOT EXISTS council_outcomes (
     id          TEXT PRIMARY KEY,
-    session_id  TEXT NOT NULL,
+    session_id  TEXT,
     task        TEXT NOT NULL,
     verdict     TEXT NOT NULL,
     lead_dev    TEXT,
@@ -47,8 +47,7 @@ export const CREATE_TABLES = `
     ux          TEXT,
     devil       TEXT,
     recommended TEXT,
-    debated_at  TEXT NOT NULL,
-    FOREIGN KEY (session_id) REFERENCES sessions(id)
+    debated_at  TEXT NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS learning_data (

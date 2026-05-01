@@ -20,7 +20,26 @@ export function getDb(): DatabaseSync {
   _db.exec('PRAGMA journal_mode = WAL');
   _db.exec('PRAGMA foreign_keys = ON');
   _db.exec(CREATE_TABLES);
+  migrateCouncilOutcomes(_db);
   return _db;
+}
+
+// Migrates council_outcomes if it was created with NOT NULL session_id (Phase 1/2 schema)
+function migrateCouncilOutcomes(db: DatabaseSync): void {
+  const cols = db.prepare('PRAGMA table_info(council_outcomes)').all() as Array<{ name: string; notnull: number }>;
+  const col = cols.find(c => c.name === 'session_id');
+  if (!col || col.notnull !== 1) return;
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS _council_outcomes_new (
+      id TEXT PRIMARY KEY, session_id TEXT, task TEXT NOT NULL,
+      verdict TEXT NOT NULL, lead_dev TEXT, pm TEXT, architect TEXT,
+      ux TEXT, devil TEXT, recommended TEXT, debated_at TEXT NOT NULL
+    );
+    INSERT OR IGNORE INTO _council_outcomes_new SELECT * FROM council_outcomes;
+    DROP TABLE council_outcomes;
+    ALTER TABLE _council_outcomes_new RENAME TO council_outcomes;
+  `);
 }
 
 export type SaveSessionInput = {
@@ -87,4 +106,29 @@ export function closeSession(session_id: string): void {
 
 export function getDbPath(): string {
   return DB_PATH;
+}
+
+export type SaveCouncilOutcomeInput = {
+  session_id?: string;
+  task: string;
+  verdict: string;
+  lead_dev: string;
+  pm: string;
+  architect: string;
+  ux: string;
+  devil: string;
+  recommended: string;
+};
+
+export function saveCouncilOutcome(input: SaveCouncilOutcomeInput): string {
+  const db = getDb();
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO council_outcomes (id, session_id, task, verdict, lead_dev, pm, architect, ux, devil, recommended, debated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, input.session_id ?? null, input.task, input.verdict,
+    input.lead_dev, input.pm, input.architect, input.ux, input.devil,
+    input.recommended, now);
+  return id;
 }
