@@ -6,6 +6,29 @@ An MCP server that runs locally on your machine, plugs into Claude Code, Codex C
 
 ---
 
+## Prerequisites
+
+| Requirement | Version | Notes |
+|---|---|---|
+| **Node.js** | 22.5.0 or higher | Required — uses the built-in `node:sqlite` module (no native compilation). Download at [nodejs.org](https://nodejs.org). |
+| **Claude Code** | Latest | The MCP client Veto connects to. Already installed if you're reading this. |
+
+**Check your Node version:**
+```bash
+node --version   # must be v22.5.0 or higher
+```
+
+If you're on an older version, update Node before continuing — Veto will fail silently on Node 18 or 20 because `node:sqlite` does not exist in those versions.
+
+**Optional — only needed if you want cross-platform switching:**
+
+| Platform | Install |
+|---|---|
+| Gemini CLI | `npm install -g @google/gemini-cli` then `gemini auth` |
+| Codex CLI | `npm install -g @openai/codex` then set `OPENAI_API_KEY` |
+
+---
+
 ## Quick Start
 
 ```bash
@@ -139,10 +162,10 @@ The router gets smarter as you use it:
 ## Tech Stack
 
 - **Language:** TypeScript (strict mode)
-- **Runtime:** Node.js 22.5+
-- **MCP SDK:** `@modelcontextprotocol/sdk` (official)
-- **Memory:** SQLite via `node:sqlite` — zero native compilation, works offline
-- **Cross-machine:** File-based JSON export/import — no external services
+- **Runtime:** Node.js 22.5+ (required — uses built-in `node:sqlite`)
+- **Dependencies:** `@modelcontextprotocol/sdk` only — one package, no native addons
+- **Memory:** SQLite via `node:sqlite` — zero native compilation, zero configuration, works offline
+- **Cross-machine:** File-based JSON export/import — no external services, no accounts
 
 ---
 
