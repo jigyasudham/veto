@@ -8,7 +8,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSy
 import { join, dirname, extname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
-const VERSION = '0.10.0';
+const VERSION = '1.0.0';
 const VETO_DIR = join(homedir(), '.veto');
 const HOME = homedir();
 
@@ -270,6 +270,105 @@ function scanProjectDir(dir: string): { structure: object; key_modules: string[]
   return { structure, key_modules, tech_stack };
 }
 
+// ─── CLI Subcommands ────────────────────────────────────────────────────────────
+
+async function statusCommand() {
+  const { getDbPath } = await import('./memory/local.js');
+  const { getDb } = await import('./memory/local.js');
+  const db = getDb();
+  const sessionCount = (db.prepare('SELECT COUNT(*) as c FROM sessions').get() as { c: number }).c;
+  const memoryCount = (db.prepare('SELECT COUNT(*) as c FROM knowledge_base').get() as { c: number }).c;
+  const patternCount = (db.prepare('SELECT COUNT(*) as c FROM patterns').get() as { c: number }).c;
+  const outcomeCount = (db.prepare('SELECT COUNT(*) as c FROM learning_data').get() as { c: number }).c;
+
+  console.log('');
+  console.log(c.bold('  Veto Status'));
+  console.log(c.dim('  ─────────────────────────────'));
+  console.log(`  Version     ${c.cyan(VERSION)}`);
+  console.log(`  DB          ${c.dim(getDbPath())}`);
+  console.log(`  Sessions    ${c.cyan(String(sessionCount))}`);
+  console.log(`  Memory      ${c.cyan(String(memoryCount))} knowledge entries`);
+  console.log(`  Patterns    ${c.cyan(String(patternCount))}`);
+  console.log(`  Outcomes    ${c.cyan(String(outcomeCount))} recorded`);
+  console.log('');
+}
+
+async function sessionsCommand() {
+  const { listSessions } = await import('./memory/local.js');
+  const sessions = listSessions(20);
+
+  console.log('');
+  console.log(c.bold('  Saved Sessions') + c.dim(` (${sessions.length})`));
+  console.log(c.dim('  ─────────────────────────────────────────────────────────────'));
+
+  if (sessions.length === 0) {
+    console.log(c.dim('  No sessions saved yet. Use veto_session_save inside an AI session.'));
+  } else {
+    for (const s of sessions) {
+      const date = new Date(s.started_at).toLocaleString();
+      console.log(`  ${c.cyan(s.id.slice(0, 8))}  ${c.dim(date)}  ${c.bold(s.platform ?? 'claude')}  ${s.summary?.slice(0, 60) ?? ''}`);
+    }
+  }
+  console.log('');
+}
+
+async function memoryCommand() {
+  const args = process.argv.slice(3);
+  const query = args.join(' ') || undefined;
+  const { searchKnowledge } = await import('./memory/local.js');
+  const results = searchKnowledge({ query, limit: 20 });
+
+  console.log('');
+  console.log(c.bold('  Knowledge Base') + (query ? c.dim(` — "${query}"`) : '') + c.dim(` (${results.length} results)`));
+  console.log(c.dim('  ─────────────────────────────────────────────────────────────'));
+
+  if (results.length === 0) {
+    console.log(c.dim('  No entries found.'));
+  } else {
+    for (const r of results) {
+      const tags = r.tags ? JSON.parse(r.tags).join(', ') : '';
+      console.log(`  ${c.cyan(`[${r.type}]`)} ${c.bold(r.title)}`);
+      if (tags) console.log(`  ${c.dim('tags: ' + tags)}`);
+      console.log(`  ${c.dim(r.content.slice(0, 100).replace(/\n/g, ' ') + (r.content.length > 100 ? '...' : ''))}`);
+      console.log('');
+    }
+  }
+}
+
+async function patternsCommand() {
+  const { getPatterns } = await import('./memory/local.js');
+  const prefix = process.argv[3];
+  const patterns = getPatterns(prefix, 30);
+
+  console.log('');
+  console.log(c.bold('  Learned Patterns') + c.dim(` (${patterns.length})`));
+  console.log(c.dim('  ─────────────────────────────────────────────────────────────'));
+
+  if (patterns.length === 0) {
+    console.log(c.dim('  No patterns yet. Record outcomes with veto_record_outcome to build up patterns.'));
+  } else {
+    for (const p of patterns) {
+      const conf = Math.round(p.confidence * 100);
+      const confColor = conf >= 80 ? c.green : conf >= 60 ? c.yellow : c.dim;
+      console.log(`  ${confColor(`${conf}%`)}  ${c.cyan(p.pattern_key)}  ${c.dim('→')}  ${p.pattern_val}  ${c.dim(`(seen ${p.seen_count}x)`)}`);
+    }
+  }
+  console.log('');
+}
+
+function helpCommand() {
+  console.log('');
+  console.log(c.bold('  Usage: veto <command>'));
+  console.log('');
+  console.log('  Commands:');
+  console.log(`  ${c.cyan('init')}              Configure all AI tools on this machine`);
+  console.log(`  ${c.cyan('status')}            Show server version, DB path, and stats`);
+  console.log(`  ${c.cyan('sessions')}          List saved sessions`);
+  console.log(`  ${c.cyan('memory')} [query]    Search knowledge base`);
+  console.log(`  ${c.cyan('patterns')} [prefix] List learned agent/routing patterns`);
+  console.log('');
+}
+
 // ─── Router ────────────────────────────────────────────────────────────────────
 
 const command = process.argv[2] ?? 'init';
@@ -282,8 +381,42 @@ switch (command) {
     });
     break;
 
+  case 'status':
+    statusCommand().catch((err) => {
+      console.error(c.red(`Error: ${err.message}`));
+      process.exit(1);
+    });
+    break;
+
+  case 'sessions':
+    sessionsCommand().catch((err) => {
+      console.error(c.red(`Error: ${err.message}`));
+      process.exit(1);
+    });
+    break;
+
+  case 'memory':
+    memoryCommand().catch((err) => {
+      console.error(c.red(`Error: ${err.message}`));
+      process.exit(1);
+    });
+    break;
+
+  case 'patterns':
+    patternsCommand().catch((err) => {
+      console.error(c.red(`Error: ${err.message}`));
+      process.exit(1);
+    });
+    break;
+
+  case 'help':
+  case '--help':
+  case '-h':
+    helpCommand();
+    break;
+
   default:
-    console.error(`Unknown command: ${command}`);
-    console.log('Usage: veto init');
+    console.error(c.red(`  Unknown command: ${command}`));
+    helpCommand();
     process.exit(1);
 }

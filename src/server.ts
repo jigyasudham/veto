@@ -36,7 +36,7 @@ import { loadPlugins, listPlugins } from './plugins/loader.js';
 import { readFileSync } from 'node:fs';
 import { extname, basename } from 'node:path';
 
-const VERSION = '0.11.0';
+const VERSION = '1.0.0';
 
 const server = new Server(
   { name: 'veto', version: VERSION },
@@ -234,6 +234,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           context: { type: 'string', description: 'Optional: file name, module description, or review focus.' },
         },
         required: ['code'],
+      },
+    },
+    {
+      name: 'veto_diff_review',
+      description: 'Reviews a git diff — runs code review, security scan, and secrets scan in parallel across all changed files. Returns a structured verdict (pass/warn/fail), per-file findings, and a CI-ready summary. Pass diff directly or let Veto read it from project_dir automatically.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          diff: { type: 'string', description: 'The git diff to review. If omitted, Veto runs git diff HEAD in project_dir.' },
+          project_dir: { type: 'string', description: 'Absolute project path. Used to auto-read git diff if diff is not provided, and to inject codebase context.' },
+          context: { type: 'string', description: 'Optional: PR description, ticket number, or focus area.' },
+        },
+        required: [],
       },
     },
     {
@@ -837,6 +850,97 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
       }
       return { content: [{ type: 'text', text: JSON.stringify(result.analysis, null, 2) }] };
+    }
+
+    case 'veto_diff_review': {
+      const projectDir = args?.project_dir ? String(args.project_dir) : undefined;
+      const userContext = args?.context ? String(args.context) : undefined;
+
+      // Resolve diff — use provided or read from git
+      let diff = args?.diff ? String(args.diff).trim() : '';
+      if (!diff && projectDir) {
+        const { execSync: execSyncDiff } = await import('node:child_process');
+        try {
+          diff = execSyncDiff('git diff HEAD --no-color', {
+            cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'],
+          }).toString().trim();
+          if (!diff) {
+            diff = execSyncDiff('git diff --cached --no-color', {
+              cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'],
+            }).toString().trim();
+          }
+        } catch { /* not a git repo or no changes */ }
+      }
+
+      if (!diff) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No diff provided and no git changes detected. Pass diff or point to a project_dir with uncommitted changes.' }) }], isError: true };
+      }
+
+      // Parse changed files from diff header lines
+      const changedFiles = [...diff.matchAll(/^diff --git a\/.+ b\/(.+)$/gm)].map(m => m[1]);
+      const diffChunks = diff.split(/^diff --git /m).filter(Boolean);
+
+      // Run code-review, security-scan, secrets-scan in parallel across the full diff
+      const context = buildContextString(projectDir, userContext);
+      const [reviewResult, secResult, secretsResult] = await Promise.all([
+        executeOne({ id: 'diff-review', agent: 'reviewer', task: 'Review this git diff for code quality issues', code: diff, context }),
+        executeOne({ id: 'diff-sec', agent: 'security-scanner', task: 'Scan this git diff for security vulnerabilities', code: diff, context }),
+        executeOne({ id: 'diff-secrets', agent: 'secrets', task: 'Scan this git diff for exposed secrets or credentials', code: diff }),
+      ]);
+
+      // Derive overall verdict
+      const hasBlocking = (reviewResult.analysis?.critical_count ?? 0) > 0
+        || (secResult.analysis?.critical_count ?? 0) > 0
+        || (secretsResult.analysis?.critical_count ?? 0) > 0;
+      const hasWarnings = (reviewResult.analysis?.high_count ?? 0) > 0
+        || (secResult.analysis?.high_count ?? 0) > 0;
+      const verdict = hasBlocking ? 'fail' : hasWarnings ? 'warn' : 'pass';
+      const verdictEmoji = verdict === 'pass' ? '✅ PASS' : verdict === 'warn' ? '⚠️  WARN' : '❌ FAIL';
+
+      // Per-file finding counts (approximate from line refs)
+      const fileFindings: Record<string, number> = {};
+      for (const f of changedFiles) fileFindings[f] = 0;
+      for (const finding of [...(reviewResult.analysis?.findings ?? []), ...(secResult.analysis?.findings ?? [])]) {
+        const match = changedFiles.find(f => finding.location?.includes(f));
+        if (match) fileFindings[match]++;
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            verdict,
+            verdict_label: verdictEmoji,
+            files_changed: changedFiles.length,
+            files: changedFiles,
+            file_findings: fileFindings,
+            code_review: {
+              score: reviewResult.analysis?.score ?? null,
+              verdict: reviewResult.analysis?.verdict ?? null,
+              critical: reviewResult.analysis?.critical_count ?? 0,
+              high: reviewResult.analysis?.high_count ?? 0,
+              findings: reviewResult.analysis?.findings ?? [],
+            },
+            security: {
+              score: secResult.analysis?.score ?? null,
+              verdict: secResult.analysis?.verdict ?? null,
+              critical: secResult.analysis?.critical_count ?? 0,
+              high: secResult.analysis?.high_count ?? 0,
+              findings: secResult.analysis?.findings ?? [],
+            },
+            secrets: {
+              verdict: secretsResult.analysis?.verdict ?? null,
+              findings: secretsResult.analysis?.findings ?? [],
+            },
+            summary: [
+              `${verdictEmoji} — ${changedFiles.length} file(s) changed`,
+              `Code: ${reviewResult.analysis?.verdict ?? 'n/a'} (score ${reviewResult.analysis?.score ?? '?'}/100)`,
+              `Security: ${secResult.analysis?.verdict ?? 'n/a'} — ${secResult.analysis?.critical_count ?? 0} critical, ${secResult.analysis?.high_count ?? 0} high`,
+              `Secrets: ${(secretsResult.analysis?.findings?.length ?? 0) > 0 ? '🔴 Exposed credentials detected' : '✅ Clean'}`,
+            ].join('\n'),
+          }, null, 2),
+        }],
+      };
     }
 
     case 'veto_security_scan': {
