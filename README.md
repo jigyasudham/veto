@@ -154,16 +154,24 @@ VS Code uses `"servers"` with `"type": "stdio"`:
 
 ## CLI Commands
 
-Use these from any terminal to inspect Veto's brain without opening an AI session:
+Use these from any terminal to inspect Veto's brain without opening an AI session.
+
+After installing globally (`npm i -g @jigyasudham/veto`) or via npx:
 
 ```bash
-veto init                  # Configure all AI tools + scan project
-veto status                # Version, DB path, session/memory/outcome counts
-veto sessions              # List last 20 saved sessions
-veto memory [query]        # Search knowledge base
-veto patterns [prefix]     # List learned agent/routing patterns
-veto help                  # Show all commands
+veto init                        # Configure all AI tools + scan project
+veto status                      # Version, DB path, session/memory/outcome counts
+veto sessions                    # List last 20 saved sessions
+veto memory [query]              # Search knowledge base (blank = all entries)
+veto patterns [prefix]           # List learned agent/routing patterns
+veto help                        # Full command + MCP tools reference
+
+# Without installing:
+npx @jigyasudham/veto help       # Same help output, no install needed
+npx @jigyasudham/veto status     # Check status from any machine
 ```
+
+`veto help` shows all CLI commands, all 34 MCP tool names, MCP Resources, and MCP Prompts — the full reference in one place.
 
 ---
 

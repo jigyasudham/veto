@@ -1,14 +1,23 @@
 {
   "name": "@jigyasudham/veto",
   "version": "1.0.0",
-  "description": "50 agents. 28 skills. 3 AIs. Self-learning. Zero extra cost.",
+  "description": "50 agents. 34 tools. 3 AIs. Self-learning. Zero extra cost.",
   "keywords": [
     "mcp",
     "ai",
     "claude",
     "agents",
     "memory",
-    "council"
+    "council",
+    "gemini",
+    "codex",
+    "cursor",
+    "windsurf",
+    "vscode",
+    "self-learning",
+    "router",
+    "workflow",
+    "code-review"
   ],
   "author": "Jigyasu Dham <jigyasudham18@gmail.com>",
   "license": "MIT",
