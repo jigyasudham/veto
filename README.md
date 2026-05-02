@@ -1,8 +1,8 @@
 # veto
 
-> **50 agents. 28 skills. 3 AIs. Self-learning. Zero extra cost.**
+> **50 agents. 33 tools. 3 AIs. Self-learning. Zero extra cost.**
 
-An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, and Gemini CLI using your existing subscriptions — giving every AI a council of specialist agents, persistent cross-platform memory, a self-learning router, and the ability to say no to bad decisions.
+An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, and Gemini CLI using your existing subscriptions — giving every AI a council of specialist agents, persistent cross-platform memory, a self-learning router, reactive file watching, sequential agent pipelines, and the ability to say no to bad decisions.
 
 ---
 
@@ -38,7 +38,7 @@ You only need one to get started. Install more to enable cross-platform handoff.
 npx @jigyasudham/veto@latest init
 ```
 
-The `init` command prints the exact config snippet for your platform. Paste it into your MCP config file:
+The `init` command detects your installed AI tools and prints the exact config snippet for each. Paste it into your MCP config file:
 
 | Platform | Config file |
 |---|---|
@@ -48,8 +48,6 @@ The `init` command prints the exact config snippet for your platform. Paste it i
 | **Cursor** | `~/.cursor/mcp.json` |
 | **Windsurf** | `~/.codeium/windsurf/mcp_config.json` |
 | **VS Code** | `.vscode/mcp.json` |
-
-Claude Code, Gemini, Codex, Cursor, and Windsurf all use `"mcpServers"`:
 
 ```json
 {
@@ -80,11 +78,27 @@ VS Code uses `"servers"` with `"type": "stdio"`:
 
 **Council** — Before any significant task, 7 specialist agents debate it in parallel and return a GREEN / YELLOW / RED / DEADLOCK verdict. Bad decisions get blocked before any code is written.
 
+**Codebase-aware agents** — Pass `project_dir` to any tool and Veto auto-reads `package.json`, detects your tech stack, and injects recent `git diff` context. Agents respond to your actual project, not generic templates.
+
+**Structured output** — Every agent result carries `confidence`, `severity`, `recommendation`, `affected_files`, and `line_refs` — composable, actionable, not just text blobs.
+
 **Router** — Every task is scored locally (zero tokens) and sent to the right model tier. Rate limits are tracked across all 3 platforms. The router self-adjusts over time from recorded outcomes.
 
 **50 Agents** — Domain experts for every task type. Each agent knows when it is the right tool and when to defer to another.
 
 **Memory** — Sessions, decisions, knowledge, and coding patterns persist across every conversation and every platform.
+
+**File watching** — `veto_watch` monitors your project directory and tells you which agent to call when files change. Reactive, not on-command.
+
+**Sequential pipelines** — `veto_workflow` runs a chain of agents with pass/fail gates. Define a coder → reviewer → tester → reporter pipeline and let Veto run it end to end.
+
+**File explanation** — `veto_explain` reads any file and routes it to the best-fit expert agent automatically.
+
+**Plugin system** — Drop a `.js` file in `~/.veto/agents/` and it registers as a custom agent available in every tool.
+
+**MCP Resources** — Read Veto's memory, sessions, patterns, and project maps directly as MCP Resources — no tool call required.
+
+**MCP Prompts** — Reusable prompt templates: `code-review`, `security-audit`, `deploy-checklist`, `explain-file`.
 
 **Cross-platform handoff** — Claude hitting its rate limit? Call `veto_handoff`, open Gemini or Codex, call `veto_continue`. Full context restored in seconds. Nothing re-explained.
 
@@ -115,17 +129,122 @@ VS Code uses `"servers"` with `"type": "stdio"`:
 
 ---
 
-## MCP Tools (29)
+## MCP Tools (33)
 
 | Category | Tools |
 |---|---|
 | Session | `veto_status` · `veto_session_save` · `veto_session_restore` · `veto_sessions_list` |
 | Router | `veto_route_task` · `veto_rate_status` |
 | Council | `veto_council_debate` |
-| Agents | `veto_agent_plan` · `veto_code_review` · `veto_security_scan` · `veto_secrets_scan` · `veto_execute_parallel` |
+| Agents | `veto_agent_plan` · `veto_code_review` · `veto_security_scan` · `veto_secrets_scan` · `veto_execute_parallel` · `veto_explain` |
+| Pipelines | `veto_workflow` |
+| Watching | `veto_watch` · `veto_watch_poll` · `veto_watch_stop` |
 | Memory | `veto_memory_store` · `veto_memory_search` · `veto_memory_delete` · `veto_project_map_update` · `veto_project_map_get` · `veto_pattern_store` · `veto_patterns_list` · `veto_memory_export` · `veto_memory_import` |
 | Learning | `veto_record_outcome` · `veto_learning_stats` · `veto_learning_apply` |
 | Handoff | `veto_handoff` · `veto_continue` · `veto_platform_setup` |
+| Plugins | `veto_plugins` |
+
+## MCP Resources
+
+Read Veto's internal state directly — no tool call needed:
+
+| Resource URI | What it returns |
+|---|---|
+| `veto://sessions` | All saved sessions across platforms |
+| `veto://project-map?dir=<path>` | Stored project structure map |
+| `veto://memory?q=<query>` | Knowledge base search results |
+| `veto://patterns` | Learned coding patterns |
+
+## MCP Prompts
+
+Reusable task templates your AI can invoke directly:
+
+| Prompt | What it does |
+|---|---|
+| `code-review` | Full code review — paste code, get scored findings |
+| `security-audit` | OWASP Top 10 scan with CWE references |
+| `deploy-checklist` | Council reviews your deployment plan before you ship |
+| `explain-file` | Expert explanation of any file, auto-routed by type |
+
+---
+
+## Codebase-Aware Agents
+
+Pass `project_dir` to any agent tool and Veto auto-injects:
+- Your `package.json` name, version, and full dependency list
+- Detected tech stack (React, Next.js, Prisma, Express, etc.)
+- Recent `git diff --stat` and last 5 commits
+- Detected config files (tsconfig, vite.config, tailwind, etc.)
+
+```
+veto_council_debate {
+  task: "migrate from REST to tRPC",
+  project_dir: "/your/project"   ← agents now know your actual stack
+}
+```
+
+---
+
+## Sequential Pipelines
+
+Chain agents with pass/fail gates:
+
+```
+veto_workflow {
+  steps: [
+    { id: "code",   agent: "coder",    task: "implement auth middleware", gate: 70 },
+    { id: "review", agent: "reviewer", task: "review the implementation", gate: 75 },
+    { id: "test",   agent: "tester",   task: "write test cases",          gate: 70 },
+    { id: "report", agent: "reporter", task: "summarise changes" }
+  ],
+  project_dir: "/your/project"
+}
+```
+
+If any step's confidence falls below the gate, the pipeline stops and returns `partial` with the exact failure point.
+
+---
+
+## Reactive File Watching
+
+```
+veto_watch { project_dir: "/your/project" }
+→ { watch_id: "a3f2b1c0" }
+
+# make some changes, then:
+veto_watch_poll { watch_id: "a3f2b1c0" }
+→ [
+    { file: "src/auth.ts",    recommended_agent: "code-quality", suggested_tool: "veto_code_review" },
+    { file: "package.json",   recommended_agent: "dependency-audit", suggested_tool: "veto_agent_plan" },
+    { file: ".env",           recommended_agent: "secrets", suggested_tool: "veto_secrets_scan" }
+  ]
+```
+
+---
+
+## Plugin System
+
+Register custom agents without forking:
+
+```
+~/.veto/agents/my-agent.js
+
+export function plan(task, context) {
+  return {
+    agent: 'my-agent',
+    task,
+    tier: 2,
+    approach: '...',
+    steps: [...],
+    checklist: [...],
+    pitfalls: [...],
+    patterns: [...],
+    duration_estimate: '1-2 hours',
+  };
+}
+```
+
+Veto loads it on start. Use it in `veto_agent_plan { agent: "my-agent" }` or `veto_execute_parallel`.
 
 ---
 
@@ -183,6 +302,10 @@ The router gets smarter as you use it:
 | 6 — Self-Learning | ✅ Complete | v0.6.0 |
 | 7 — Cross-Platform | ✅ Complete | v0.7.0 |
 | 8 — All 50 Agents | ✅ Complete | v0.8.0 |
+| 9 — Codebase Context + Structured Output + MCP Resources/Prompts | ✅ Complete | v0.9.0 |
+| 10 — Watch, Workflow, Explain, Plugins | ✅ Complete | v0.10.0 |
+| 11 — Smarter Council + Predictive Routing + Auto Project Map | 🔄 In Progress | v0.11.0 |
+| 12 — CLI Subcommands + Diff Review + VS Code Extension | ⏳ Planned | v1.0.0 |
 
 ---
 

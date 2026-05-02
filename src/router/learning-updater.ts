@@ -50,13 +50,65 @@ export function recordOutcome(
   modelTier: 1 | 2 | 3,
   agent: string,
   outputQuality: number,
-  tokensUsed = 0
+  tokensUsed = 0,
+  fileExt?: string,
 ): void {
   const db = getDb();
   db.prepare(
     `INSERT INTO learning_data (id, task_type, complexity, model_tier, output_quality, tokens_used, agent)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(randomUUID(), taskType, complexity, modelTier, outputQuality, tokensUsed, agent);
+
+  // Predictive routing: track agent quality per file extension and task type keyword
+  if (agent && agent !== 'dynamic' && outputQuality > 0) {
+    const now = new Date().toISOString();
+    const upsert = (key: string) => {
+      const existing = db.prepare('SELECT id, pattern_val, confidence, seen_count FROM patterns WHERE pattern_key = ?').get(key) as
+        { id: string; pattern_val: string; confidence: number; seen_count: number } | undefined;
+      if (existing) {
+        // running average quality as confidence (0–1)
+        const newConf = ((existing.confidence * existing.seen_count) + (outputQuality / 100)) / (existing.seen_count + 1);
+        db.prepare('UPDATE patterns SET confidence = ?, seen_count = ?, updated_at = ? WHERE pattern_key = ?')
+          .run(Math.min(1, newConf), existing.seen_count + 1, now, key);
+      } else {
+        db.prepare('INSERT INTO patterns (id, pattern_key, pattern_val, confidence, seen_count, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+          .run(randomUUID(), key, agent, outputQuality / 100, 1, now);
+      }
+    };
+
+    if (fileExt) upsert(`file_agent:${fileExt.toLowerCase()}:${agent}`);
+    const keyword = taskType.toLowerCase().split(/[\s_-]/)[0];
+    if (keyword) upsert(`task_agent:${keyword}:${agent}`);
+  }
+}
+
+// ─── Predictive Agent Recommendation ─────────────────────────────────────────
+
+export function getRecommendedAgent(taskType: string, fileExt?: string): string | null {
+  const db = getDb();
+
+  // Try file extension match first (more specific)
+  if (fileExt) {
+    const rows = db.prepare(
+      `SELECT pattern_key, pattern_val, confidence, seen_count FROM patterns
+       WHERE pattern_key LIKE ? AND seen_count >= 3
+       ORDER BY confidence DESC LIMIT 1`
+    ).all(`file_agent:${fileExt.toLowerCase()}:%`) as Array<{ pattern_key: string; pattern_val: string; confidence: number; seen_count: number }>;
+    if (rows.length > 0 && rows[0].confidence >= 0.7) return rows[0].pattern_val;
+  }
+
+  // Fall back to task keyword match
+  const keyword = taskType.toLowerCase().split(/[\s_-]/)[0];
+  if (keyword) {
+    const rows = db.prepare(
+      `SELECT pattern_key, pattern_val, confidence, seen_count FROM patterns
+       WHERE pattern_key LIKE ? AND seen_count >= 3
+       ORDER BY confidence DESC LIMIT 1`
+    ).all(`task_agent:${keyword}:%`) as Array<{ pattern_key: string; pattern_val: string; confidence: number; seen_count: number }>;
+    if (rows.length > 0 && rows[0].confidence >= 0.7) return rows[0].pattern_val;
+  }
+
+  return null;
 }
 
 // ─── Stats ────────────────────────────────────────────────────────────────────

@@ -4,11 +4,11 @@
 // Suppress Node experimental warnings (node:sqlite) for clean UX
 process.removeAllListeners('warning');
 
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { join, dirname, extname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
-const VERSION = '0.8.2';
+const VERSION = '1.0.0';
 const VETO_DIR = join(homedir(), '.veto');
 const HOME = homedir();
 
@@ -30,7 +30,7 @@ function printBanner() {
   console.log(c.bold(c.cyan('   ╚████╔╝ ███████╗   ██║   ╚██████╔╝')));
   console.log(c.bold(c.cyan('    ╚═══╝  ╚══════╝   ╚═╝    ╚═════╝')));
   console.log('');
-  console.log(c.dim(`  50 agents. 28 skills. 3 AIs. Self-learning. Zero extra cost.`));
+  console.log(c.dim(`  50 agents. 33 tools. 3 AIs. Self-learning. Zero extra cost.`));
   console.log(c.dim(`  v${VERSION}`));
   console.log('');
 }
@@ -140,7 +140,20 @@ async function initCommand() {
     process.exit(1);
   }
 
-  // 3. Auto-configure every AI CLI / IDE found on this machine
+  // 3. Auto-scan current project and store project map
+  const cwd = resolve(process.cwd());
+  const { getDb: _getDb, updateProjectMap } = await import('./memory/local.js');
+  try {
+    process.stdout.write('  · Scanning project directory...');
+    const { structure, key_modules, tech_stack } = scanProjectDir(cwd);
+    updateProjectMap({ project_dir: cwd, structure: JSON.stringify(structure), key_modules, tech_stack });
+    const stackStr = tech_stack.length ? ` (${tech_stack.slice(0, 4).join(', ')})` : '';
+    console.log(c.green(' ✓') + ` Project map saved${stackStr}`);
+  } catch {
+    console.log(c.dim(' skipped'));
+  }
+
+  // 4. Auto-configure every AI CLI / IDE found on this machine
   console.log('');
   console.log('  Configuring all AI tools found on this machine...');
   console.log('');
@@ -185,6 +198,177 @@ async function initCommand() {
   }
 }
 
+// ─── Project Map Scanner ────────────────────────────────────────────────────────
+
+function scanProjectDir(dir: string): { structure: object; key_modules: string[]; tech_stack: string[] } {
+  const structure: Record<string, unknown> = {};
+  const key_modules: string[] = [];
+  const tech_stack: string[] = [];
+
+  // Read package.json for stack detection
+  const pkgPath = join(dir, 'package.json');
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+      structure['name'] = pkg.name;
+      structure['version'] = pkg.version;
+      const allDeps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+      structure['dep_count'] = allDeps.length;
+
+      const stackMap: Array<[string[], string]> = [
+        [['next'], 'Next.js'], [['react'], 'React'], [['vue'], 'Vue'],
+        [['express'], 'Express'], [['fastify'], 'Fastify'], [['hono'], 'Hono'],
+        [['prisma'], 'Prisma'], [['drizzle-orm'], 'Drizzle'], [['typeorm'], 'TypeORM'],
+        [['@modelcontextprotocol/sdk'], 'MCP'], [['typescript'], 'TypeScript'],
+        [['jest'], 'Jest'], [['vitest'], 'Vitest'], [['tailwindcss'], 'Tailwind'],
+        [['zod'], 'Zod'], [['graphql'], 'GraphQL'],
+      ];
+      for (const [keywords, label] of stackMap) {
+        if (keywords.some(k => allDeps.some(d => d.toLowerCase().includes(k)))) {
+          tech_stack.push(label);
+        }
+      }
+    } catch { /* malformed */ }
+  }
+
+  // Detect key config files
+  const CONFIG_FILES = ['tsconfig.json', 'vite.config.ts', 'vite.config.js', 'next.config.ts',
+    'next.config.js', 'tailwind.config.ts', 'drizzle.config.ts', 'prisma/schema.prisma',
+    'docker-compose.yml', '.env.example'];
+  const foundConfigs = CONFIG_FILES.filter(f => existsSync(join(dir, f)));
+  if (foundConfigs.length) structure['config_files'] = foundConfigs;
+
+  // Scan src/ directory
+  const srcDir = join(dir, 'src');
+  if (existsSync(srcDir)) {
+    let tsCount = 0;
+    let testCount = 0;
+    const topDirs: string[] = [];
+    for (const entry of readdirSync(srcDir)) {
+      const full = join(srcDir, entry);
+      try {
+        if (statSync(full).isDirectory()) {
+          topDirs.push(entry);
+          key_modules.push(`src/${entry}`);
+        } else {
+          const ext = extname(entry);
+          if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) tsCount++;
+          if (entry.includes('.test.') || entry.includes('.spec.')) testCount++;
+        }
+      } catch { /* skip */ }
+    }
+    structure['src_dirs'] = topDirs;
+    structure['ts_files_in_src'] = tsCount;
+    if (testCount > 0) structure['test_files'] = testCount;
+  }
+
+  // Entry points
+  const entryPoints = ['src/index.ts', 'src/main.ts', 'src/app.ts', 'src/server.ts', 'src/cli.ts', 'index.ts'];
+  const found = entryPoints.filter(f => existsSync(join(dir, f)));
+  if (found.length) structure['entry_points'] = found;
+
+  return { structure, key_modules, tech_stack };
+}
+
+// ─── CLI Subcommands ────────────────────────────────────────────────────────────
+
+async function statusCommand() {
+  const { getDbPath } = await import('./memory/local.js');
+  const { getDb } = await import('./memory/local.js');
+  const db = getDb();
+  const sessionCount = (db.prepare('SELECT COUNT(*) as c FROM sessions').get() as { c: number }).c;
+  const memoryCount = (db.prepare('SELECT COUNT(*) as c FROM knowledge_base').get() as { c: number }).c;
+  const patternCount = (db.prepare('SELECT COUNT(*) as c FROM patterns').get() as { c: number }).c;
+  const outcomeCount = (db.prepare('SELECT COUNT(*) as c FROM learning_data').get() as { c: number }).c;
+
+  console.log('');
+  console.log(c.bold('  Veto Status'));
+  console.log(c.dim('  ─────────────────────────────'));
+  console.log(`  Version     ${c.cyan(VERSION)}`);
+  console.log(`  DB          ${c.dim(getDbPath())}`);
+  console.log(`  Sessions    ${c.cyan(String(sessionCount))}`);
+  console.log(`  Memory      ${c.cyan(String(memoryCount))} knowledge entries`);
+  console.log(`  Patterns    ${c.cyan(String(patternCount))}`);
+  console.log(`  Outcomes    ${c.cyan(String(outcomeCount))} recorded`);
+  console.log('');
+}
+
+async function sessionsCommand() {
+  const { listSessions } = await import('./memory/local.js');
+  const sessions = listSessions(20);
+
+  console.log('');
+  console.log(c.bold('  Saved Sessions') + c.dim(` (${sessions.length})`));
+  console.log(c.dim('  ─────────────────────────────────────────────────────────────'));
+
+  if (sessions.length === 0) {
+    console.log(c.dim('  No sessions saved yet. Use veto_session_save inside an AI session.'));
+  } else {
+    for (const s of sessions) {
+      const date = new Date(s.started_at).toLocaleString();
+      console.log(`  ${c.cyan(s.id.slice(0, 8))}  ${c.dim(date)}  ${c.bold(s.platform ?? 'claude')}  ${s.summary?.slice(0, 60) ?? ''}`);
+    }
+  }
+  console.log('');
+}
+
+async function memoryCommand() {
+  const args = process.argv.slice(3);
+  const query = args.join(' ') || undefined;
+  const { searchKnowledge } = await import('./memory/local.js');
+  const results = searchKnowledge({ query, limit: 20 });
+
+  console.log('');
+  console.log(c.bold('  Knowledge Base') + (query ? c.dim(` — "${query}"`) : '') + c.dim(` (${results.length} results)`));
+  console.log(c.dim('  ─────────────────────────────────────────────────────────────'));
+
+  if (results.length === 0) {
+    console.log(c.dim('  No entries found.'));
+  } else {
+    for (const r of results) {
+      const tags = r.tags ? JSON.parse(r.tags).join(', ') : '';
+      console.log(`  ${c.cyan(`[${r.type}]`)} ${c.bold(r.title)}`);
+      if (tags) console.log(`  ${c.dim('tags: ' + tags)}`);
+      console.log(`  ${c.dim(r.content.slice(0, 100).replace(/\n/g, ' ') + (r.content.length > 100 ? '...' : ''))}`);
+      console.log('');
+    }
+  }
+}
+
+async function patternsCommand() {
+  const { getPatterns } = await import('./memory/local.js');
+  const prefix = process.argv[3];
+  const patterns = getPatterns(prefix, 30);
+
+  console.log('');
+  console.log(c.bold('  Learned Patterns') + c.dim(` (${patterns.length})`));
+  console.log(c.dim('  ─────────────────────────────────────────────────────────────'));
+
+  if (patterns.length === 0) {
+    console.log(c.dim('  No patterns yet. Record outcomes with veto_record_outcome to build up patterns.'));
+  } else {
+    for (const p of patterns) {
+      const conf = Math.round(p.confidence * 100);
+      const confColor = conf >= 80 ? c.green : conf >= 60 ? c.yellow : c.dim;
+      console.log(`  ${confColor(`${conf}%`)}  ${c.cyan(p.pattern_key)}  ${c.dim('→')}  ${p.pattern_val}  ${c.dim(`(seen ${p.seen_count}x)`)}`);
+    }
+  }
+  console.log('');
+}
+
+function helpCommand() {
+  console.log('');
+  console.log(c.bold('  Usage: veto <command>'));
+  console.log('');
+  console.log('  Commands:');
+  console.log(`  ${c.cyan('init')}              Configure all AI tools on this machine`);
+  console.log(`  ${c.cyan('status')}            Show server version, DB path, and stats`);
+  console.log(`  ${c.cyan('sessions')}          List saved sessions`);
+  console.log(`  ${c.cyan('memory')} [query]    Search knowledge base`);
+  console.log(`  ${c.cyan('patterns')} [prefix] List learned agent/routing patterns`);
+  console.log('');
+}
+
 // ─── Router ────────────────────────────────────────────────────────────────────
 
 const command = process.argv[2] ?? 'init';
@@ -197,8 +381,42 @@ switch (command) {
     });
     break;
 
+  case 'status':
+    statusCommand().catch((err) => {
+      console.error(c.red(`Error: ${err.message}`));
+      process.exit(1);
+    });
+    break;
+
+  case 'sessions':
+    sessionsCommand().catch((err) => {
+      console.error(c.red(`Error: ${err.message}`));
+      process.exit(1);
+    });
+    break;
+
+  case 'memory':
+    memoryCommand().catch((err) => {
+      console.error(c.red(`Error: ${err.message}`));
+      process.exit(1);
+    });
+    break;
+
+  case 'patterns':
+    patternsCommand().catch((err) => {
+      console.error(c.red(`Error: ${err.message}`));
+      process.exit(1);
+    });
+    break;
+
+  case 'help':
+  case '--help':
+  case '-h':
+    helpCommand();
+    break;
+
   default:
-    console.error(`Unknown command: ${command}`);
-    console.log('Usage: veto init');
+    console.error(c.red(`  Unknown command: ${command}`));
+    helpCommand();
     process.exit(1);
 }

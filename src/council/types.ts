@@ -11,6 +11,7 @@ export interface AgentVote {
 export interface DebateInput {
   task: string;
   context?: string;
+  project_dir?: string;
 }
 
 export interface DebateResult {
