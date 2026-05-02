@@ -48,12 +48,27 @@ export interface AgentAnalysis {
   high_count: number;
 }
 
+export interface LineRef {
+  file: string;
+  line: number;
+  description: string;
+}
+
+export interface AgentOutput {
+  confidence: number;           // 0.0 – 1.0
+  severity: FindingSeverity;    // overall severity of the result
+  recommendation: string;       // single-sentence action the caller should take
+  affected_files: string[];     // files this plan/analysis touches
+  line_refs: LineRef[];         // specific file:line pointers (populated by analyze agents)
+}
+
 export interface AgentTask {
   id: string;
   agent: WorkerAgentType;
   task: string;
   code?: string;
   context?: string;
+  project_dir?: string;
 }
 
 export interface AgentResult {
@@ -61,6 +76,7 @@ export interface AgentResult {
   agent: WorkerAgentType;
   plan?: AgentPlan;
   analysis?: AgentAnalysis;
+  output: AgentOutput;          // always present — derived from plan or analysis
   duration_ms: number;
   error?: string;
 }

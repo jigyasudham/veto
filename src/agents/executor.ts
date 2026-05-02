@@ -1,4 +1,6 @@
-import { AgentTask, AgentResult, WorkerAgentType } from './types.js';
+import { AgentTask, AgentResult, AgentOutput, AgentPlan, AgentAnalysis, WorkerAgentType } from './types.js';
+import { buildContextString } from '../context/reader.js';
+import { getPlugin, isPlugin } from '../plugins/loader.js';
 
 // Development agents
 import * as coder from './development/coder.js';
@@ -115,9 +117,36 @@ function resolveAgent(agentType: WorkerAgentType): AgentModule {
     case 'search-agent':        return searchAgent;
     case 'reporter':            return reporter;
     case 'automation':          return automation;
-    default:
+    default: {
+      const plugin = getPlugin(agentType);
+      if (plugin) return plugin;
       throw new Error(`Unknown agent type: ${agentType}`);
+    }
   }
+}
+
+function deriveOutput(plan?: AgentPlan, analysis?: AgentAnalysis): AgentOutput {
+  if (analysis) {
+    return {
+      confidence: Math.min(1, Math.max(0, analysis.score / 100)),
+      severity: analysis.critical_count > 0 ? 'critical' : analysis.high_count > 0 ? 'high' : 'medium',
+      recommendation: analysis.summary,
+      affected_files: [],
+      line_refs: analysis.findings
+        .filter(f => f.location)
+        .map(f => ({ file: f.location!, line: 0, description: f.description })),
+    };
+  }
+  if (plan) {
+    return {
+      confidence: 0.8,
+      severity: 'info',
+      recommendation: plan.approach,
+      affected_files: [],
+      line_refs: [],
+    };
+  }
+  return { confidence: 0, severity: 'info', recommendation: '', affected_files: [], line_refs: [] };
 }
 
 export async function executeOne(task: AgentTask): Promise<AgentResult> {
@@ -125,21 +154,24 @@ export async function executeOne(task: AgentTask): Promise<AgentResult> {
   try {
     const agent = resolveAgent(task.agent);
     const useAnalyze = task.code !== undefined && ANALYZE_CAPABLE.has(task.agent);
+    const enrichedContext = buildContextString(task.project_dir, task.context);
 
     if (useAnalyze && agent.analyze) {
-      const analysis = agent.analyze(task.code!, task.context);
+      const analysis = agent.analyze(task.code!, enrichedContext || task.context);
       return {
         id: task.id,
         agent: task.agent,
         analysis,
+        output: deriveOutput(undefined, analysis),
         duration_ms: Date.now() - start,
       };
     } else {
-      const plan = agent.plan(task.task, task.context);
+      const plan = agent.plan(task.task, enrichedContext || task.context);
       return {
         id: task.id,
         agent: task.agent,
         plan,
+        output: deriveOutput(plan, undefined),
         duration_ms: Date.now() - start,
       };
     }
@@ -147,6 +179,7 @@ export async function executeOne(task: AgentTask): Promise<AgentResult> {
     return {
       id: task.id,
       agent: task.agent,
+      output: { confidence: 0, severity: 'info', recommendation: '', affected_files: [], line_refs: [] },
       duration_ms: Date.now() - start,
       error: err instanceof Error ? err.message : String(err),
     };
