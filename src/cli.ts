@@ -4,11 +4,11 @@
 // Suppress Node experimental warnings (node:sqlite) for clean UX
 process.removeAllListeners('warning');
 
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { join, dirname, extname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
-const VERSION = '0.8.2';
+const VERSION = '0.10.0';
 const VETO_DIR = join(homedir(), '.veto');
 const HOME = homedir();
 
@@ -30,7 +30,7 @@ function printBanner() {
   console.log(c.bold(c.cyan('   ╚████╔╝ ███████╗   ██║   ╚██████╔╝')));
   console.log(c.bold(c.cyan('    ╚═══╝  ╚══════╝   ╚═╝    ╚═════╝')));
   console.log('');
-  console.log(c.dim(`  50 agents. 28 skills. 3 AIs. Self-learning. Zero extra cost.`));
+  console.log(c.dim(`  50 agents. 33 tools. 3 AIs. Self-learning. Zero extra cost.`));
   console.log(c.dim(`  v${VERSION}`));
   console.log('');
 }
@@ -140,7 +140,20 @@ async function initCommand() {
     process.exit(1);
   }
 
-  // 3. Auto-configure every AI CLI / IDE found on this machine
+  // 3. Auto-scan current project and store project map
+  const cwd = resolve(process.cwd());
+  const { getDb: _getDb, updateProjectMap } = await import('./memory/local.js');
+  try {
+    process.stdout.write('  · Scanning project directory...');
+    const { structure, key_modules, tech_stack } = scanProjectDir(cwd);
+    updateProjectMap({ project_dir: cwd, structure: JSON.stringify(structure), key_modules, tech_stack });
+    const stackStr = tech_stack.length ? ` (${tech_stack.slice(0, 4).join(', ')})` : '';
+    console.log(c.green(' ✓') + ` Project map saved${stackStr}`);
+  } catch {
+    console.log(c.dim(' skipped'));
+  }
+
+  // 4. Auto-configure every AI CLI / IDE found on this machine
   console.log('');
   console.log('  Configuring all AI tools found on this machine...');
   console.log('');
@@ -183,6 +196,78 @@ async function initCommand() {
     console.log(c.dim('  2.') + ' Run: veto_status  — should return { "status": "running", "version": "' + VERSION + '" }');
     console.log('');
   }
+}
+
+// ─── Project Map Scanner ────────────────────────────────────────────────────────
+
+function scanProjectDir(dir: string): { structure: object; key_modules: string[]; tech_stack: string[] } {
+  const structure: Record<string, unknown> = {};
+  const key_modules: string[] = [];
+  const tech_stack: string[] = [];
+
+  // Read package.json for stack detection
+  const pkgPath = join(dir, 'package.json');
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+      structure['name'] = pkg.name;
+      structure['version'] = pkg.version;
+      const allDeps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+      structure['dep_count'] = allDeps.length;
+
+      const stackMap: Array<[string[], string]> = [
+        [['next'], 'Next.js'], [['react'], 'React'], [['vue'], 'Vue'],
+        [['express'], 'Express'], [['fastify'], 'Fastify'], [['hono'], 'Hono'],
+        [['prisma'], 'Prisma'], [['drizzle-orm'], 'Drizzle'], [['typeorm'], 'TypeORM'],
+        [['@modelcontextprotocol/sdk'], 'MCP'], [['typescript'], 'TypeScript'],
+        [['jest'], 'Jest'], [['vitest'], 'Vitest'], [['tailwindcss'], 'Tailwind'],
+        [['zod'], 'Zod'], [['graphql'], 'GraphQL'],
+      ];
+      for (const [keywords, label] of stackMap) {
+        if (keywords.some(k => allDeps.some(d => d.toLowerCase().includes(k)))) {
+          tech_stack.push(label);
+        }
+      }
+    } catch { /* malformed */ }
+  }
+
+  // Detect key config files
+  const CONFIG_FILES = ['tsconfig.json', 'vite.config.ts', 'vite.config.js', 'next.config.ts',
+    'next.config.js', 'tailwind.config.ts', 'drizzle.config.ts', 'prisma/schema.prisma',
+    'docker-compose.yml', '.env.example'];
+  const foundConfigs = CONFIG_FILES.filter(f => existsSync(join(dir, f)));
+  if (foundConfigs.length) structure['config_files'] = foundConfigs;
+
+  // Scan src/ directory
+  const srcDir = join(dir, 'src');
+  if (existsSync(srcDir)) {
+    let tsCount = 0;
+    let testCount = 0;
+    const topDirs: string[] = [];
+    for (const entry of readdirSync(srcDir)) {
+      const full = join(srcDir, entry);
+      try {
+        if (statSync(full).isDirectory()) {
+          topDirs.push(entry);
+          key_modules.push(`src/${entry}`);
+        } else {
+          const ext = extname(entry);
+          if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) tsCount++;
+          if (entry.includes('.test.') || entry.includes('.spec.')) testCount++;
+        }
+      } catch { /* skip */ }
+    }
+    structure['src_dirs'] = topDirs;
+    structure['ts_files_in_src'] = tsCount;
+    if (testCount > 0) structure['test_files'] = testCount;
+  }
+
+  // Entry points
+  const entryPoints = ['src/index.ts', 'src/main.ts', 'src/app.ts', 'src/server.ts', 'src/cli.ts', 'index.ts'];
+  const found = entryPoints.filter(f => existsSync(join(dir, f)));
+  if (found.length) structure['entry_points'] = found;
+
+  return { structure, key_modules, tech_stack };
 }
 
 // ─── Router ────────────────────────────────────────────────────────────────────

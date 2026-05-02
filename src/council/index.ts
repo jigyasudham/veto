@@ -7,13 +7,15 @@ import { analyze as devilAnalyze } from './devil-advocate.js';
 import { analyze as legalAnalyze } from './legal-compliance.js';
 import { analyze as securityAnalyze } from './security.js';
 import { decide, formatDebate } from './decision-engine.js';
+import { buildContextString } from '../context/reader.js';
 
 export type { AgentVote, AgentVerdict, CouncilVerdict, DebateInput, DebateResult } from './types.js';
 
 import type { DebateInput, DebateResult } from './types.js';
 
 export async function runDebate(input: DebateInput): Promise<DebateResult> {
-  const fullText = input.context ? `${input.task}\n${input.context}` : input.task;
+  const enrichedContext = buildContextString(input.project_dir, input.context);
+  const fullText = enrichedContext ? `${input.task}\n\n${enrichedContext}` : input.task;
 
   // All 7 agents run in parallel — none depend on each other
   const [lead_dev, pm, architect, ux, devil, legal, security] = await Promise.all([

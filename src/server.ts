@@ -24,7 +24,7 @@ import {
 } from './memory/local.js';
 import { exportMemory, importMemory, getLocalDbSize } from './memory/sync.js';
 import { runDebate } from './council/index.js';
-import { routeTask, getRateStatus, recordOutcome, getLearningStats, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights } from './router/index.js';
+import { routeTask, getRateStatus, recordOutcome, getLearningStats, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent } from './router/index.js';
 import type { AgentType, Platform } from './router/index.js';
 import { executeParallel, executeOne } from './agents/executor.js';
 import type { AgentTask, WorkerAgentType } from './agents/types.js';
@@ -36,7 +36,7 @@ import { loadPlugins, listPlugins } from './plugins/loader.js';
 import { readFileSync } from 'node:fs';
 import { extname, basename } from 'node:path';
 
-const VERSION = '0.10.0';
+const VERSION = '0.11.0';
 
 const server = new Server(
   { name: 'veto', version: VERSION },
@@ -434,6 +434,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           output_quality: { type: 'number', description: 'Output quality score 0–100. 90–100=excellent, 70–89=good, 50–69=acceptable, 30–49=poor, 0–29=failed.' },
           agent: { type: 'string', description: 'The worker agent type used (optional but useful for agent performance tracking).' },
           tokens_used: { type: 'number', description: 'Approximate tokens used (optional).' },
+          file_ext: { type: 'string', description: 'File extension of the primary file worked on (e.g. ".ts", ".sql", ".tsx"). Enables predictive agent routing — next time you work on the same extension, veto_route_task will recommend the best agent.' },
         },
         required: ['task_type', 'complexity', 'model_tier', 'output_quality'],
       },
@@ -719,20 +720,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_route_task': {
-      const result = routeTask(String(args?.task ?? ''), {
+      const routeTaskStr = String(args?.task ?? '');
+      const fileExt = args?.file_ext ? String(args.file_ext) : undefined;
+      const result = routeTask(routeTaskStr, {
         agentType: args?.agent_type ? (String(args.agent_type) as AgentType) : undefined,
         filesAffected: typeof args?.files_affected === 'number' ? args.files_affected : undefined,
         forceCouncil: args?.force_council === true,
         context: args?.context ? String(args.context) : undefined,
         preferredPlatform: args?.preferred_platform ? (String(args.preferred_platform) as Platform) : 'claude',
       });
+      const recommended_agent = getRecommendedAgent(routeTaskStr, fileExt);
       return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ ...result, recommended_agent }, null, 2),
+        }],
       };
     }
 
@@ -756,14 +758,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      const debateContext = buildContextString(
-        args?.project_dir ? String(args.project_dir) : undefined,
-        args?.context ? String(args.context) : undefined,
-      );
-
       const result = await runDebate({
         task,
-        context: debateContext || undefined,
+        context: args?.context ? String(args.context) : undefined,
+        project_dir: args?.project_dir ? String(args.project_dir) : undefined,
       });
 
       const outcomeId = saveCouncilOutcome({
@@ -1086,7 +1084,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!task_type) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'task_type is required.' }) }], isError: true };
       }
-      recordOutcome(task_type, complexity, model_tier, args?.agent ? String(args.agent) : 'dynamic', output_quality, typeof args?.tokens_used === 'number' ? args.tokens_used : 0);
+      recordOutcome(task_type, complexity, model_tier, args?.agent ? String(args.agent) : 'dynamic', output_quality, typeof args?.tokens_used === 'number' ? args.tokens_used : 0, args?.file_ext ? String(args.file_ext) : undefined);
       const stats = getLearningStats();
       return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Outcome recorded.', total_outcomes: stats.total_tasks, next_step: stats.total_tasks >= 20 ? 'You have 20+ outcomes. Call veto_learning_apply to update router thresholds.' : `Need ${20 - stats.total_tasks} more outcomes before veto_learning_apply can adjust thresholds.` }, null, 2) }] };
     }
