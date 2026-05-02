@@ -1,0 +1,22 @@
+# Source files — dist/ is enough
+src/
+
+# Dev config
+tsconfig.json
+.claude/
+
+# Internal docs (never publish these)
+VETO_VISION_FINAL.md
+PLAN.md
+docs/
+scripts/
+
+# Source maps and type declarations (CLI tool, not a library)
+dist/**/*.map
+dist/**/*.d.ts
+
+# Test artifacts and misc
+*.test.ts
+*.spec.ts
+.env
+*.log
