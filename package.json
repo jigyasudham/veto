@@ -1,8 +1,15 @@
 {
-  "name": "veto",
-  "version": "0.8.0",
+  "name": "@jigyasudham/veto",
+  "version": "0.8.3",
   "description": "50 agents. 28 skills. 3 AIs. Self-learning. Zero extra cost.",
-  "keywords": ["mcp", "ai", "claude", "agents", "memory", "council"],
+  "keywords": [
+    "mcp",
+    "ai",
+    "claude",
+    "agents",
+    "memory",
+    "council"
+  ],
   "author": "Jigyasu Dham <jigyasudham18@gmail.com>",
   "license": "MIT",
   "type": "module",
@@ -10,7 +17,8 @@
     "node": ">=22.5.0"
   },
   "bin": {
-    "veto": "./dist/cli.js"
+    "veto": "dist/cli.js",
+    "veto-server": "dist/server.js"
   },
   "main": "./dist/server.js",
   "scripts": {

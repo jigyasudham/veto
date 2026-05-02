@@ -4,15 +4,14 @@
 // Suppress Node experimental warnings (node:sqlite) for clean UX
 process.removeAllListeners('warning');
 
-import { mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 
-const VERSION = '0.8.0';
+const VERSION = '0.8.2';
 const VETO_DIR = join(homedir(), '.veto');
+const HOME = homedir();
 
-// Simple inline colors (no chalk needed for the init wizard to avoid ESM issues)
 const c = {
   bold: (s: string) => `\x1b[1m${s}\x1b[0m`,
   green: (s: string) => `\x1b[32m${s}\x1b[0m`,
@@ -36,6 +35,76 @@ function printBanner() {
   console.log('');
 }
 
+// Merge veto entry into an existing JSON config file, creating it if needed.
+// Supports both "mcpServers" format (Claude/Gemini/Codex/Cursor/Windsurf)
+// and "servers" format (VS Code).
+function writeVetoConfig(
+  configPath: string,
+  format: 'mcpServers' | 'servers'
+): 'created' | 'updated' | 'skipped' {
+  let existing: Record<string, unknown> = {};
+
+  if (existsSync(configPath)) {
+    try {
+      existing = JSON.parse(readFileSync(configPath, 'utf8'));
+    } catch {
+      // Unreadable / invalid JSON — skip to avoid corrupting it
+      return 'skipped';
+    }
+  } else {
+    mkdirSync(dirname(configPath), { recursive: true });
+  }
+
+  const wasEmpty = Object.keys(existing).length === 0;
+
+  if (format === 'mcpServers') {
+    const servers = (existing.mcpServers as Record<string, unknown>) ?? {};
+    servers['veto'] = { command: 'veto-server' };
+    existing.mcpServers = servers;
+  } else {
+    const servers = (existing.servers as Record<string, unknown>) ?? {};
+    servers['veto'] = { type: 'stdio', command: 'veto-server' };
+    existing.servers = servers;
+  }
+
+  writeFileSync(configPath, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+  return wasEmpty ? 'created' : 'updated';
+}
+
+// All platforms Veto supports, with their config paths and formats.
+const PLATFORMS = [
+  {
+    name: 'Claude Code',
+    path: join(HOME, '.claude', 'mcp_servers.json'),
+    format: 'mcpServers' as const,
+    detectionDir: join(HOME, '.claude'),
+  },
+  {
+    name: 'Gemini CLI',
+    path: join(HOME, '.gemini', 'settings.json'),
+    format: 'mcpServers' as const,
+    detectionDir: join(HOME, '.gemini'),
+  },
+  {
+    name: 'Codex CLI',
+    path: join(HOME, '.codex', 'config.json'),
+    format: 'mcpServers' as const,
+    detectionDir: join(HOME, '.codex'),
+  },
+  {
+    name: 'Cursor',
+    path: join(HOME, '.cursor', 'mcp.json'),
+    format: 'mcpServers' as const,
+    detectionDir: join(HOME, '.cursor'),
+  },
+  {
+    name: 'Windsurf',
+    path: join(HOME, '.codeium', 'windsurf', 'mcp_config.json'),
+    format: 'mcpServers' as const,
+    detectionDir: join(HOME, '.codeium', 'windsurf'),
+  },
+];
+
 async function initCommand() {
   printBanner();
 
@@ -47,14 +116,13 @@ async function initCommand() {
     console.log(c.dim('  · ') + `Found existing ${VETO_DIR}`);
   }
 
-  // 2. Initialize SQLite database (imports local.ts which auto-creates tables)
+  // 2. Initialize SQLite database
   process.stdout.write('  · Initializing SQLite database...');
   const { getDb, getDbPath, saveSession } = await import('./memory/local.js');
 
   try {
     const db = getDb();
     const dbPath = getDbPath();
-    // Smoke test: save + retrieve a test session
     const { session_id } = saveSession({
       platform: 'claude',
       summary: 'Veto initialized',
@@ -62,7 +130,6 @@ async function initCommand() {
     });
     const row = db.prepare('SELECT id FROM sessions WHERE id = ?').get(session_id);
     if (!row) throw new Error('DB smoke test failed');
-    // Clean up test row
     db.prepare('DELETE FROM sessions WHERE id = ?').run(session_id);
     console.log(c.green(' ✓'));
     console.log(c.green('  ✓') + ` Database ready at ${dbPath}`);
@@ -73,55 +140,49 @@ async function initCommand() {
     process.exit(1);
   }
 
-  // 3. Print Claude Code config snippet
-  // Point to server.js (the MCP server), not cli.js (the init wizard)
-  const cliFile = fileURLToPath(import.meta.url);
-  const distDir = dirname(cliFile);
-  const serverPath = join(distDir, 'server.js').replace(/\\/g, '/');
+  // 3. Auto-configure every AI CLI / IDE found on this machine
+  console.log('');
+  console.log('  Configuring all AI tools found on this machine...');
+  console.log('');
+
+  let configured = 0;
+  let skipped = 0;
+
+  for (const platform of PLATFORMS) {
+    const detected = existsSync(platform.detectionDir);
+    if (!detected) {
+      console.log(c.dim('  · ') + c.dim(`${platform.name} — not installed, skipping`));
+      continue;
+    }
+
+    const result = writeVetoConfig(platform.path, platform.format);
+
+    if (result === 'skipped') {
+      console.log(c.yellow('  ⚠ ') + `${platform.name} — config unreadable, skipped`);
+      skipped++;
+    } else if (result === 'created') {
+      console.log(c.green('  ✓ ') + `${platform.name} — configured`);
+      configured++;
+    } else {
+      console.log(c.green('  ✓ ') + `${platform.name} — updated`);
+      configured++;
+    }
+  }
 
   console.log('');
-  console.log(c.bold('  ┌─ Add Veto to your AI CLI or IDE ───────────────────────────────┐'));
-  console.log(c.bold('  │') + '                                                                ' + c.bold('│'));
-  console.log(c.bold('  │') + '  Config file locations:                                        ' + c.bold('│'));
-  console.log(c.bold('  │') + '                                                                ' + c.bold('│'));
-  console.log(c.bold('  │') + c.dim('  Claude Code  →  ~/.claude/mcp_servers.json') + '                   ' + c.bold('│'));
-  console.log(c.bold('  │') + c.dim('  Gemini CLI   →  ~/.gemini/settings.json') + '                      ' + c.bold('│'));
-  console.log(c.bold('  │') + c.dim('  Codex CLI    →  ~/.codex/config.json') + '                         ' + c.bold('│'));
-  console.log(c.bold('  │') + c.dim('  Cursor       →  ~/.cursor/mcp.json') + '                           ' + c.bold('│'));
-  console.log(c.bold('  │') + c.dim('  Windsurf     →  ~/.codeium/windsurf/mcp_config.json') + '           ' + c.bold('│'));
-  console.log(c.bold('  │') + '                                                                ' + c.bold('│'));
-  console.log(c.bold('  │') + '  Claude / Gemini / Codex / Cursor / Windsurf:                  ' + c.bold('│'));
-  console.log(c.bold('  │') + '                                                                ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('  {') + '                                                           ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('    "mcpServers": {') + '                                            ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('      "veto": {') + '                                               ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('        "command": "node",') + '                                    ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan(`        "args": ["${serverPath}"]`) + '              ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('      }') + '                                                       ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('    }') + '                                                         ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('  }') + '                                                           ' + c.bold('│'));
-  console.log(c.bold('  │') + '                                                                ' + c.bold('│'));
-  console.log(c.bold('  │') + '  VS Code → .vscode/mcp.json:                                   ' + c.bold('│'));
-  console.log(c.bold('  │') + '                                                                ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('  {') + '                                                           ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('    "servers": {') + '                                              ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('      "veto": {') + '                                               ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('        "type": "stdio",') + '                                      ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('        "command": "node",') + '                                    ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan(`        "args": ["${serverPath}"]`) + '              ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('      }') + '                                                       ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('    }') + '                                                         ' + c.bold('│'));
-  console.log(c.bold('  │') + c.cyan('  }') + '                                                           ' + c.bold('│'));
-  console.log(c.bold('  │') + '                                                                ' + c.bold('│'));
-  console.log(c.bold('  └────────────────────────────────────────────────────────────────┘'));
-  console.log('');
-  console.log(c.green('  ✓ Veto is ready!'));
-  console.log('');
-  console.log('  Next steps:');
-  console.log(c.dim('  1.') + ' Add the config above to your AI CLI or IDE config file');
-  console.log(c.dim('  2.') + ' Restart the CLI or IDE');
-  console.log(c.dim('  3.') + ' Run: veto_status  — should return { "status": "running", "version": "0.8.0" }');
-  console.log('');
+
+  if (configured === 0 && skipped === 0) {
+    console.log(c.yellow('  ⚠  No AI tools detected.'));
+    console.log('  Install Claude Code, Gemini CLI, or Codex CLI and run veto init again.');
+    console.log('');
+  } else {
+    console.log(c.green(`  ✓ Veto configured for ${configured} tool${configured !== 1 ? 's' : ''}!`));
+    console.log('');
+    console.log('  Next steps:');
+    console.log(c.dim('  1.') + ' Restart your AI CLI or IDE');
+    console.log(c.dim('  2.') + ' Run: veto_status  — should return { "status": "running", "version": "' + VERSION + '" }');
+    console.log('');
+  }
 }
 
 // ─── Router ────────────────────────────────────────────────────────────────────
