@@ -10,7 +10,12 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import { buildContextString, readProjectContext } from './context/reader.js';
 import {
   saveSession, restoreSession, listSessions, getDbPath, saveCouncilOutcome,
   storeKnowledge, searchKnowledge, deleteKnowledge,
@@ -24,14 +29,22 @@ import type { AgentType, Platform } from './router/index.js';
 import { executeParallel, executeOne } from './agents/executor.js';
 import type { AgentTask, WorkerAgentType } from './agents/types.js';
 import { handoff, continueSession, getPlatformSetup } from './adapters/index.js';
+import { startWatch, pollWatch, stopWatch, listWatches } from './watcher/index.js';
+import { runPipeline } from './workflow/pipeline.js';
+import type { PipelineStep } from './workflow/pipeline.js';
+import { loadPlugins, listPlugins } from './plugins/loader.js';
+import { readFileSync } from 'node:fs';
+import { extname, basename } from 'node:path';
 
-const VERSION = '0.8.0';
+const VERSION = '0.10.0';
 
 const server = new Server(
   { name: 'veto', version: VERSION },
   {
     capabilities: {
       tools: {},
+      resources: {},
+      prompts: {},
     },
   }
 );
@@ -181,6 +194,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description: 'Optional: additional context such as codebase state, prior decisions, or constraints.',
           },
+          project_dir: {
+            type: 'string',
+            description: 'Optional: absolute path to the project directory. Veto will auto-read package.json, git diff, and stack info to give the council real project context.',
+          },
           session_id: {
             type: 'string',
             description: 'Optional: session ID to associate this council outcome with an active session.',
@@ -202,6 +219,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           task: { type: 'string', description: 'The task for the agent to plan.' },
           context: { type: 'string', description: 'Optional additional context.' },
+          project_dir: { type: 'string', description: 'Optional: absolute path to the project directory. Auto-injects package.json, git diff, and stack info into the agent context.' },
         },
         required: ['agent', 'task'],
       },
@@ -258,10 +276,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
                 task: { type: 'string', description: 'Task description for this agent.' },
                 code: { type: 'string', description: 'Optional code to analyze (triggers analyze() instead of plan()).' },
                 context: { type: 'string', description: 'Optional additional context.' },
+                project_dir: { type: 'string', description: 'Optional: per-task project dir override.' },
               },
               required: ['id', 'agent', 'task'],
             },
           },
+          project_dir: { type: 'string', description: 'Optional: project directory applied to all tasks (per-task project_dir overrides this). Auto-injects codebase context.' },
         },
         required: ['tasks'],
       },
@@ -480,6 +500,88 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['platform', 'veto_server_path'],
       },
     },
+    {
+      name: 'veto_watch',
+      description: 'Starts a file watcher on a project directory. Returns a watch_id. Call veto_watch_poll to collect file-change events with recommended agents. Call veto_watch_stop when done.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          project_dir: { type: 'string', description: 'Absolute path to the project directory to watch.' },
+        },
+        required: ['project_dir'],
+      },
+    },
+    {
+      name: 'veto_watch_poll',
+      description: 'Polls for file-change events from an active watcher. Returns accumulated events since last poll (events are cleared on read). Each event includes the file, recommended agent, and suggested veto tool to call.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          watch_id: { type: 'string', description: 'The watch_id returned by veto_watch.' },
+        },
+        required: ['watch_id'],
+      },
+    },
+    {
+      name: 'veto_watch_stop',
+      description: 'Stops an active file watcher.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          watch_id: { type: 'string', description: 'The watch_id returned by veto_watch.' },
+        },
+        required: ['watch_id'],
+      },
+    },
+    {
+      name: 'veto_workflow',
+      description: 'Runs a sequential agent pipeline with optional pass/fail gates between steps. Each step runs a worker agent; if a gate score is set and the step confidence falls below it, the pipeline stops. Returns per-step results plus an overall verdict (passed/partial/failed).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          steps: {
+            type: 'array',
+            description: 'Ordered pipeline steps.',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Step identifier.' },
+                agent: { type: 'string', description: 'Worker agent type.' },
+                task: { type: 'string', description: 'Task description for this step.' },
+                code: { type: 'string', description: 'Optional code to analyze.' },
+                context: { type: 'string', description: 'Optional context.' },
+                gate: { type: 'number', description: 'Optional minimum confidence % (0–100) required to proceed to the next step.' },
+              },
+              required: ['id', 'agent', 'task'],
+            },
+          },
+          project_dir: { type: 'string', description: 'Optional project directory — auto-injects codebase context into all steps.' },
+        },
+        required: ['steps'],
+      },
+    },
+    {
+      name: 'veto_explain',
+      description: 'Reads a file and returns an expert explanation from the most appropriate agent (auto-detected from file extension and name). Pass depth to control detail level.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          file_path: { type: 'string', description: 'Absolute path to the file to explain.' },
+          depth: { type: 'string', enum: ['overview', 'detailed', 'line-by-line'], description: 'Explanation depth. Default: overview.' },
+          context: { type: 'string', description: 'Optional additional context about what you want explained.' },
+        },
+        required: ['file_path'],
+      },
+    },
+    {
+      name: 'veto_plugins',
+      description: 'Lists all custom agents loaded from ~/.veto/agents/. Drop a .js file there that exports plan(task, context?) to register a new agent available in veto_agent_plan and veto_execute_parallel.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
   ],
 }));
 
@@ -654,9 +756,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      const debateContext = buildContextString(
+        args?.project_dir ? String(args.project_dir) : undefined,
+        args?.context ? String(args.context) : undefined,
+      );
+
       const result = await runDebate({
         task,
-        context: args?.context ? String(args.context) : undefined,
+        context: debateContext || undefined,
       });
 
       const outcomeId = saveCouncilOutcome({
@@ -709,11 +816,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!task) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'task is required.' }) }], isError: true };
       }
-      const result = await executeOne({ id: 'plan-1', agent: agentType, task, context: args?.context ? String(args.context) : undefined });
+      const result = await executeOne({
+        id: 'plan-1',
+        agent: agentType,
+        task,
+        context: args?.context ? String(args.context) : undefined,
+        project_dir: args?.project_dir ? String(args.project_dir) : undefined,
+      });
       if (result.error) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
       }
-      return { content: [{ type: 'text', text: JSON.stringify(result.plan ?? result.analysis, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify({ ...(result.plan ?? result.analysis), output: result.output }, null, 2) }] };
     }
 
     case 'veto_code_review': {
@@ -757,12 +870,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (rawTasks.length === 0) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'tasks array is required and must not be empty.' }) }], isError: true };
       }
+      const parallelProjectDir = args?.project_dir ? String(args.project_dir) : undefined;
       const tasks: AgentTask[] = rawTasks.map((t: Record<string, unknown>) => ({
         id: String(t.id ?? ''),
         agent: String(t.agent ?? '') as WorkerAgentType,
         task: String(t.task ?? ''),
         code: t.code ? String(t.code) : undefined,
         context: t.context ? String(t.context) : undefined,
+        project_dir: t.project_dir ? String(t.project_dir) : parallelProjectDir,
       }));
       const results = await executeParallel(tasks);
       return {
@@ -776,7 +891,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               agent: r.agent,
               duration_ms: r.duration_ms,
               error: r.error,
-              output: r.plan ?? r.analysis,
+              output: { ...(r.plan ?? r.analysis), structured: r.output },
             })),
           }, null, 2),
         }],
@@ -1018,17 +1133,288 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
 
+    case 'veto_watch': {
+      const dir = String(args?.project_dir ?? '').trim();
+      if (!dir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
+      const watch_id = startWatch(dir);
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, watch_id, project_dir: dir, message: `Watching "${dir}". Call veto_watch_poll with watch_id to collect events.` }, null, 2) }] };
+    }
+
+    case 'veto_watch_poll': {
+      const watch_id = String(args?.watch_id ?? '').trim();
+      if (!watch_id) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'watch_id is required.' }) }], isError: true };
+      const result = pollWatch(watch_id);
+      if (!result.found) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `No active watcher with id: ${watch_id}` }) }], isError: true };
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, watch_id, project_dir: result.project_dir, event_count: result.events.length, events: result.events }, null, 2) }] };
+    }
+
+    case 'veto_watch_stop': {
+      const watch_id = String(args?.watch_id ?? '').trim();
+      if (!watch_id) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'watch_id is required.' }) }], isError: true };
+      const stopped = stopWatch(watch_id);
+      return { content: [{ type: 'text', text: JSON.stringify({ success: stopped, message: stopped ? `Watcher ${watch_id} stopped.` : `No watcher found with id: ${watch_id}` }, null, 2) }] };
+    }
+
+    case 'veto_workflow': {
+      const rawSteps = Array.isArray(args?.steps) ? args.steps : [];
+      if (rawSteps.length === 0) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'steps array is required and must not be empty.' }) }], isError: true };
+      const steps: PipelineStep[] = rawSteps.map((s: Record<string, unknown>) => ({
+        id: String(s.id ?? ''),
+        agent: String(s.agent ?? '') as WorkerAgentType,
+        task: String(s.task ?? ''),
+        code: s.code ? String(s.code) : undefined,
+        context: s.context ? String(s.context) : undefined,
+        gate: typeof s.gate === 'number' ? s.gate : undefined,
+      }));
+      const result = await runPipeline(steps, args?.project_dir ? String(args.project_dir) : undefined);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+
+    case 'veto_explain': {
+      const filePath = String(args?.file_path ?? '').trim();
+      if (!filePath) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'file_path is required.' }) }], isError: true };
+
+      let fileContent: string;
+      try {
+        fileContent = readFileSync(filePath, 'utf8');
+      } catch {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Cannot read file: ${filePath}` }) }], isError: true };
+      }
+
+      const ext = extname(filePath).toLowerCase();
+      const name_ = basename(filePath).toLowerCase();
+      const depth = String(args?.depth ?? 'overview');
+
+      // auto-detect best agent
+      let agent: WorkerAgentType = 'coder';
+      if (['.tsx', '.jsx', '.vue', '.svelte'].includes(ext)) agent = 'frontend';
+      else if (['.sql', '.prisma'].includes(ext) || name_.includes('schema')) agent = 'database';
+      else if (/\.(test|spec)\.(ts|js|tsx|jsx)$/.test(name_)) agent = 'tester';
+      else if (['.yaml', '.yml', '.toml', '.dockerfile'].includes(ext) || name_ === 'dockerfile') agent = 'devops';
+      else if (name_.includes('auth') || name_.includes('login') || name_.includes('jwt') || name_.includes('token')) agent = 'auth';
+      else if (name_.includes('security') || name_.includes('crypt')) agent = 'security-scanner';
+      else if (['.ts', '.js', '.mjs'].includes(ext)) agent = 'coder';
+
+      const userContext = args?.context ? String(args.context) : undefined;
+      const task = `Explain this ${ext} file at ${depth} depth. File: ${basename(filePath)}${userContext ? `. Focus: ${userContext}` : ''}`;
+
+      const result = await executeOne({ id: 'explain-1', agent, task, code: fileContent, project_dir: undefined });
+      return {
+        content: [{ type: 'text', text: JSON.stringify({
+          file: filePath, agent_used: agent, depth,
+          explanation: result.plan ?? result.analysis,
+          output: result.output,
+        }, null, 2) }],
+      };
+    }
+
+    case 'veto_plugins': {
+      return { content: [{ type: 'text', text: JSON.stringify({ plugins: listPlugins(), plugin_dir: `${process.env.HOME ?? process.env.USERPROFILE}/.veto/agents/`, instructions: 'Drop a .js file exporting plan(task, context?) to register a custom agent.' }, null, 2) }] };
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
 });
 
+// ─── MCP Resources ─────────────────────────────────────────────────────────────
+
+server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+  resources: [
+    {
+      uri: 'veto://sessions',
+      name: 'Saved Sessions',
+      description: 'List of all saved Veto sessions across AI platforms.',
+      mimeType: 'application/json',
+    },
+    {
+      uri: 'veto://project-map',
+      name: 'Project Map',
+      description: 'Stored project structure maps. Append ?dir=<absolute_path> to filter by project.',
+      mimeType: 'application/json',
+    },
+    {
+      uri: 'veto://memory',
+      name: 'Knowledge Base',
+      description: 'All stored knowledge entries. Append ?q=<query> to search.',
+      mimeType: 'application/json',
+    },
+    {
+      uri: 'veto://patterns',
+      name: 'Learned Patterns',
+      description: 'Coding patterns Veto has learned from your sessions.',
+      mimeType: 'application/json',
+    },
+  ],
+}));
+
+server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+  const uri = request.params.uri;
+  const url = new URL(uri);
+
+  if (url.host === 'sessions') {
+    const sessions = listSessions(50);
+    return {
+      contents: [{
+        uri,
+        mimeType: 'application/json',
+        text: JSON.stringify(sessions.map(s => ({
+          id: s.id, platform: s.platform, summary: s.summary,
+          project_dir: s.project_dir, started_at: s.started_at,
+        })), null, 2),
+      }],
+    };
+  }
+
+  if (url.host === 'project-map') {
+    const dir = url.searchParams.get('dir') ?? '';
+    if (dir) {
+      const row = getProjectMap(dir);
+      return {
+        contents: [{
+          uri,
+          mimeType: 'application/json',
+          text: JSON.stringify(row ?? { found: false }, null, 2),
+        }],
+      };
+    }
+    return { contents: [{ uri, mimeType: 'application/json', text: '{"message":"Append ?dir=<absolute_path> to get a specific project map."}' }] };
+  }
+
+  if (url.host === 'memory') {
+    const q = url.searchParams.get('q') ?? undefined;
+    const results = searchKnowledge({ query: q, limit: 20 });
+    return {
+      contents: [{
+        uri,
+        mimeType: 'application/json',
+        text: JSON.stringify(results.map(r => ({
+          id: r.id, type: r.type, title: r.title,
+          content: r.content, tags: r.tags ? JSON.parse(r.tags) : [],
+        })), null, 2),
+      }],
+    };
+  }
+
+  if (url.host === 'patterns') {
+    const patterns = getPatterns(undefined, 50);
+    return {
+      contents: [{
+        uri,
+        mimeType: 'application/json',
+        text: JSON.stringify(patterns.map(p => ({
+          key: p.pattern_key, val: p.pattern_val,
+          confidence: p.confidence, seen_count: p.seen_count,
+        })), null, 2),
+      }],
+    };
+  }
+
+  throw new Error(`Unknown resource: ${uri}`);
+});
+
+// ─── MCP Prompts ───────────────────────────────────────────────────────────────
+
+const PROMPTS = [
+  {
+    name: 'code-review',
+    description: 'Full code review prompt — paste code, get scored findings with severity and fixes.',
+    arguments: [
+      { name: 'code', description: 'The code to review.', required: true },
+      { name: 'focus', description: 'Optional focus area (e.g. security, performance, style).', required: false },
+    ],
+  },
+  {
+    name: 'security-audit',
+    description: 'OWASP Top 10 security audit — scans code for vulnerabilities with CWE references.',
+    arguments: [
+      { name: 'code', description: 'The code to audit.', required: true },
+      { name: 'language', description: 'Language or framework (e.g. TypeScript, Express).', required: false },
+    ],
+  },
+  {
+    name: 'deploy-checklist',
+    description: 'Pre-deploy checklist debate — council reviews your deployment plan.',
+    arguments: [
+      { name: 'plan', description: 'Your deployment plan or change description.', required: true },
+      { name: 'environment', description: 'Target environment (prod, staging, etc.).', required: false },
+    ],
+  },
+  {
+    name: 'explain-file',
+    description: 'Expert explanation of a file — routes to the best-fit agent based on file type.',
+    arguments: [
+      { name: 'file_path', description: 'Absolute path to the file to explain.', required: true },
+      { name: 'depth', description: 'Explanation depth: overview | detailed | line-by-line.', required: false },
+    ],
+  },
+];
+
+server.setRequestHandler(ListPromptsRequestSchema, async () => ({ prompts: PROMPTS }));
+
+server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+  const { name, arguments: pArgs } = request.params;
+
+  if (name === 'code-review') {
+    const code = pArgs?.code ?? '<paste code here>';
+    const focus = pArgs?.focus ? ` Focus on: ${pArgs.focus}.` : '';
+    return {
+      description: PROMPTS[0].description,
+      messages: [{
+        role: 'user',
+        content: { type: 'text', text: `Use veto_code_review to review this code.${focus}\n\n\`\`\`\n${code}\n\`\`\`` },
+      }],
+    };
+  }
+
+  if (name === 'security-audit') {
+    const code = pArgs?.code ?? '<paste code here>';
+    const lang = pArgs?.language ? ` Language/framework: ${pArgs.language}.` : '';
+    return {
+      description: PROMPTS[1].description,
+      messages: [{
+        role: 'user',
+        content: { type: 'text', text: `Use veto_security_scan to audit this code for OWASP Top 10 vulnerabilities.${lang}\n\n\`\`\`\n${code}\n\`\`\`` },
+      }],
+    };
+  }
+
+  if (name === 'deploy-checklist') {
+    const plan = pArgs?.plan ?? '<describe your deployment plan>';
+    const env = pArgs?.environment ? ` Target environment: ${pArgs.environment}.` : '';
+    return {
+      description: PROMPTS[2].description,
+      messages: [{
+        role: 'user',
+        content: { type: 'text', text: `Use veto_council_debate to review this deployment plan before we ship.${env}\n\nPlan: ${plan}` },
+      }],
+    };
+  }
+
+  if (name === 'explain-file') {
+    const filePath = pArgs?.file_path ?? '<absolute file path>';
+    const depth = pArgs?.depth ?? 'overview';
+    return {
+      description: PROMPTS[3].description,
+      messages: [{
+        role: 'user',
+        content: { type: 'text', text: `Read the file at "${filePath}" and use veto_agent_plan with the most appropriate agent (frontend for .tsx/.vue, database for .sql, backend for services, coder for general) to give a ${depth}-level explanation of what it does, how it works, and any concerns.` },
+      }],
+    };
+  }
+
+  throw new Error(`Unknown prompt: ${name}`);
+});
+
 // ─── Start ─────────────────────────────────────────────────────────────────────
 
 async function main() {
+  const loadedPlugins = await loadPlugins();
+  if (loadedPlugins.length > 0) {
+    process.stderr.write(`[veto] Loaded ${loadedPlugins.length} plugin(s): ${loadedPlugins.join(', ')}\n`);
+  }
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  // stderr so it doesn't pollute MCP stdio
   process.stderr.write(`Veto MCP server v${VERSION} running (stdio)\n`);
 }
 
