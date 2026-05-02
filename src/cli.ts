@@ -358,14 +358,49 @@ async function patternsCommand() {
 
 function helpCommand() {
   console.log('');
-  console.log(c.bold('  Usage: veto <command>'));
+  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(' — 50 agents. 34 tools. 3 AIs. Self-learning. Zero extra cost.'));
   console.log('');
-  console.log('  Commands:');
-  console.log(`  ${c.cyan('init')}              Configure all AI tools on this machine`);
-  console.log(`  ${c.cyan('status')}            Show server version, DB path, and stats`);
-  console.log(`  ${c.cyan('sessions')}          List saved sessions`);
-  console.log(`  ${c.cyan('memory')} [query]    Search knowledge base`);
-  console.log(`  ${c.cyan('patterns')} [prefix] List learned agent/routing patterns`);
+  console.log(c.bold('  CLI Commands'));
+  console.log(c.dim('  ─────────────────────────────────────────────────────'));
+  console.log(`  ${c.cyan('veto init')}                    Configure all AI tools + scan project`);
+  console.log(`  ${c.cyan('veto status')}                  Version, DB path, memory/session counts`);
+  console.log(`  ${c.cyan('veto sessions')}                List last 20 saved sessions`);
+  console.log(`  ${c.cyan('veto memory')} ${c.dim('[query]')}         Search knowledge base`);
+  console.log(`  ${c.cyan('veto patterns')} ${c.dim('[prefix]')}      List learned agent/routing patterns`);
+  console.log(`  ${c.cyan('veto help')}                    Show this help`);
+  console.log('');
+  console.log(c.bold('  MCP Tools (34)'));
+  console.log(c.dim('  ─────────────────────────────────────────────────────'));
+  console.log(`  ${c.dim('Session')}    veto_status · veto_session_save · veto_session_restore · veto_sessions_list`);
+  console.log(`  ${c.dim('Router')}     veto_route_task · veto_rate_status`);
+  console.log(`  ${c.dim('Council')}    veto_council_debate`);
+  console.log(`  ${c.dim('Agents')}     veto_agent_plan · veto_execute_parallel · veto_explain`);
+  console.log(`  ${c.dim('Review')}     veto_code_review · veto_security_scan · veto_secrets_scan · veto_diff_review`);
+  console.log(`  ${c.dim('Pipeline')}   veto_workflow`);
+  console.log(`  ${c.dim('Watch')}      veto_watch · veto_watch_poll · veto_watch_stop`);
+  console.log(`  ${c.dim('Memory')}     veto_memory_store · veto_memory_search · veto_memory_delete`);
+  console.log(`             veto_project_map_update · veto_project_map_get`);
+  console.log(`             veto_pattern_store · veto_patterns_list`);
+  console.log(`             veto_memory_export · veto_memory_import`);
+  console.log(`  ${c.dim('Learning')}   veto_record_outcome · veto_learning_stats · veto_learning_apply`);
+  console.log(`  ${c.dim('Handoff')}    veto_handoff · veto_continue · veto_platform_setup`);
+  console.log(`  ${c.dim('Plugins')}    veto_plugins`);
+  console.log('');
+  console.log(c.bold('  MCP Resources'));
+  console.log(c.dim('  ─────────────────────────────────────────────────────'));
+  console.log(`  ${c.cyan('veto://sessions')}              All saved sessions`);
+  console.log(`  ${c.cyan('veto://project-map?dir=<path>')} Project structure map`);
+  console.log(`  ${c.cyan('veto://memory?q=<query>')}      Knowledge base search`);
+  console.log(`  ${c.cyan('veto://patterns')}              Learned patterns`);
+  console.log('');
+  console.log(c.bold('  MCP Prompts'));
+  console.log(c.dim('  ─────────────────────────────────────────────────────'));
+  console.log(`  ${c.cyan('code-review')} · ${c.cyan('security-audit')} · ${c.cyan('deploy-checklist')} · ${c.cyan('explain-file')}`);
+  console.log('');
+  console.log(c.bold('  Docs'));
+  console.log(c.dim('  ─────────────────────────────────────────────────────'));
+  console.log(`  ${c.dim('GitHub:')}  https://github.com/jigyasudham/veto`);
+  console.log(`  ${c.dim('npm:')}     https://www.npmjs.com/package/@jigyasudham/veto`);
   console.log('');
 }
 
