@@ -116,7 +116,7 @@ VS Code uses `"servers"` with `"type": "stdio"`:
 
 ---
 
-## MCP Tools (34)
+## MCP Tools (41)
 
 | Category | Tools |
 |---|---|
