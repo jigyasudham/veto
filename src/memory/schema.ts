@@ -9,12 +9,41 @@ export const CREATE_TABLES = `
     platform         TEXT NOT NULL DEFAULT 'claude',
     active_client    TEXT,
     last_resumed_at  TEXT,
+    connection_type  TEXT NOT NULL DEFAULT 'subscription',
     project_dir      TEXT,
     summary          TEXT,
     context          TEXT,
     task_state       TEXT,
     token_count      INTEGER DEFAULT 0,
     created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS docs_cache (
+    id           TEXT PRIMARY KEY,
+    package_name TEXT NOT NULL,
+    ecosystem    TEXT NOT NULL,
+    version      TEXT NOT NULL,
+    content      TEXT NOT NULL,
+    fetched_at   TEXT NOT NULL,
+    UNIQUE(package_name, ecosystem, version)
+  );
+
+  CREATE TABLE IF NOT EXISTS task_plans (
+    id               TEXT PRIMARY KEY,
+    description_hash TEXT NOT NULL,
+    plan_json        TEXT NOT NULL,
+    project_dir      TEXT,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS usage_events (
+    id              TEXT PRIMARY KEY,
+    session_id      TEXT,
+    platform        TEXT NOT NULL,
+    connection_type TEXT NOT NULL DEFAULT 'subscription',
+    tokens          INTEGER DEFAULT 0,
+    event_type      TEXT NOT NULL DEFAULT 'session_save',
+    recorded_at     TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS decisions (
@@ -115,6 +144,9 @@ export const CREATE_TABLES = `
   CREATE INDEX IF NOT EXISTS idx_knowledge_type       ON knowledge_base(type);
   CREATE INDEX IF NOT EXISTS idx_knowledge_project    ON knowledge_base(project_dir);
   CREATE INDEX IF NOT EXISTS idx_project_map_dir      ON project_map(project_dir);
+  CREATE INDEX IF NOT EXISTS idx_docs_cache_pkg       ON docs_cache(package_name, ecosystem);
+  CREATE INDEX IF NOT EXISTS idx_usage_events_session ON usage_events(session_id);
+  CREATE INDEX IF NOT EXISTS idx_usage_events_date    ON usage_events(recorded_at);
 `;
 
 export type SessionRow = {
@@ -124,12 +156,40 @@ export type SessionRow = {
   platform: string;
   active_client: string | null;
   last_resumed_at: string | null;
+  connection_type: string;
   project_dir: string | null;
   summary: string | null;
   context: string | null;
   task_state: string | null;
   token_count: number;
   created_at: string;
+};
+
+export type DocsCacheRow = {
+  id: string;
+  package_name: string;
+  ecosystem: string;
+  version: string;
+  content: string;
+  fetched_at: string;
+};
+
+export type TaskPlanRow = {
+  id: string;
+  description_hash: string;
+  plan_json: string;
+  project_dir: string | null;
+  created_at: string;
+};
+
+export type UsageEventRow = {
+  id: string;
+  session_id: string | null;
+  platform: string;
+  connection_type: string;
+  tokens: number;
+  event_type: string;
+  recorded_at: string;
 };
 
 export type DecisionRow = {
