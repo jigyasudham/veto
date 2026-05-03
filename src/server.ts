@@ -36,7 +36,7 @@ import { loadPlugins, listPlugins } from './plugins/loader.js';
 import { readFileSync } from 'node:fs';
 import { extname, basename } from 'node:path';
 
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 
 // Tracks the project_dir of the most recently active session in this process.
 // Used as a fallback when memory_store/memory_search are called without an explicit project_dir,
