@@ -22,7 +22,16 @@ export function getDb(): DatabaseSync {
   _db.exec(CREATE_TABLES);
   migrateCouncilOutcomes(_db);
   migrateCouncilColumns(_db);
+  migrateSessionColumns(_db);
   return _db;
+}
+
+// Adds active_client and last_resumed_at columns if they don't exist
+function migrateSessionColumns(db: DatabaseSync): void {
+  const cols = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
+  const names = new Set(cols.map(c => c.name));
+  if (!names.has('active_client')) db.exec('ALTER TABLE sessions ADD COLUMN active_client TEXT');
+  if (!names.has('last_resumed_at')) db.exec('ALTER TABLE sessions ADD COLUMN last_resumed_at TEXT');
 }
 
 // Adds legal and security columns if they don't exist (Phase 3 → Phase 3.1 migration)
@@ -93,10 +102,19 @@ export type RestoreSessionResult = {
   session?: SessionRow;
 };
 
-export function restoreSession(session_id: string): RestoreSessionResult {
+export function restoreSession(session_id: string, active_client?: string): RestoreSessionResult {
   const db = getDb();
   const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(session_id) as SessionRow | undefined;
   if (!row) return { found: false };
+
+  if (active_client) {
+    const now = new Date().toISOString();
+    db.prepare('UPDATE sessions SET active_client = ?, last_resumed_at = ? WHERE id = ?')
+      .run(active_client, now, session_id);
+    row.active_client = active_client;
+    row.last_resumed_at = now;
+  }
+
   return { found: true, session: row };
 }
 

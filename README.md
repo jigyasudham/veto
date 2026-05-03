@@ -73,7 +73,7 @@ VS Code uses `"servers"` with `"type": "stdio"`:
 
 **50 Agents** — Domain experts for every task type. Each agent knows when it is the right tool and when to defer.
 
-**Memory** — Sessions, decisions, knowledge, and coding patterns persist across every conversation and every platform.
+**Memory** — Sessions, decisions, knowledge, and coding patterns persist across every conversation and every platform. Memory is automatically scoped to the active session's project directory — two instances working on different projects stay isolated without any extra configuration.
 
 **Diff review** — `veto_diff_review` runs code review, security scan, and secrets scan in parallel across a git diff. Returns a pass/warn/fail verdict with per-file findings — ready for CI and pre-commit hooks.
 
@@ -303,9 +303,15 @@ Veto loads it on start. Use it in `veto_agent_plan { agent: "my-agent" }` or `ve
 **Rate limit mid-task:**
 ```
 Claude at 90%  →  veto_handoff { summary, context }
-Open Gemini    →  veto_continue
+Open Gemini    →  veto_continue { resuming_as: "gemini" }
 Full context restored. Continue exactly where you stopped.
 ```
+
+Every session tracks two fields:
+- `created_by` — which AI originally saved the session
+- `active_client` — which AI last resumed it (updated on every `veto_continue` or `veto_session_restore`)
+
+**Multiple AIs on different projects simultaneously:** Each MCP server process is independent. Sessions are always separate. Memory is automatically scoped to each process's active project — no cross-contamination.
 
 **Switch machines:**
 ```

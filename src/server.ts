@@ -38,6 +38,11 @@ import { extname, basename } from 'node:path';
 
 const VERSION = '1.0.0';
 
+// Tracks the project_dir of the most recently active session in this process.
+// Used as a fallback when memory_store/memory_search are called without an explicit project_dir,
+// so memories are automatically scoped to the current project.
+let activeProjectDir: string | null = null;
+
 const server = new Server(
   { name: 'veto', version: VERSION },
   {
@@ -108,6 +113,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           session_id: {
             type: 'string',
             description: 'UUID of the session to restore.',
+          },
+          resuming_as: {
+            type: 'string',
+            description: 'The AI client resuming this session (e.g. "claude", "gemini", "codex"). Recorded as active_client.',
+            enum: ['claude', 'gemini', 'codex'],
           },
         },
         required: ['session_id'],
@@ -498,6 +508,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object',
         properties: {
           session_id: { type: 'string', description: 'Optional. Session ID from veto_handoff. If omitted, the most recent saved session is restored.' },
+          resuming_as: { type: 'string', description: 'The AI client resuming this session (e.g. "gemini"). Recorded as active_client so you can track which tool is currently working on it.', enum: ['claude', 'gemini', 'codex'] },
         },
         required: [],
       },
@@ -630,12 +641,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_session_save': {
+      const sessionProjectDir = args?.project_dir ? String(args.project_dir) : undefined;
+      if (sessionProjectDir) activeProjectDir = sessionProjectDir;
       const result = saveSession({
         summary: String(args?.summary ?? ''),
         context: String(args?.context ?? ''),
         task_state: args?.task_state ? String(args.task_state) : undefined,
         platform: args?.platform ? String(args.platform) : 'claude',
-        project_dir: args?.project_dir ? String(args.project_dir) : undefined,
+        project_dir: sessionProjectDir,
         token_count: typeof args?.token_count === 'number' ? args.token_count : 0,
       });
 
@@ -659,7 +672,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case 'veto_session_restore': {
       const session_id = String(args?.session_id ?? '');
-      const result = restoreSession(session_id);
+      const resuming_as = args?.resuming_as ? String(args.resuming_as) : undefined;
+      const result = restoreSession(session_id, resuming_as);
 
       if (!result.found) {
         return {
@@ -678,6 +692,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       const s = result.session!;
+      if (s.project_dir) activeProjectDir = s.project_dir;
       return {
         content: [
           {
@@ -686,7 +701,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               {
                 success: true,
                 session_id: s.id,
-                platform: s.platform,
+                created_by: s.platform,
+                active_client: s.active_client ?? s.platform,
+                last_resumed_at: s.last_resumed_at,
                 started_at: s.started_at,
                 ended_at: s.ended_at,
                 project_dir: s.project_dir,
@@ -1011,7 +1028,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         content,
         type: args?.type ? String(args.type) as import('./memory/schema.js').KnowledgeType : 'solution',
         tags: Array.isArray(args?.tags) ? args.tags.map(String) : undefined,
-        project_dir: args?.project_dir ? String(args.project_dir) : undefined,
+        project_dir: args?.project_dir ? String(args.project_dir) : (activeProjectDir ?? undefined),
         session_id: args?.session_id ? String(args.session_id) : undefined,
         relevance: typeof args?.relevance === 'number' ? args.relevance : 1.0,
       });
@@ -1022,7 +1039,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const results = searchKnowledge({
         query: args?.query ? String(args.query) : undefined,
         type: args?.type ? String(args.type) as import('./memory/schema.js').KnowledgeType : undefined,
-        project_dir: args?.project_dir ? String(args.project_dir) : undefined,
+        project_dir: args?.project_dir ? String(args.project_dir) : (activeProjectDir ?? undefined),
         limit: typeof args?.limit === 'number' ? args.limit : 10,
       });
       return {
@@ -1148,16 +1165,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_continue': {
-      const result = continueSession(args?.session_id ? String(args.session_id) : undefined);
+      const resuming_as = args?.resuming_as ? String(args.resuming_as) : undefined;
+      const result = continueSession(args?.session_id ? String(args.session_id) : undefined, resuming_as);
       if (!result.found) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: result.message }, null, 2) }], isError: true };
       }
+      if (result.project_dir) activeProjectDir = result.project_dir;
       return {
         content: [{
           type: 'text',
           text: result.message + '\n\n' + JSON.stringify({
             session_id: result.session_id,
-            platform: result.platform,
+            created_by: result.platform,
+            active_client: result.active_client ?? result.platform,
             summary: result.summary,
             context: result.context,
             task_state: result.task_state,

@@ -3,16 +3,18 @@
 
 export const CREATE_TABLES = `
   CREATE TABLE IF NOT EXISTS sessions (
-    id          TEXT PRIMARY KEY,
-    started_at  TEXT NOT NULL,
-    ended_at    TEXT,
-    platform    TEXT NOT NULL DEFAULT 'claude',
-    project_dir TEXT,
-    summary     TEXT,
-    context     TEXT,
-    task_state  TEXT,
-    token_count INTEGER DEFAULT 0,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    id               TEXT PRIMARY KEY,
+    started_at       TEXT NOT NULL,
+    ended_at         TEXT,
+    platform         TEXT NOT NULL DEFAULT 'claude',
+    active_client    TEXT,
+    last_resumed_at  TEXT,
+    project_dir      TEXT,
+    summary          TEXT,
+    context          TEXT,
+    task_state       TEXT,
+    token_count      INTEGER DEFAULT 0,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS decisions (
@@ -120,6 +122,8 @@ export type SessionRow = {
   started_at: string;
   ended_at: string | null;
   platform: string;
+  active_client: string | null;
+  last_resumed_at: string | null;
   project_dir: string | null;
   summary: string | null;
   context: string | null;
