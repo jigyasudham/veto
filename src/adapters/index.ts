@@ -22,6 +22,7 @@ export type ContinueResult = {
   found: boolean;
   session_id?: string;
   platform?: string;
+  active_client?: string;
   summary?: string;
   context?: unknown;
   task_state?: unknown;
@@ -90,11 +91,11 @@ export function handoff(options: {
 
 // ─── Continue ─────────────────────────────────────────────────────────────────
 
-export function continueSession(sessionId?: string): ContinueResult {
+export function continueSession(sessionId?: string, active_client?: string): ContinueResult {
   const now = new Date().toISOString();
 
   if (sessionId) {
-    const result = restoreSession(sessionId);
+    const result = restoreSession(sessionId, active_client);
     if (!result.found || !result.session) {
       return { found: false, message: `No session found with ID: ${sessionId}`, restored_at: now };
     }
@@ -111,7 +112,7 @@ export function continueSession(sessionId?: string): ContinueResult {
     };
   }
 
-  const result = restoreSession(sessions[0].id);
+  const result = restoreSession(sessions[0].id, active_client);
   if (!result.found || !result.session) {
     return { found: false, message: 'Could not restore the most recent session.', restored_at: now };
   }
@@ -149,6 +150,7 @@ function buildContinueResult(session: ReturnType<typeof listSessions>[0], now: s
     found: true,
     session_id: session.id,
     platform: session.platform,
+    active_client: session.active_client ?? undefined,
     summary: session.summary ?? undefined,
     context,
     task_state,

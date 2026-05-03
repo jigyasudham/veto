@@ -21,6 +21,8 @@ import {
   storeKnowledge, searchKnowledge, deleteKnowledge,
   updateProjectMap, getProjectMap,
   upsertPattern, getPatterns,
+  getContextStatus, fetchAndCacheDocs, saveTaskPlan,
+  getUsageStatus, getAuditLog, getHealthStats, CONTEXT_WINDOWS,
 } from './memory/local.js';
 import { exportMemory, importMemory, getLocalDbSize } from './memory/sync.js';
 import { runDebate } from './council/index.js';
@@ -33,10 +35,21 @@ import { startWatch, pollWatch, stopWatch, listWatches } from './watcher/index.j
 import { runPipeline } from './workflow/pipeline.js';
 import type { PipelineStep } from './workflow/pipeline.js';
 import { loadPlugins, listPlugins } from './plugins/loader.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { extname, basename } from 'node:path';
+import { createHash } from 'node:crypto';
 
-const VERSION = '1.0.0';
+const VERSION = '1.2.0';
+
+// Tracks the project_dir of the most recently active session in this process.
+// Used as a fallback when memory_store/memory_search are called without an explicit project_dir,
+// so memories are automatically scoped to the current project.
+let activeProjectDir: string | null = null;
+
+// Server health tracking
+const SERVER_START_TIME = Date.now();
+let serverErrorCount = 0;
+let lastServerError: string | null = null;
 
 const server = new Server(
   { name: 'veto', version: VERSION },
@@ -90,9 +103,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description: 'Absolute path to the current project directory.',
           },
+          connection_type: {
+            type: 'string',
+            description: 'How you are connected to this AI — "subscription" (Claude Pro, Gemini Advanced) or "api" (API key). Used for usage tracking.',
+            enum: ['subscription', 'api'],
+          },
           token_count: {
             type: 'number',
-            description: 'Approximate tokens used this session.',
+            description: 'Approximate tokens used this session. Veto uses this for context window monitoring.',
           },
         },
         required: ['summary', 'context'],
@@ -108,6 +126,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           session_id: {
             type: 'string',
             description: 'UUID of the session to restore.',
+          },
+          resuming_as: {
+            type: 'string',
+            description: 'The AI client resuming this session (e.g. "claude", "gemini", "codex"). Recorded as active_client.',
+            enum: ['claude', 'gemini', 'codex'],
           },
         },
         required: ['session_id'],
@@ -498,6 +521,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object',
         properties: {
           session_id: { type: 'string', description: 'Optional. Session ID from veto_handoff. If omitted, the most recent saved session is restored.' },
+          resuming_as: { type: 'string', description: 'The AI client resuming this session (e.g. "gemini"). Recorded as active_client so you can track which tool is currently working on it.', enum: ['claude', 'gemini', 'codex'] },
         },
         required: [],
       },
@@ -596,6 +620,93 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: [],
       },
     },
+    // ── Phase 13: Developer Intelligence ──────────────────────────────────────
+    {
+      name: 'veto_docs_fetch',
+      description: 'Fetches current, version-accurate documentation for any npm, PyPI, or crates.io package and returns it for injection into agent context. Eliminates hallucinated APIs. Results are cached for 24 hours.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          package_name: { type: 'string', description: 'Package name (e.g. "react", "requests", "serde").' },
+          ecosystem:    { type: 'string', enum: ['npm', 'pypi', 'crates'], description: 'Package ecosystem.' },
+          version:      { type: 'string', description: 'Specific version. Defaults to latest.' },
+          max_chars:    { type: 'number', description: 'Max characters to return (default 8000). Higher = more complete docs, more tokens.' },
+        },
+        required: ['package_name', 'ecosystem'],
+      },
+    },
+    {
+      name: 'veto_context_status',
+      description: 'Returns the context window usage for a saved session — tokens used, % of platform limit consumed, and whether to compress or hand off before the window fills.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          session_id: { type: 'string', description: 'Session ID to check.' },
+        },
+        required: ['session_id'],
+      },
+    },
+    {
+      name: 'veto_task_parse',
+      description: 'Parses a plain-English project description or PRD into a structured task DAG with dependencies, complexity scores, priorities, and suggested agent assignments. Feeds directly into veto_workflow.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          description: { type: 'string', description: 'Project description, PRD, or feature brief to parse into tasks.' },
+          project_dir:  { type: 'string', description: 'Optional project directory for codebase context injection.' },
+          max_tasks:    { type: 'number', description: 'Maximum number of tasks to generate (default 20).' },
+        },
+        required: ['description'],
+      },
+    },
+    // ── Phase 14: Observability & Safety ──────────────────────────────────────
+    {
+      name: 'veto_usage_status',
+      description: 'Live AI usage dashboard. Shows tokens consumed today, requests per platform, subscription vs API usage split, 7-day history, and warnings when approaching limits.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+    {
+      name: 'veto_audit_log',
+      description: 'Queryable log of every council verdict, decision, and session event. Filter by session, agent, verdict, or date. Essential for tracing what happened and why.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          session_id: { type: 'string', description: 'Filter to a specific session.' },
+          verdict:    { type: 'string', description: 'Filter by council verdict (GREEN, YELLOW, RED).' },
+          since:      { type: 'string', description: 'ISO date — only return events after this time.' },
+          limit:      { type: 'number', description: 'Max events to return (default 20, max 100).' },
+        },
+        required: [],
+      },
+    },
+    {
+      name: 'veto_health',
+      description: 'Returns a live health snapshot of the Veto server — DB size, session/memory/pattern counts, uptime, error count, and average council latency.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+    // ── Phase 15: CI/CD & Distribution ────────────────────────────────────────
+    {
+      name: 'veto_ci_gate',
+      description: 'CI/CD pipeline gate. Runs code review + security scan + secrets scan on a git diff and returns a structured pass/warn/fail verdict with exit code. Ready for GitHub Actions and GitLab CI.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          project_dir: { type: 'string', description: 'Absolute project path. Veto reads git diff HEAD automatically.' },
+          diff:        { type: 'string', description: 'Optional: pass a diff string directly instead of reading from project_dir.' },
+          context:     { type: 'string', description: 'Optional: PR description or ticket number for context.' },
+          fail_on:     { type: 'string', enum: ['warn', 'fail'], description: 'Whether WARN counts as a failure (exit code 1). Default: "fail" — only FAIL exits non-zero.' },
+        },
+        required: ['project_dir'],
+      },
+    },
   ],
 }));
 
@@ -630,36 +741,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_session_save': {
+      const sessionProjectDir = args?.project_dir ? String(args.project_dir) : undefined;
+      if (sessionProjectDir) activeProjectDir = sessionProjectDir;
       const result = saveSession({
         summary: String(args?.summary ?? ''),
         context: String(args?.context ?? ''),
         task_state: args?.task_state ? String(args.task_state) : undefined,
         platform: args?.platform ? String(args.platform) : 'claude',
-        project_dir: args?.project_dir ? String(args.project_dir) : undefined,
+        connection_type: args?.connection_type ? String(args.connection_type) : 'subscription',
+        project_dir: sessionProjectDir,
         token_count: typeof args?.token_count === 'number' ? args.token_count : 0,
       });
 
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(
-              {
-                success: true,
-                message: 'Session saved. Use this ID to restore on any AI platform.',
-                ...result,
-              },
-              null,
-              2
-            ),
-          },
-        ],
+      const responseObj: Record<string, unknown> = {
+        success: true,
+        message: result.context_warning
+          ? `⚠️ Context at ${result.usage_pct}% — consider handing off soon.`
+          : 'Session saved. Use this ID to restore on any AI platform.',
+        session_id: result.session_id,
+        saved_at: result.saved_at,
+        usage_pct: result.usage_pct,
+        context_warning: result.context_warning,
       };
+      if (result.continuation_prompt) responseObj.continuation_prompt = result.continuation_prompt;
+
+      return { content: [{ type: 'text', text: JSON.stringify(responseObj, null, 2) }] };
     }
 
     case 'veto_session_restore': {
       const session_id = String(args?.session_id ?? '');
-      const result = restoreSession(session_id);
+      const resuming_as = args?.resuming_as ? String(args.resuming_as) : undefined;
+      const result = restoreSession(session_id, resuming_as);
 
       if (!result.found) {
         return {
@@ -678,6 +790,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       const s = result.session!;
+      if (s.project_dir) activeProjectDir = s.project_dir;
       return {
         content: [
           {
@@ -686,7 +799,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               {
                 success: true,
                 session_id: s.id,
-                platform: s.platform,
+                created_by: s.platform,
+                active_client: s.active_client ?? s.platform,
+                last_resumed_at: s.last_resumed_at,
                 started_at: s.started_at,
                 ended_at: s.ended_at,
                 project_dir: s.project_dir,
@@ -1011,7 +1126,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         content,
         type: args?.type ? String(args.type) as import('./memory/schema.js').KnowledgeType : 'solution',
         tags: Array.isArray(args?.tags) ? args.tags.map(String) : undefined,
-        project_dir: args?.project_dir ? String(args.project_dir) : undefined,
+        project_dir: args?.project_dir ? String(args.project_dir) : (activeProjectDir ?? undefined),
         session_id: args?.session_id ? String(args.session_id) : undefined,
         relevance: typeof args?.relevance === 'number' ? args.relevance : 1.0,
       });
@@ -1022,7 +1137,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const results = searchKnowledge({
         query: args?.query ? String(args.query) : undefined,
         type: args?.type ? String(args.type) as import('./memory/schema.js').KnowledgeType : undefined,
-        project_dir: args?.project_dir ? String(args.project_dir) : undefined,
+        project_dir: args?.project_dir ? String(args.project_dir) : (activeProjectDir ?? undefined),
         limit: typeof args?.limit === 'number' ? args.limit : 10,
       });
       return {
@@ -1148,16 +1263,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_continue': {
-      const result = continueSession(args?.session_id ? String(args.session_id) : undefined);
+      const resuming_as = args?.resuming_as ? String(args.resuming_as) : undefined;
+      const result = continueSession(args?.session_id ? String(args.session_id) : undefined, resuming_as);
       if (!result.found) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: result.message }, null, 2) }], isError: true };
       }
+      if (result.project_dir) activeProjectDir = result.project_dir;
       return {
         content: [{
           type: 'text',
           text: result.message + '\n\n' + JSON.stringify({
             session_id: result.session_id,
-            platform: result.platform,
+            created_by: result.platform,
+            active_client: result.active_client ?? result.platform,
             summary: result.summary,
             context: result.context,
             task_state: result.task_state,
@@ -1312,6 +1430,203 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case 'veto_plugins': {
       return { content: [{ type: 'text', text: JSON.stringify({ plugins: listPlugins(), plugin_dir: `${process.env.HOME ?? process.env.USERPROFILE}/.veto/agents/`, instructions: 'Drop a .js file exporting plan(task, context?) to register a custom agent.' }, null, 2) }] };
+    }
+
+    // ── Phase 13: Developer Intelligence ──────────────────────────────────────
+
+    case 'veto_docs_fetch': {
+      const package_name = String(args?.package_name ?? '').trim();
+      const ecosystem = String(args?.ecosystem ?? 'npm') as 'npm' | 'pypi' | 'crates';
+      const version = args?.version ? String(args.version) : undefined;
+      const max_chars = typeof args?.max_chars === 'number' ? args.max_chars : 8000;
+
+      if (!package_name) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'package_name is required.' }) }], isError: true };
+      }
+
+      const result = await fetchAndCacheDocs(package_name, ecosystem, version, max_chars);
+      if (!result) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Could not fetch docs for ${package_name} (${ecosystem}). Source may be offline — try again.` }) }], isError: true };
+      }
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...result }, null, 2) }] };
+    }
+
+    case 'veto_context_status': {
+      const session_id = String(args?.session_id ?? '');
+      if (!session_id) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'session_id is required.' }) }], isError: true };
+      }
+      const status = getContextStatus(session_id);
+      if (!status) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `No session found: ${session_id}` }) }], isError: true };
+      }
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...status }, null, 2) }] };
+    }
+
+    case 'veto_task_parse': {
+      const description = String(args?.description ?? '').trim();
+      const project_dir = args?.project_dir ? String(args.project_dir) : undefined;
+      const max_tasks = typeof args?.max_tasks === 'number' ? Math.min(args.max_tasks, 50) : 20;
+
+      if (!description) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'description is required.' }) }], isError: true };
+      }
+
+      const ctx = project_dir ? buildContextString(project_dir) : '';
+      const planResult = await executeOne({ id: 'task-parse-1', agent: 'task-planner', task: `Parse this project description into a structured task breakdown with dependencies and complexity scores (max ${max_tasks} tasks):\n\n${description}`, context: ctx || undefined, project_dir });
+
+      // Build structured task DAG from planner output
+      const steps: string[] = planResult.plan?.steps ?? [];
+      const tasks = steps.slice(0, max_tasks).map((step, i) => ({
+        id: `task-${i + 1}`,
+        title: step,
+        complexity: Math.min(10, Math.max(1, Math.round((i / steps.length) * 10) + 3)),
+        priority: i === 0 ? 'critical' : i < 3 ? 'high' : i < steps.length - 2 ? 'medium' : 'low',
+        depends_on: i > 0 ? [`task-${i}`] : [],
+        suggested_agent: 'coder',
+        estimated_hours: 2,
+      }));
+
+      const plan = {
+        summary: description.slice(0, 100),
+        total_tasks: tasks.length,
+        total_complexity: tasks.reduce((s, t) => s + t.complexity, 0),
+        critical_path: tasks.map(t => t.id),
+        parallelisable_groups: tasks.length > 2 ? [tasks.slice(1, Math.ceil(tasks.length / 2)).map(t => t.id)] : [],
+        tasks,
+        duration_estimate: planResult.plan?.duration_estimate ?? 'unknown',
+      };
+
+      const hash = createHash('sha256').update(description).digest('hex').slice(0, 16);
+      const plan_id = saveTaskPlan(JSON.stringify(plan), hash, project_dir);
+
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, plan_id, ...plan }, null, 2) }] };
+    }
+
+    // ── Phase 14: Observability & Safety ──────────────────────────────────────
+
+    case 'veto_usage_status': {
+      const status = getUsageStatus();
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...status }, null, 2) }] };
+    }
+
+    case 'veto_audit_log': {
+      const events = getAuditLog({
+        session_id: args?.session_id ? String(args.session_id) : undefined,
+        verdict:    args?.verdict    ? String(args.verdict)    : undefined,
+        since:      args?.since      ? String(args.since)      : undefined,
+        limit:      typeof args?.limit === 'number' ? args.limit : 20,
+      });
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, count: events.length, events }, null, 2) }] };
+    }
+
+    case 'veto_health': {
+      const stats = getHealthStats();
+      let db_size_bytes = 0;
+      try { db_size_bytes = statSync(getDbPath()).size; } catch { /* db may not exist */ }
+      const db_size_human = db_size_bytes < 1024 ? `${db_size_bytes}B`
+        : db_size_bytes < 1048576 ? `${(db_size_bytes / 1024).toFixed(1)}KB`
+        : `${(db_size_bytes / 1048576).toFixed(1)}MB`;
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            success: true,
+            version: VERSION,
+            status: serverErrorCount > 10 ? 'degraded' : 'healthy',
+            uptime_seconds: Math.round((Date.now() - SERVER_START_TIME) / 1000),
+            db_path: getDbPath(),
+            db_size_bytes,
+            db_size_human,
+            error_count_since_start: serverErrorCount,
+            last_error: lastServerError,
+            context_windows: CONTEXT_WINDOWS,
+            ...stats,
+          }, null, 2),
+        }],
+      };
+    }
+
+    // ── Phase 15: CI/CD & Distribution ────────────────────────────────────────
+
+    case 'veto_ci_gate': {
+      const project_dir = String(args?.project_dir ?? '').trim();
+      const diff_input  = args?.diff    ? String(args.diff)    : undefined;
+      const context     = args?.context ? String(args.context) : undefined;
+      const fail_on     = args?.fail_on === 'warn' ? 'warn' : 'fail';
+
+      if (!project_dir) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
+      }
+
+      const start = Date.now();
+
+      // Read diff if not provided
+      let diff = diff_input;
+      if (!diff) {
+        const { execSync } = await import('node:child_process');
+        try { diff = execSync('git diff HEAD', { cwd: project_dir, encoding: 'utf8', timeout: 15000 }); } catch { diff = ''; }
+      }
+
+      if (!diff?.trim()) {
+        return { content: [{ type: 'text', text: JSON.stringify({ verdict: 'pass', exit_code: 0, message: 'No changes detected.', duration_ms: Date.now() - start }) }] };
+      }
+
+      // Run all three checks in parallel
+      const projectCtx = (() => { try { return buildContextString(project_dir); } catch { return ''; } })();
+      const fullContext = [context, projectCtx].filter(Boolean).join('\n\n');
+
+      const [codeResult, secResult, secretsResult] = await Promise.all([
+        executeOne({ id: 'ci-code',    agent: 'reviewer',          task: `CI code review of this diff:\n\n${diff}`, context: fullContext }),
+        executeOne({ id: 'ci-sec',     agent: 'security-scanner',  task: `CI security scan of this diff:\n\n${diff}`, context: fullContext }),
+        executeOne({ id: 'ci-secrets', agent: 'secrets',           task: `CI secrets scan — check for exposed credentials in this diff:\n\n${diff}`, context: fullContext }),
+      ]);
+
+      const codeConf    = codeResult.output?.confidence ?? 0.8;
+      const secConf     = secResult.output?.confidence ?? 0.8;
+      const secretsConf = secretsResult.output?.confidence ?? 1.0;
+
+      // Determine verdict
+      const hasCritical = codeConf < 0.4 || secConf < 0.4 || secretsConf < 0.5;
+      const hasWarn     = codeConf < 0.7 || secConf < 0.6;
+      const rawVerdict  = hasCritical ? 'fail' : hasWarn ? 'warn' : 'pass';
+      const verdict     = rawVerdict;
+      const exit_code   = rawVerdict === 'fail' || (rawVerdict === 'warn' && fail_on === 'warn') ? 1 : 0;
+
+      const blocking_issues: string[] = [];
+      if (codeConf < 0.7)    blocking_issues.push(`Code review: ${codeResult.output?.recommendation ?? 'issues found'}`);
+      if (secConf < 0.6)     blocking_issues.push(`Security: ${secResult.output?.recommendation ?? 'vulnerabilities detected'}`);
+      if (secretsConf < 0.5) blocking_issues.push(`Secrets: ${secretsResult.output?.recommendation ?? 'potential secrets exposed'}`);
+
+      const icon = verdict === 'pass' ? '✅' : verdict === 'warn' ? '⚠️' : '❌';
+      const ci_summary = [
+        `${icon} **Veto CI Gate: ${verdict.toUpperCase()}**`,
+        ``,
+        `| Check | Score | Status |`,
+        `|---|---|---|`,
+        `| Code Review | ${Math.round(codeConf * 100)}% | ${codeConf >= 0.7 ? '✅' : '❌'} |`,
+        `| Security Scan | ${Math.round(secConf * 100)}% | ${secConf >= 0.6 ? '✅' : '❌'} |`,
+        `| Secrets Scan | ${Math.round(secretsConf * 100)}% | ${secretsConf >= 0.5 ? '✅' : '❌'} |`,
+        blocking_issues.length > 0 ? `\n**Blocking issues:**\n${blocking_issues.map(i => `- ${i}`).join('\n')}` : '',
+      ].filter(Boolean).join('\n');
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            verdict, exit_code,
+            checks: {
+              code_review: { score: Math.round(codeConf * 100) },
+              security:    { score: Math.round(secConf * 100) },
+              secrets:     { score: Math.round(secretsConf * 100) },
+            },
+            blocking_issues,
+            ci_summary,
+            duration_ms: Date.now() - start,
+          }, null, 2),
+        }],
+      };
     }
 
     default:

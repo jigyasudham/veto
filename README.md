@@ -1,8 +1,8 @@
 # veto
 
-> **50 agents. 34 tools. 3 AIs. Self-learning. Zero extra cost.**
+> **50 agents. 41 tools. 3 AIs. Self-learning. Zero extra cost.**
 
-An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, and Gemini CLI using your existing subscriptions — giving every AI a council of specialist agents, persistent cross-platform memory, a self-learning router, reactive file watching, sequential agent pipelines, and the ability to say no to bad decisions.
+An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, and Gemini CLI using your existing subscriptions — giving every AI a council of specialist agents, persistent cross-platform memory, a self-learning router, live usage tracking, CI/CD pipeline gates, live documentation fetching, and the ability to say no to bad decisions.
 
 ---
 
@@ -73,7 +73,7 @@ VS Code uses `"servers"` with `"type": "stdio"`:
 
 **50 Agents** — Domain experts for every task type. Each agent knows when it is the right tool and when to defer.
 
-**Memory** — Sessions, decisions, knowledge, and coding patterns persist across every conversation and every platform.
+**Memory** — Sessions, decisions, knowledge, and coding patterns persist across every conversation and every platform. Memory is automatically scoped to the active session's project directory — two instances working on different projects stay isolated without any extra configuration.
 
 **Diff review** — `veto_diff_review` runs code review, security scan, and secrets scan in parallel across a git diff. Returns a pass/warn/fail verdict with per-file findings — ready for CI and pre-commit hooks.
 
@@ -130,6 +130,9 @@ VS Code uses `"servers"` with `"type": "stdio"`:
 | **Memory** | `veto_memory_store` · `veto_memory_search` · `veto_memory_delete` · `veto_project_map_update` · `veto_project_map_get` · `veto_pattern_store` · `veto_patterns_list` · `veto_memory_export` · `veto_memory_import` |
 | **Learning** | `veto_record_outcome` · `veto_learning_stats` · `veto_learning_apply` |
 | **Handoff** | `veto_handoff` · `veto_continue` · `veto_platform_setup` |
+| **Intelligence** | `veto_docs_fetch` · `veto_context_status` · `veto_task_parse` |
+| **Observability** | `veto_usage_status` · `veto_audit_log` · `veto_health` |
+| **CI/CD** | `veto_ci_gate` |
 | **Plugins** | `veto_plugins` |
 
 ## MCP Resources
@@ -171,7 +174,7 @@ npx @jigyasudham/veto help       # Same help output, no install needed
 npx @jigyasudham/veto status     # Check status from any machine
 ```
 
-`veto help` shows all CLI commands, all 34 MCP tool names, MCP Resources, and MCP Prompts — the full reference in one place.
+`veto help` shows all CLI commands, all 41 MCP tool names, MCP Resources, and MCP Prompts — the full reference in one place.
 
 ---
 
@@ -303,9 +306,15 @@ Veto loads it on start. Use it in `veto_agent_plan { agent: "my-agent" }` or `ve
 **Rate limit mid-task:**
 ```
 Claude at 90%  →  veto_handoff { summary, context }
-Open Gemini    →  veto_continue
+Open Gemini    →  veto_continue { resuming_as: "gemini" }
 Full context restored. Continue exactly where you stopped.
 ```
+
+Every session tracks two fields:
+- `created_by` — which AI originally saved the session
+- `active_client` — which AI last resumed it (updated on every `veto_continue` or `veto_session_restore`)
+
+**Multiple AIs on different projects simultaneously:** Each MCP server process is independent. Sessions are always separate. Memory is automatically scoped to each process's active project — no cross-contamination.
 
 **Switch machines:**
 ```
@@ -340,6 +349,9 @@ Machine B  →  veto_memory_import  →  veto_session_restore
 | 10 — Watch, Workflow, Explain, Plugins | ✅ Complete | v0.10.0 |
 | 11 — Smarter Council + Predictive Routing + Auto Project Map | ✅ Complete | v0.11.0 |
 | 12 — CLI Subcommands + Diff Review | ✅ Complete | v1.0.0 |
+| 13 — Developer Intelligence + Auto Docs | ✅ Complete | v1.1.0 |
+| 14 — Observability + Usage Stats + Audit Log | ✅ Complete | v1.2.0 |
+| 15 — CI/CD Pipeline Gates | ✅ Complete | v1.2.0 |
 
 ---
 
