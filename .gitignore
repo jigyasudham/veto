@@ -5,6 +5,7 @@ dist/
 *.d.ts.map
 veto.db
 .env
+.claude/
 
 # Internal — not for public repo
 VETO_VISION_FINAL.md
