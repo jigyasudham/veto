@@ -34,7 +34,10 @@
     "build": "tsc",
     "dev": "tsx src/cli.ts",
     "start": "node dist/server.js",
-    "init": "tsx src/cli.ts init"
+    "init": "tsx src/cli.ts init",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
@@ -42,6 +45,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "tsx": "^4.7.0",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "vitest": "^2.1.9"
   }
 }

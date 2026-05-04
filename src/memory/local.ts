@@ -1,11 +1,16 @@
 // Local SQLite memory — all operations for session save/restore
 // Uses Node.js built-in node:sqlite (Node 22.5+, no native compilation needed)
 
-import { DatabaseSync } from 'node:sqlite';
+import { createRequire } from 'node:module';
+import type { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { mkdirSync } from 'node:fs';
+
+// node:sqlite is a Node 22.5+ built-in — use createRequire so bundlers (Vite/esbuild) skip it
+const _require = createRequire(import.meta.url);
+const DbSync = (_require('node:sqlite') as typeof import('node:sqlite')).DatabaseSync;
 import { CREATE_TABLES, type SessionRow, type KnowledgeRow, type KnowledgeType, type ProjectMapRow, type DocsCacheRow } from './schema.js';
 
 // Context window sizes per platform (tokens)
@@ -16,14 +21,18 @@ export const CONTEXT_WINDOWS: Record<string, number> = {
 };
 
 const VETO_DIR = join(homedir(), '.veto');
-const DB_PATH = join(VETO_DIR, 'veto.db');
+const DB_PATH = process.env.VETO_TEST_DB ?? join(VETO_DIR, 'veto.db');
 
 let _db: DatabaseSync | null = null;
 
+export function resetDb(): void {
+  if (_db) { _db.close(); _db = null; }
+}
+
 export function getDb(): DatabaseSync {
   if (_db) return _db;
-  mkdirSync(VETO_DIR, { recursive: true });
-  _db = new DatabaseSync(DB_PATH);
+  if (DB_PATH !== ':memory:') mkdirSync(dirname(DB_PATH), { recursive: true });
+  _db = new DbSync(DB_PATH);
   _db.exec('PRAGMA journal_mode = WAL');
   _db.exec('PRAGMA foreign_keys = ON');
   _db.exec(CREATE_TABLES);
