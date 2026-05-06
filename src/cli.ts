@@ -8,7 +8,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSy
 import { join, dirname, extname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
-const VERSION = '1.2.0';
+const VERSION = '1.2.2';
 const VETO_DIR = join(homedir(), '.veto');
 const HOME = homedir();
 
@@ -59,11 +59,11 @@ function writeVetoConfig(
 
   if (format === 'mcpServers') {
     const servers = (existing.mcpServers as Record<string, unknown>) ?? {};
-    servers['veto'] = { command: 'veto-server' };
+    servers['veto'] = { command: 'npx', args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
     existing.mcpServers = servers;
   } else {
     const servers = (existing.servers as Record<string, unknown>) ?? {};
-    servers['veto'] = { type: 'stdio', command: 'veto-server' };
+    servers['veto'] = { type: 'stdio', command: 'npx', args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
     existing.servers = servers;
   }
 
@@ -400,9 +400,70 @@ function helpCommand() {
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
   console.log(`  ${c.cyan('code-review')} · ${c.cyan('security-audit')} · ${c.cyan('deploy-checklist')} · ${c.cyan('explain-file')}`);
   console.log('');
-  console.log(c.bold('  Docs'));
+  console.log(c.bold('  Troubleshooting'));
+  console.log(c.dim('  ─────────────────────────────────────────────────────'));
+  console.log(`  ${c.yellow('MCP disconnected / tools not loading')}`);
+  console.log(`  ${c.dim('→')} Run ${c.cyan('veto init')} again, then fully restart your AI client (Claude / Gemini / Cursor)`);
+  console.log(`  ${c.dim('→')} Verify the MCP entry in your AI client config file`);
+  console.log(`  ${c.dim('→')} Check Node.js version: ${c.cyan('node --version')}  (need >= 22)`);
+  console.log('');
+  console.log(`  ${c.yellow('veto command not found after install')}`);
+  console.log(`  ${c.dim('→')} Global install: ${c.cyan('npm install -g @jigyasudham/veto')}`);
+  console.log(`  ${c.dim('→')} From source:    ${c.cyan('npm run build && npm link')}`);
+  console.log(`  ${c.dim('→')} Windows: restart terminal after install so PATH refreshes`);
+  console.log('');
+  console.log(`  ${c.yellow('Tools missing in Claude / Gemini after install')}`);
+  console.log(`  ${c.dim('→')} Run ${c.cyan('veto init')} to write / regenerate the MCP config`);
+  console.log(`  ${c.dim('→')} Fully quit and reopen the AI client (not just reload)`);
+  console.log(`  ${c.dim('→')} Claude Desktop config: ${c.dim('~/.config/claude/claude_desktop_config.json')}`);
+  console.log(`  ${c.dim('→')} Gemini / other: check the platform docs for MCP config location`);
+  console.log('');
+  console.log(`  ${c.yellow('Old version still showing after update')}`);
+  console.log(`  ${c.dim('→')} ${c.cyan('npm install -g @jigyasudham/veto@latest')}`);
+  console.log(`  ${c.dim('→')} From source: ${c.cyan('npm run build && npm link')}`);
+  console.log(`  ${c.dim('→')} Confirm active binary: ${c.cyan('which veto')} / ${c.cyan('where veto')}`);
+  console.log('');
+  console.log(`  ${c.yellow('Database / SQLite errors on startup')}`);
+  console.log(`  ${c.dim('→')} Requires Node.js >= 22 (uses built-in node:sqlite)`);
+  console.log(`  ${c.dim('→')} Check ${c.dim('~/.veto')} directory exists and is writable`);
+  console.log(`  ${c.dim('→')} Run ${c.cyan('veto status')} to see the active DB path`);
+  console.log('');
+  console.log(`  ${c.yellow('Memory or sessions not persisting between chats')}`);
+  console.log(`  ${c.dim('→')} Run ${c.cyan('veto status')} — verify DB path and memory count`);
+  console.log(`  ${c.dim('→')} Ensure ${c.dim('~/.veto')} is not on a read-only or temp volume`);
+  console.log('');
+  console.log(`  ${c.yellow('Permission denied on Windows (PowerShell)')}`);
+  console.log(`  ${c.dim('→')} ${c.cyan('Set-ExecutionPolicy -Scope CurrentUser RemoteSigned')}`);
+  console.log(`  ${c.dim('→')} Or run terminal as Administrator and retry`);
+  console.log('');
+  console.log(`  ${c.yellow('Rate limit / too many requests errors')}`);
+  console.log(`  ${c.dim('→')} Use ${c.cyan('veto_rate_status')} tool to check current usage`);
+  console.log(`  ${c.dim('→')} Wait a moment, then retry — limits reset per minute`);
+  console.log('');
+  console.log(`  ${c.yellow('veto init fails / API key not found')}`);
+  console.log(`  ${c.dim('→')} Set key in your shell: ${c.cyan('export ANTHROPIC_API_KEY=sk-...')}`);
+  console.log(`  ${c.dim('→')} Windows: ${c.cyan('$env:ANTHROPIC_API_KEY="sk-..."')}`);
+  console.log(`  ${c.dim('→')} Re-run ${c.cyan('veto init')} after setting the key`);
+  console.log('');
+  console.log(`  ${c.yellow('veto_health shows degraded / components failing')}`);
+  console.log(`  ${c.dim('→')} Run ${c.cyan('veto status')} for a summary of all components`);
+  console.log(`  ${c.dim('→')} Check ${c.cyan('veto_audit_log')} for recent error events`);
+  console.log(`  ${c.dim('→')} Re-run ${c.cyan('veto init')} to repair config and rescan project`);
+  console.log('');
+  console.log(`  ${c.yellow('Installed via npx but MCP disconnects after restart')}`);
+  console.log(`  ${c.dim('→')} npx runs temporarily — it does NOT add veto-server to PATH permanently`);
+  console.log(`  ${c.dim('→')} Fix: run ${c.cyan('npx veto init')} again so the config is rewritten with the correct npx command`);
+  console.log(`  ${c.dim('→')} Or install globally for a stable binary: ${c.cyan('npm install -g @jigyasudham/veto')}`);
+  console.log('');
+  console.log(`  ${c.yellow('Installed on a new machine but MCP not working')}`);
+  console.log(`  ${c.dim('→')} Run ${c.cyan('npx @jigyasudham/veto init')} on the new machine — config is not transferred`);
+  console.log(`  ${c.dim('→')} Each machine needs its own init run to register the MCP server`);
+  console.log(`  ${c.dim('→')} Then restart the AI client on that machine`);
+  console.log('');
+  console.log(c.bold('  Docs & Support'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
   console.log(`  ${c.dim('GitHub:')}  https://github.com/jigyasudham/veto`);
+  console.log(`  ${c.dim('Issues:')} https://github.com/jigyasudham/veto/issues`);
   console.log(`  ${c.dim('npm:')}     https://www.npmjs.com/package/@jigyasudham/veto`);
   console.log('');
 }
