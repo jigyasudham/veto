@@ -125,6 +125,16 @@ function resolveAgent(agentType: WorkerAgentType): AgentModule {
   }
 }
 
+function computePlanConfidence(plan: AgentPlan): number {
+  // More detailed plans = higher confidence: steps, checklist items, pitfalls all signal thoroughness
+  const stepScore     = Math.min(1.0, (plan.steps?.length ?? 0) / 10);
+  const checkScore    = Math.min(1.0, (plan.checklist?.length ?? 0) / 8);
+  const pitfallScore  = Math.min(1.0, (plan.pitfalls?.length ?? 0) / 4);
+  const contextBonus  = plan.approach && plan.approach.length > 80 ? 0.05 : 0;
+  const raw = (stepScore * 0.5) + (checkScore * 0.3) + (pitfallScore * 0.15) + contextBonus;
+  return Math.min(0.97, Math.max(0.4, raw));
+}
+
 function deriveOutput(plan?: AgentPlan, analysis?: AgentAnalysis): AgentOutput {
   if (analysis) {
     return {
@@ -139,7 +149,7 @@ function deriveOutput(plan?: AgentPlan, analysis?: AgentAnalysis): AgentOutput {
   }
   if (plan) {
     return {
-      confidence: 0.8,
+      confidence: computePlanConfidence(plan),
       severity: 'info',
       recommendation: plan.approach,
       affected_files: [],

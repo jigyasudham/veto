@@ -3,9 +3,6 @@
 import { getRateStatus, trackRequest } from '../router/rate-monitor.js';
 import { saveSession, listSessions, restoreSession } from '../memory/local.js';
 import type { Platform } from '../router/rate-monitor.js';
-import * as claude from './claude.js';
-import * as gemini from './gemini.js';
-import * as codex from './codex.js';
 
 export type HandoffResult = {
   session_id: string;
@@ -165,9 +162,55 @@ function buildContinueResult(session: ReturnType<typeof listSessions>[0], now: s
 // ─── Platform Setup ───────────────────────────────────────────────────────────
 
 export function getPlatformSetup(platform: Platform, vetoServerPath: string): PlatformSetupResult {
-  if (platform === 'claude') return claude.getSetup(vetoServerPath) as PlatformSetupResult;
-  if (platform === 'gemini') return gemini.getSetup(vetoServerPath) as PlatformSetupResult;
-  return codex.getSetup(vetoServerPath) as PlatformSetupResult;
+  const configs: Record<Platform, { configPath: string; configKey: string; installCmd: string; notes: string[] }> = {
+    claude: {
+      configPath: '~/.claude/mcp_servers.json',
+      configKey:  'mcpServers',
+      installCmd: 'npm install -g @jigyasudham/veto',
+      notes: [
+        'Claude Code connects via stdio MCP — the server runs as a child process.',
+        'All veto_* tools appear natively in Claude Code once connected.',
+        'Rate limits tracked per day — call veto_rate_status to check headroom.',
+      ],
+    },
+    gemini: {
+      configPath: '~/.gemini/settings.json',
+      configKey:  'mcpServers',
+      installCmd: 'npm install -g @google/gemini-cli',
+      notes: [
+        'Gemini CLI connects via stdio MCP — same server instance as Claude.',
+        'Free tier: 1,500 requests/day (15 RPM) — Veto tracks this automatically.',
+        'All veto_* tools work identically on Gemini as on Claude.',
+      ],
+    },
+    codex: {
+      configPath: '~/.codex/config.json',
+      configKey:  'mcpServers',
+      installCmd: 'npm install -g @openai/codex',
+      notes: [
+        'Codex CLI connects via stdio MCP — same server instance as Claude and Gemini.',
+        'Uses GPT-4o / o4-mini depending on the tier assigned by the Veto router.',
+        'ChatGPT web app does NOT support MCP — Codex CLI is the only OpenAI option.',
+      ],
+    },
+  };
+
+  const cfg = configs[platform] ?? configs['claude'];
+  const mcpEntry = { command: 'npx', args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
+
+  return {
+    platform,
+    mcp_config: { [cfg.configKey]: { veto: mcpEntry } },
+    setup_steps: [
+      `1. Install: ${cfg.installCmd}`,
+      `2. Run: npx @jigyasudham/veto init  (writes MCP config automatically)`,
+      `3. Restart ${platform} CLI`,
+      `4. Verify: call veto_status — should return { "status": "running", "phase": 15 }`,
+    ],
+    rate_limit_signals: ['rate limit', 'too many requests', '429', 'quota exceeded', 'resource exhausted'],
+    continue_command: 'veto_continue',
+    notes: cfg.notes,
+  };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

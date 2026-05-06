@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-// Veto MCP Server — Phase 1 skeleton
-// Exposes: veto_status, veto_session_save, veto_session_restore, veto_sessions_list
+// Veto MCP Server — 41 tools, 15 phases, self-learning router
 
 // Suppress node:sqlite experimental warning — it would corrupt the MCP stdio protocol
 process.removeAllListeners('warning');
@@ -17,7 +16,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { buildContextString, readProjectContext } from './context/reader.js';
 import {
-  saveSession, restoreSession, listSessions, getDbPath, saveCouncilOutcome,
+  saveSession, restoreSession, listSessions, closeSession, getDbPath, saveCouncilOutcome,
   storeKnowledge, searchKnowledge, deleteKnowledge,
   updateProjectMap, getProjectMap,
   upsertPattern, getPatterns,
@@ -26,7 +25,7 @@ import {
 } from './memory/local.js';
 import { exportMemory, importMemory, getLocalDbSize } from './memory/sync.js';
 import { runDebate } from './council/index.js';
-import { routeTask, getRateStatus, recordOutcome, getLearningStats, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent } from './router/index.js';
+import { routeTask, getRateStatus, recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent } from './router/index.js';
 import type { AgentType, Platform } from './router/index.js';
 import { executeParallel, executeOne } from './agents/executor.js';
 import type { AgentTask, WorkerAgentType } from './agents/types.js';
@@ -36,10 +35,13 @@ import { runPipeline } from './workflow/pipeline.js';
 import type { PipelineStep } from './workflow/pipeline.js';
 import { loadPlugins, listPlugins } from './plugins/loader.js';
 import { readFileSync, statSync } from 'node:fs';
-import { extname, basename } from 'node:path';
+import { extname, basename, join, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { execSync as execSyncTop } from 'node:child_process';
 
-const VERSION = '1.2.0';
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const { version: VERSION } = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
 
 // Tracks the project_dir of the most recently active session in this process.
 // Used as a fallback when memory_store/memory_search are called without an explicit project_dir,
@@ -710,6 +712,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   ],
 }));
 
+// ─── Shared Scan Utility ──────────────────────────────────────────────────────
+
+async function runTripleScan(diff: string, context: string) {
+  const [reviewResult, secResult, secretsResult] = await Promise.all([
+    executeOne({ id: 'scan-review',  agent: 'reviewer',         task: 'Review this git diff for code quality issues', code: diff, context }),
+    executeOne({ id: 'scan-sec',     agent: 'security-scanner', task: 'Scan this git diff for security vulnerabilities', code: diff, context }),
+    executeOne({ id: 'scan-secrets', agent: 'secrets',          task: 'Scan this git diff for exposed secrets or credentials', code: diff }),
+  ]);
+  const hasBlocking = (reviewResult.analysis?.critical_count ?? 0) > 0
+    || (secResult.analysis?.critical_count ?? 0) > 0
+    || (secretsResult.analysis?.critical_count ?? 0) > 0;
+  const hasWarnings = (reviewResult.analysis?.high_count ?? 0) > 0
+    || (secResult.analysis?.high_count ?? 0) > 0;
+  const verdict = hasBlocking ? 'fail' : hasWarnings ? 'warn' : 'pass';
+  return { reviewResult, secResult, secretsResult, verdict };
+}
+
 // ─── Tool Handlers ────────────────────────────────────────────────────────────
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -726,8 +745,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 status: 'running',
                 version: VERSION,
                 server: 'veto',
-                phase: 8,
-                capabilities: ['session_save', 'session_restore', 'router', 'rate_monitor', 'council_debate', 'agent_plan', 'code_review', 'security_scan', 'secrets_scan', 'parallel_exec', 'memory_store', 'memory_search', 'project_map', 'pattern_store', 'memory_export', 'memory_import', 'learning_stats', 'learning_apply', 'record_outcome', 'handoff', 'continue', 'platform_setup'],
+                phase: 15,
+                capabilities: [
+                  'session_save', 'session_restore', 'sessions_list',
+                  'router', 'rate_monitor',
+                  'council_debate',
+                  'agent_plan', 'parallel_exec',
+                  'code_review', 'diff_review', 'security_scan', 'secrets_scan', 'ci_gate',
+                  'workflow', 'watch',
+                  'explain',
+                  'memory_store', 'memory_search', 'memory_delete', 'memory_export', 'memory_import',
+                  'project_map', 'pattern_store',
+                  'learning_stats', 'learning_apply', 'record_outcome',
+                  'handoff', 'continue', 'platform_setup',
+                  'plugins',
+                  'docs_fetch', 'context_status', 'task_parse',
+                  'usage_status', 'audit_log', 'health',
+                ],
                 db_path: getDbPath(),
                 uptime_ms: process.uptime() * 1000,
                 timestamp: new Date().toISOString(),
@@ -886,11 +920,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      const result = await runDebate({
+      const debateStart = Date.now();
+      const result = runDebate({
         task,
         context: args?.context ? String(args.context) : undefined,
         project_dir: args?.project_dir ? String(args.project_dir) : undefined,
       });
+      const debateDuration = Date.now() - debateStart;
 
       const outcomeId = saveCouncilOutcome({
         session_id: args?.session_id ? String(args.session_id) : undefined,
@@ -904,6 +940,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         legal: JSON.stringify(result.votes.legal),
         security: JSON.stringify(result.votes.security),
         recommended: result.recommended,
+        duration_ms: debateDuration,
       });
 
       return {
@@ -974,13 +1011,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Resolve diff — use provided or read from git
       let diff = args?.diff ? String(args.diff).trim() : '';
       if (!diff && projectDir) {
-        const { execSync: execSyncDiff } = await import('node:child_process');
         try {
-          diff = execSyncDiff('git diff HEAD --no-color', {
+          diff = execSyncTop('git diff HEAD --no-color', {
             cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'],
           }).toString().trim();
           if (!diff) {
-            diff = execSyncDiff('git diff --cached --no-color', {
+            diff = execSyncTop('git diff --cached --no-color', {
               cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'],
             }).toString().trim();
           }
@@ -995,21 +1031,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const changedFiles = [...diff.matchAll(/^diff --git a\/.+ b\/(.+)$/gm)].map(m => m[1]);
       const diffChunks = diff.split(/^diff --git /m).filter(Boolean);
 
-      // Run code-review, security-scan, secrets-scan in parallel across the full diff
       const context = buildContextString(projectDir, userContext);
-      const [reviewResult, secResult, secretsResult] = await Promise.all([
-        executeOne({ id: 'diff-review', agent: 'reviewer', task: 'Review this git diff for code quality issues', code: diff, context }),
-        executeOne({ id: 'diff-sec', agent: 'security-scanner', task: 'Scan this git diff for security vulnerabilities', code: diff, context }),
-        executeOne({ id: 'diff-secrets', agent: 'secrets', task: 'Scan this git diff for exposed secrets or credentials', code: diff }),
-      ]);
-
-      // Derive overall verdict
-      const hasBlocking = (reviewResult.analysis?.critical_count ?? 0) > 0
-        || (secResult.analysis?.critical_count ?? 0) > 0
-        || (secretsResult.analysis?.critical_count ?? 0) > 0;
-      const hasWarnings = (reviewResult.analysis?.high_count ?? 0) > 0
-        || (secResult.analysis?.high_count ?? 0) > 0;
-      const verdict = hasBlocking ? 'fail' : hasWarnings ? 'warn' : 'pass';
+      const { reviewResult, secResult, secretsResult, verdict } = await runTripleScan(diff, context);
       const verdictEmoji = verdict === 'pass' ? '✅ PASS' : verdict === 'warn' ? '⚠️  WARN' : '❌ FAIL';
 
       // Per-file finding counts (approximate from line refs)
@@ -1259,6 +1282,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         project_dir: args?.project_dir ? String(args.project_dir) : undefined,
         token_count: typeof args?.token_count === 'number' ? args.token_count : 0,
       });
+      // Close the current session so ended_at is recorded
+      if (activeProjectDir) {
+        const sessions = listSessions(1);
+        if (sessions[0] && sessions[0].id !== result.session_id) closeSession(sessions[0].id);
+      }
       return { content: [{ type: 'text', text: result.instructions + '\n\n' + JSON.stringify({ session_id: result.session_id, to_platform: result.to_platform, saved_at: result.saved_at, reason: result.reason }, null, 2) }] };
     }
 
@@ -1317,10 +1345,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const includeCouncil = args?.include_council_insights === true;
 
       const stats = getLearningStats();
+      const learned = getLearnedThresholds();
       const result: Record<string, unknown> = {
         total_outcomes: stats.total_tasks,
         tier_breakdown: stats.tier_breakdown,
-        current_thresholds: { tier1_max: 30, tier2_max: 70, note: 'defaults — call veto_learning_apply to update from data' },
+        current_thresholds: {
+          tier1_max: learned.tier1_max,
+          tier2_max: learned.tier2_max,
+          source: learned.source,
+          data_points: learned.data_points,
+          note: learned.source === 'learned'
+            ? `Learned from ${learned.data_points} outcomes.`
+            : 'Using defaults — call veto_learning_apply after 20+ outcomes to update from data.',
+        },
         suggested_thresholds: stats.suggested_thresholds,
         ready_to_apply: stats.total_tasks >= 20,
       };
@@ -1444,7 +1481,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'package_name is required.' }) }], isError: true };
       }
 
-      const result = await fetchAndCacheDocs(package_name, ecosystem, version, max_chars);
+      const result = await fetchAndCacheDocs(package_name, ecosystem, version, max_chars, VERSION);
       if (!result) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Could not fetch docs for ${package_name} (${ecosystem}). Source may be offline — try again.` }) }], isError: true };
       }
@@ -1477,15 +1514,58 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // Build structured task DAG from planner output
       const steps: string[] = planResult.plan?.steps ?? [];
-      const tasks = steps.slice(0, max_tasks).map((step, i) => ({
-        id: `task-${i + 1}`,
-        title: step,
-        complexity: Math.min(10, Math.max(1, Math.round((i / steps.length) * 10) + 3)),
-        priority: i === 0 ? 'critical' : i < 3 ? 'high' : i < steps.length - 2 ? 'medium' : 'low',
-        depends_on: i > 0 ? [`task-${i}`] : [],
-        suggested_agent: 'coder',
-        estimated_hours: 2,
-      }));
+
+      // Agent keyword map — pick the most relevant agent based on step keywords
+      const agentKeywords: Array<{ keywords: RegExp; agent: string }> = [
+        { keywords: /test|spec|coverage|assert|unit|integration/i,           agent: 'tester' },
+        { keywords: /secur|auth|jwt|oauth|permission|role|encrypt|hash/i,    agent: 'auth' },
+        { keywords: /database|schema|migrat|sql|query|index|table/i,         agent: 'database' },
+        { keywords: /api|endpoint|rest|graphql|route|openapi/i,              agent: 'api' },
+        { keywords: /ui|component|frontend|react|vue|svelte|html|css|style/i,agent: 'frontend' },
+        { keywords: /docker|deploy|ci|cd|pipeline|container|k8s|infra/i,     agent: 'devops' },
+        { keywords: /refactor|clean|restructure|rename|extract/i,            agent: 'refactor' },
+        { keywords: /review|audit|quality|lint|check/i,                      agent: 'reviewer' },
+        { keywords: /debug|fix|bug|error|crash|trace|diagnos/i,              agent: 'debugger' },
+        { keywords: /document|readme|comment|jsdoc|wiki/i,                   agent: 'documentation' },
+        { keywords: /perform|optim|speed|cache|profil|latency/i,             agent: 'performance' },
+        { keywords: /migrat|upgrade|version|port|convert/i,                  agent: 'migration' },
+      ];
+
+      function pickAgent(step: string): string {
+        for (const { keywords, agent } of agentKeywords) {
+          if (keywords.test(step)) return agent;
+        }
+        return 'coder';
+      }
+
+      // Complexity scoring: longer, more-keyword-dense steps = higher complexity
+      function scoreStep(step: string): number {
+        const words = step.split(/\s+/).length;
+        const hasComplexWords = /integrat|architect|design|implement|optim|migrat|refactor/i.test(step);
+        const base = Math.min(7, Math.max(2, Math.round(words / 3)));
+        return hasComplexWords ? Math.min(10, base + 2) : base;
+      }
+
+      // Dependency inference: look for explicit "after", "before", "requires", "depends" keywords
+      function inferDeps(step: string, allSteps: string[], idx: number): string[] {
+        const lower = step.toLowerCase();
+        if (/^(deploy|test|release|publish|document)/i.test(step.trim()) && idx > 0) {
+          return [`task-${idx}`];
+        }
+        if (/after.{0,30}(setup|init|instal|creat|build)/i.test(lower) && idx > 0) {
+          return [`task-${idx}`];
+        }
+        return idx > 0 && /integrat|connect|wire|link/i.test(lower) ? [`task-${idx}`] : [];
+      }
+
+      const tasks = steps.slice(0, max_tasks).map((step, i) => {
+        const complexity = scoreStep(step);
+        const agent = pickAgent(step);
+        const deps = inferDeps(step, steps, i);
+        const priority = i === 0 ? 'critical' : complexity >= 7 ? 'high' : complexity >= 5 ? 'medium' : 'low';
+        const estimated_hours = complexity <= 3 ? 1 : complexity <= 6 ? 2 : complexity <= 8 ? 4 : 8;
+        return { id: `task-${i + 1}`, title: step, complexity, priority, depends_on: deps, suggested_agent: agent, estimated_hours };
+      });
 
       const plan = {
         summary: description.slice(0, 100),
@@ -1565,39 +1645,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Read diff if not provided
       let diff = diff_input;
       if (!diff) {
-        const { execSync } = await import('node:child_process');
-        try { diff = execSync('git diff HEAD', { cwd: project_dir, encoding: 'utf8', timeout: 15000 }); } catch { diff = ''; }
+        try { diff = execSyncTop('git diff HEAD', { cwd: project_dir, encoding: 'utf8', timeout: 15000 }); } catch { diff = ''; }
       }
 
       if (!diff?.trim()) {
         return { content: [{ type: 'text', text: JSON.stringify({ verdict: 'pass', exit_code: 0, message: 'No changes detected.', duration_ms: Date.now() - start }) }] };
       }
 
-      // Run all three checks in parallel
       const projectCtx = (() => { try { return buildContextString(project_dir); } catch { return ''; } })();
       const fullContext = [context, projectCtx].filter(Boolean).join('\n\n');
 
-      const [codeResult, secResult, secretsResult] = await Promise.all([
-        executeOne({ id: 'ci-code',    agent: 'reviewer',          task: `CI code review of this diff:\n\n${diff}`, context: fullContext }),
-        executeOne({ id: 'ci-sec',     agent: 'security-scanner',  task: `CI security scan of this diff:\n\n${diff}`, context: fullContext }),
-        executeOne({ id: 'ci-secrets', agent: 'secrets',           task: `CI secrets scan — check for exposed credentials in this diff:\n\n${diff}`, context: fullContext }),
-      ]);
+      const { reviewResult: codeResult, secResult, secretsResult, verdict } = await runTripleScan(diff, fullContext);
+      const exit_code = verdict === 'fail' || (verdict === 'warn' && fail_on === 'warn') ? 1 : 0;
 
-      const codeConf    = codeResult.output?.confidence ?? 0.8;
-      const secConf     = secResult.output?.confidence ?? 0.8;
-      const secretsConf = secretsResult.output?.confidence ?? 1.0;
-
-      // Determine verdict
-      const hasCritical = codeConf < 0.4 || secConf < 0.4 || secretsConf < 0.5;
-      const hasWarn     = codeConf < 0.7 || secConf < 0.6;
-      const rawVerdict  = hasCritical ? 'fail' : hasWarn ? 'warn' : 'pass';
-      const verdict     = rawVerdict;
-      const exit_code   = rawVerdict === 'fail' || (rawVerdict === 'warn' && fail_on === 'warn') ? 1 : 0;
+      const codeScore    = codeResult.analysis?.score ?? Math.round((codeResult.output?.confidence ?? 0.8) * 100);
+      const secScore     = secResult.analysis?.score  ?? Math.round((secResult.output?.confidence  ?? 0.8) * 100);
+      const secretsClean = (secretsResult.analysis?.findings?.length ?? 0) === 0;
 
       const blocking_issues: string[] = [];
-      if (codeConf < 0.7)    blocking_issues.push(`Code review: ${codeResult.output?.recommendation ?? 'issues found'}`);
-      if (secConf < 0.6)     blocking_issues.push(`Security: ${secResult.output?.recommendation ?? 'vulnerabilities detected'}`);
-      if (secretsConf < 0.5) blocking_issues.push(`Secrets: ${secretsResult.output?.recommendation ?? 'potential secrets exposed'}`);
+      if ((codeResult.analysis?.critical_count ?? 0) > 0) blocking_issues.push(`Code review: ${codeResult.analysis?.summary ?? 'critical issues found'}`);
+      if ((secResult.analysis?.critical_count  ?? 0) > 0) blocking_issues.push(`Security: ${secResult.analysis?.summary ?? 'vulnerabilities detected'}`);
+      if (!secretsClean) blocking_issues.push(`Secrets: ${secretsResult.analysis?.summary ?? 'exposed credentials detected'}`);
 
       const icon = verdict === 'pass' ? '✅' : verdict === 'warn' ? '⚠️' : '❌';
       const ci_summary = [
@@ -1605,9 +1673,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ``,
         `| Check | Score | Status |`,
         `|---|---|---|`,
-        `| Code Review | ${Math.round(codeConf * 100)}% | ${codeConf >= 0.7 ? '✅' : '❌'} |`,
-        `| Security Scan | ${Math.round(secConf * 100)}% | ${secConf >= 0.6 ? '✅' : '❌'} |`,
-        `| Secrets Scan | ${Math.round(secretsConf * 100)}% | ${secretsConf >= 0.5 ? '✅' : '❌'} |`,
+        `| Code Review | ${codeScore}% | ${(codeResult.analysis?.critical_count ?? 0) === 0 ? '✅' : '❌'} |`,
+        `| Security Scan | ${secScore}% | ${(secResult.analysis?.critical_count ?? 0) === 0 ? '✅' : '❌'} |`,
+        `| Secrets Scan | — | ${secretsClean ? '✅ Clean' : '❌ Found'} |`,
         blocking_issues.length > 0 ? `\n**Blocking issues:**\n${blocking_issues.map(i => `- ${i}`).join('\n')}` : '',
       ].filter(Boolean).join('\n');
 
@@ -1617,9 +1685,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           text: JSON.stringify({
             verdict, exit_code,
             checks: {
-              code_review: { score: Math.round(codeConf * 100) },
-              security:    { score: Math.round(secConf * 100) },
-              secrets:     { score: Math.round(secretsConf * 100) },
+              code_review: { score: codeScore, critical: codeResult.analysis?.critical_count ?? 0, high: codeResult.analysis?.high_count ?? 0 },
+              security:    { score: secScore,  critical: secResult.analysis?.critical_count  ?? 0, high: secResult.analysis?.high_count  ?? 0 },
+              secrets:     { clean: secretsClean, findings: secretsResult.analysis?.findings ?? [] },
             },
             blocking_issues,
             ci_summary,

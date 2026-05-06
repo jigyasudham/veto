@@ -89,6 +89,49 @@ const WARN_RULES: Array<{ pattern: RegExp; concern: string; recommendation: stri
 
 const TRIVIAL = /^(rename|fix typo|reorder|reformat|format|update comment|add comment)\b/i;
 
+const TOPIC_INSIGHTS: Array<{ pattern: RegExp; concern: string; recommendation: string }> = [
+  {
+    pattern: /mcp|stdio|transport|protocol|server/i,
+    concern: 'stdio MCP transport processes one message at a time per connection. If any handler blocks the event loop (e.g. sync SQLite writes, CPU-heavy regex), all tool calls queue behind it.',
+    recommendation: 'Keep all MCP handlers async. Move any CPU-intensive work off the main handler with setImmediate or worker threads. Benchmark handler latency under concurrent tool calls.',
+  },
+  {
+    pattern: /sqlite|database|db|persist|schema/i,
+    concern: 'SQLite WAL mode serialises writes but allows concurrent reads. Multiple MCP connections sharing one DB file without connection pooling can cause SQLITE_BUSY errors under load.',
+    recommendation: 'Use a single shared DB connection with WAL mode. For high-write scenarios, batch writes in transactions. Add busy_timeout pragma to handle lock contention gracefully.',
+  },
+  {
+    pattern: /agent|worker|executor|parallel/i,
+    concern: 'A growing agent registry with a single switch-case dispatcher becomes a maintenance liability. Every new agent type requires editing the central switch.',
+    recommendation: 'Consider a registry pattern: agents register themselves at import time. The executor resolves by key, not by switch-case. New agents require no changes to the executor.',
+  },
+  {
+    pattern: /llm|model|ai.?call|external.?api|fetch|http/i,
+    concern: 'LLM calls introduce an external dependency with variable latency (2–30s) and failure modes. The server must handle timeout, rate limit, and model error without crashing the MCP connection.',
+    recommendation: 'Wrap every external call in a circuit breaker. Set explicit timeouts. Cache responses where idempotency allows. Return a structured degraded response on failure, never throw.',
+  },
+  {
+    pattern: /version|package\.json|semver/i,
+    concern: 'Multiple hardcoded version strings across server.ts, cli.ts, and adapter files create a drift problem that gets worse with each release.',
+    recommendation: 'Single source: read version from package.json at startup. Export it from one shared module. All other files import it.',
+  },
+  {
+    pattern: /plugin|extensi|loader|dynamic.?import/i,
+    concern: 'Dynamic plugin loading from user directories creates a security boundary: any code in ~/.veto/agents/ runs with full server privileges. There is currently no sandboxing.',
+    recommendation: 'Validate plugin exports schema before loading. Consider running plugins in a restricted vm.Script context. Log all plugin load events to the audit trail.',
+  },
+  {
+    pattern: /vscode|extension|ide|ui|frontend/i,
+    concern: 'VS Code extension + MCP server creates a distributed architecture: the extension communicates with the server via MCP protocol, not direct function calls. Version compatibility between extension and server must be managed explicitly.',
+    recommendation: 'Define a minimum server version requirement in the extension. On connect, call veto_status and verify server version meets the minimum. Show a clear upgrade prompt if not.',
+  },
+  {
+    pattern: /phase|roadmap|migrat|upgrade/i,
+    concern: 'Schema migrations that run inline in the DB constructor (as currently implemented) are safe for additive changes but risky for destructive ones. There is no migration version tracking.',
+    recommendation: 'Add a schema_version table. Record each migration with a unique ID. Before running a migration, check if it has already been applied. This prevents re-running on restart.',
+  },
+];
+
 export function analyze(task: string): AgentVote {
   if (TRIVIAL.test(task.trim())) {
     return { verdict: 'approve', reason: 'Trivial change — no architectural concerns.', concerns: [] };
@@ -128,5 +171,16 @@ export function analyze(task: string): AgentVote {
     };
   }
 
-  return { verdict: 'approve', reason: 'Architecture looks sound. No structural concerns.', concerns: [] };
+  const matched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
+  if (matched.length > 0) {
+    const top = matched.slice(0, 2);
+    return {
+      verdict: 'warn',
+      reason: top[0].concern,
+      concerns: top.slice(1).map(t => t.concern),
+      recommendation: top.map(t => t.recommendation).join(' | '),
+    };
+  }
+
+  return { verdict: 'approve', reason: 'Architecture looks sound. No structural concerns identified.', concerns: [] };
 }

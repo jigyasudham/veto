@@ -80,6 +80,45 @@ const PROBES: Array<{ pattern: RegExp; concern: string; recommendation: string }
   },
 ];
 
+// Topic-specific failure mode probes — fires when no keyword patterns match
+const TOPIC_PROBES: Array<{ pattern: RegExp; concern: string; recommendation: string }> = [
+  {
+    pattern: /agent|worker|plan|executor/i,
+    concern: 'Agent returns empty output with no error — who notices? How does the caller know the agent silently produced nothing useful?',
+    recommendation: 'Agents must return a structured error or low-confidence flag on failure, never a silent empty result. The caller should log and surface this.',
+  },
+  {
+    pattern: /memory|session|knowledge|persist/i,
+    concern: 'Memory grows indefinitely. At 10,000 entries, search degrades. At 100,000, startup slows. Who cleans stale data?',
+    recommendation: 'Define a max entry count per table. Add a background cleanup job or a veto_memory_gc tool. Test with 10k+ entries before shipping.',
+  },
+  {
+    pattern: /llm|model|ai|gpt|claude|gemini/i,
+    concern: 'LLM call takes 30 seconds and the MCP client times out. The tool returns nothing. The user retries. Now you have concurrent LLM calls for the same request.',
+    recommendation: 'Set MCP tool timeout shorter than your LLM timeout. Return an in-progress token for long operations. Deduplicate concurrent calls by request hash.',
+  },
+  {
+    pattern: /phase|feature|plan|roadmap|build/i,
+    concern: 'This feature ships, nobody uses it for 6 months, and then a refactor breaks it silently because there are no tests. When does anyone find out?',
+    recommendation: 'Every new feature needs at least one integration test that would fail if the feature stopped working. No tests = no confidence it survives future changes.',
+  },
+  {
+    pattern: /vscode|extension|ide|plugin/i,
+    concern: 'VS Code updates break extensions silently. Users on VS Code 1.9x may see a broken extension with no error message. Who monitors extension health?',
+    recommendation: 'Test against VS Code stable + insiders in CI. Subscribe to VS Code release notes. Pin the minimum engine version in package.json.',
+  },
+  {
+    pattern: /github|pr|api|integration|webhook/i,
+    concern: 'GitHub API rate limit: 5000 requests/hour authenticated. A power user running veto_pr_review on every commit will hit this in minutes.',
+    recommendation: 'Cache PR diffs by commit SHA. Show current rate limit usage in the response. Fail gracefully with a clear "rate limited, retry in X minutes" message.',
+  },
+  {
+    pattern: /config|setting|init|setup|install/i,
+    concern: 'User runs veto init on a machine where the config file is already correct. Init overwrites it silently. Their custom settings are gone.',
+    recommendation: 'Before writing any config, show a diff and ask for confirmation — or at minimum back up the existing config with a .bak extension.',
+  },
+];
+
 const GENERIC: { concern: string; recommendation: string } = {
   concern: "What is the failure mode here? What breaks at 2AM on a Sunday with no one watching?",
   recommendation: 'Add monitoring, alerting, and a runbook for when this breaks.',
@@ -97,6 +136,15 @@ export function analyze(task: string): AgentVote {
   for (const probe of PROBES) {
     if (probe.pattern.test(task)) {
       matched.push({ concern: probe.concern, recommendation: probe.recommendation });
+    }
+  }
+
+  // If no specific probes matched, try topic-specific failure mode probes
+  if (matched.length === 0) {
+    for (const probe of TOPIC_PROBES) {
+      if (probe.pattern.test(task)) {
+        matched.push({ concern: probe.concern, recommendation: probe.recommendation });
+      }
     }
   }
 

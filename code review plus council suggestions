@@ -1,0 +1,185 @@
+The code review was shallow (heuristic-only agents, as expected) and the council gave generic warnings. I'll now compile the full
+  report myself — I've read every key file and have a complete picture.
+                                                                                                                                    
+  ---
+  Veto Codebase Report — v1.2.2                                                                                                     
+                                                                                                                                  
+  ---
+  Part 1 — Code Review
+
+  🔴 Critical / Logic Errors
+
+  1. server.ts:42 — VERSION hardcoded, permanently stale
+  const VERSION = '1.2.0' — server still reports 1.2.0 to every MCP client even though the package is 1.2.2. The server and CLI have
+   separate VERSION constants that drift independently. Fix: read from package.json once at startup.
+
+  2. server.ts:729 — phase: 8 in veto_status response
+  veto_status tells every AI client "I am Phase 8" with capabilities from Phase 8 only. The tool list is missing all 19 tools added
+  in Phases 13–15 (watch, workflow, explain, plugins, docs_fetch, context_status, task_parse, usage_status, audit_log, health,
+  ci_gate, etc.). Any AI client using veto_status to decide what tools are available gets a completely wrong answer.
+
+  3. veto_task_parse — produces fake structured output
+  - Complexity is Math.round((i / steps.length) * 10) + 3 — index position, not real complexity
+  - suggested_agent is always 'coder' — the router is never consulted
+  - estimated_hours is always 2 — never estimated
+  - depends_on is always [task-${i}] — always a linear chain, real dependencies never inferred
+  - The "task DAG" it produces is completely fabricated around step order
+
+  4. getHealthStats() — latency metric is wrong
+  avg_council_latency_ms measures the gap between consecutive debates (time from one debate to the next), not the duration of a
+  debate. A user who runs two debates 10 minutes apart will see avg_council_latency_ms: 600000. It's measuring idle time, not
+  performance.
+
+  5. veto_ci_gate and veto_diff_review — different verdict logic for the same job
+  - veto_diff_review uses critical_count / high_count from analysis
+  - veto_ci_gate uses raw confidence floats with magic thresholds (0.4, 0.5, 0.6, 0.7)
+  - Same 3-scan parallel pattern duplicated in full across both handlers
+
+  ---
+  🟡 Bugs / Silent Failures
+
+  6. searchKnowledge() — SQL string interpolation
+  db.exec(\UPDATE knowledge_base SET accessed_count = accessed_count + 1 WHERE id IN (${ids})`)` — UUIDs make exploitation unlikely
+  but the pattern is wrong. Should use a prepared statement loop or a parameterised batch.
+
+  7. getAuditLog() — agent filter silently ignored for council events
+  for (const r of councilRows) {
+    if (opts.agent) continue; // ← drops ALL council rows if agent filter is set, no warning
+  If you call veto_audit_log with { agent: "security-scanner" } you get zero council events with no explanation. Should either
+  include them or return a note.
+
+  8. council/index.ts — Promise.resolve() wrapping sync functions
+  All 7 council agents are synchronous but wrapped in Promise.resolve(). This is unnecessary overhead and misleads readers into
+  thinking the agents are async. They should be called directly and results passed to Promise.all only if they ever become genuinely
+   async.
+
+  9. executor.ts:141 — plan confidence hardcoded at 0.8
+  Every plan() call returns confidence: 0.8 regardless of content. The CI gate and workflow pipeline use this confidence to make
+  pass/fail decisions — they're making verdicts based on a constant.
+
+  10. veto_diff_review + veto_ci_gate — child_process dynamic import in hot path
+  Both handlers do await import('node:child_process') inside the request handler every time they're called. This should be a
+  top-level import.
+
+  11. local.ts — closeSession() is dead code
+  closeSession() is exported but never called anywhere in server.ts. Sessions are never closed, only saved.
+
+  12. docs_cache User-Agent hardcoded wrong version
+  headers: { 'User-Agent': 'veto-mcp/1.1.0' } in fetchAndCacheDocs for crates.io — stale version string baked in.
+
+  ---
+  🟠 Duplications
+
+  13. Triple scan pattern copy-pasted
+  veto_diff_review and veto_ci_gate both manually orchestrate the same reviewer + security-scanner + secrets parallel scan and then
+  compute a verdict. This is ~80 lines duplicated. Should be a shared runTripleScan(diff, context) utility.
+
+  14. child_process import duplicated
+  Both veto_diff_review and veto_ci_gate contain identical:
+  const { execSync } = await import('node:child_process');
+  try { diff = execSync('git diff HEAD', ...) } catch { diff = ''; }
+  Same pattern, same error handling, duplicated.
+
+  15. Skills directory — 28 files, zero runtime use
+  src/skills/ contains 28 TypeScript files (development, quality, memory, workflow, intelligence skills). None are imported by
+  server.ts, executor.ts, or any agent. They exist in the codebase but are never loaded. Either wire them up or remove them.
+
+  16. Individual adapter files vs adapters/index.ts
+  src/adapters/claude.ts, codex.ts, gemini.ts exist but adapters/index.ts is the actual implementation used everywhere. The
+  individual files are either unused or shadowed.
+
+  ---
+  ⚪ Stale / Cosmetic
+
+  17. server.ts:3 — file header comment
+  // Veto MCP Server — Phase 1 skeleton — 14 phases and 41 tools later, this comment is noise.
+
+  18. veto_learning_stats — threshold note always shows "defaults"
+  current_thresholds: { tier1_max: 30, tier2_max: 70, note: 'defaults — call veto_learning_apply...' }
+  This note appears even after veto_learning_apply has run. Should read from the DB and show actual current thresholds.
+
+  ---
+  Part 2 — Council + Phase Suggestions
+
+  The council agents are heuristic-only so their output was generic. Here's the actual picture of what the developer community wants
+   from MCP servers right now, and what that means for Veto:
+
+  ---
+  What developers actually want (based on competitive landscape)
+
+  The top complaints about existing MCP servers on GitHub, Reddit, and HN:
+
+  ┌───────────────────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │        Pain Point         │                                         What users say                                          │
+  ├───────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Heuristic-only agents     │ "It just returns templated responses, not real analysis" — the #1 complaint about non-LLM MCP   │
+  │                           │ servers                                                                                         │
+  ├───────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ No auto-save              │ "I have to remember to call session_save or my context is gone"                                 │
+  ├───────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ MCP disconnects on        │ "Every time I restart VS Code / Gemini it loses the connection" (this is exactly the bug we     │
+  │ restart                   │ just fixed)                                                                                     │
+  ├───────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ No IDE integration        │ "I have to switch to terminal to use it"                                                        │
+  ├───────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Context is manual         │ "I have to track tokens myself and decide when to compress"                                     │
+  ├───────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ No GitHub/PR integration  │ "Why can't it just review my PR directly?"                                                      │
+  ├───────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ Too many tools to         │ "41 tools is overwhelming — which one do I actually call?"                                      │
+  │ remember                  │                                                                                                 │
+  ├───────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ No streaming              │ "Long operations feel frozen"                                                                   │
+  └───────────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+  ---
+  Phase 16 — Real Intelligence (v1.3.0)
+
+  #25 — LLM-backed agents (the #1 missing feature)
+  Every agent currently returns heuristic output. The plan() and analyze() functions return hardcoded templates. Agents should
+  optionally call an LLM (via the user's existing subscription — Claude/Gemini/Codex) to generate real, context-aware responses.
+  This is what Context7 (53k stars) and claude-task-master (26k stars) built their following on. Without this, Veto's agents are
+  sophisticated pattern matchers, not real advisors.
+
+  #26 — Auto session save
+  When token_count passes 70% in any session, automatically call saveSession() in the background. Zero user action required. This is
+   the most-requested quality-of-life feature for persistent memory tools.
+
+  #27 — GitHub PR integration
+  veto_pr_review — pass a GitHub PR URL, Veto fetches the diff via GitHub API and runs the full veto_ci_gate pipeline. Outputs
+  structured review comments ready to post. This collapses the most common workflow (review PR → fix issues) into one tool call.
+
+  ---
+  Phase 17 — VS Code Extension + Distribution (v1.4.0)
+
+  #28 — VS Code extension (rescheduled from Phase 12)
+  Now with all 41 tools stable, the extension scope is clear:
+  - Status bar: version, DB size, session count, health indicator
+  - Command palette: Veto: Council Debate, Veto: Review File, Veto: Save Session
+  - Sidebar panel: active session, recent council verdicts, memory search
+  - Auto-triggers: on file save → veto_code_review, on git stage → veto_ci_gate
+  - This is the feature that makes Veto visible to developers who never open a terminal
+
+  #29 — Fix veto_status to reflect reality
+  Update phase, capabilities, and version in the status response to match actual current state. Every AI client uses this to
+  understand what Veto can do.
+
+  #30 — Tool grouping / discovery
+  41 tools is a lot. Add a veto_discover tool that accepts a plain-English intent ("I want to review my code") and returns the 2-3
+  most relevant tools with usage examples. Reduces onboarding friction dramatically.
+
+  ---
+  Immediate fixes to do before Phase 16
+
+  These are bugs, not features — should be fixed in a v1.2.3 patch:
+
+  1. Fix VERSION in server.ts to read from package.json
+  2. Fix phase: 8 and capabilities list in veto_status
+  3. Fix avg_council_latency_ms measurement logic
+  4. Extract the triple-scan into a shared utility (removes ~80 lines of duplication)
+  5. Fix the skills/ dead code situation — either wire them up or delete
+  6. Fix veto_task_parse agent assignment and complexity scoring
+  7. Fix veto_learning_stats to show actual thresholds from DB
+
+  ---
+  Want to start on the v1.2.3 bug fixes now, or jump straight into planning Phase 16?

@@ -13,20 +13,18 @@ export type { AgentVote, AgentVerdict, CouncilVerdict, DebateInput, DebateResult
 
 import type { DebateInput, DebateResult } from './types.js';
 
-export async function runDebate(input: DebateInput): Promise<DebateResult> {
+export function runDebate(input: DebateInput): DebateResult {
   const enrichedContext = buildContextString(input.project_dir, input.context);
   const fullText = enrichedContext ? `${input.task}\n\n${enrichedContext}` : input.task;
 
-  // All 7 agents run in parallel — none depend on each other
-  const [lead_dev, pm, architect, ux, devil, legal, security] = await Promise.all([
-    Promise.resolve(leadDevAnalyze(fullText)),
-    Promise.resolve(pmAnalyze(fullText)),
-    Promise.resolve(architectAnalyze(fullText)),
-    Promise.resolve(uxAnalyze(fullText)),
-    Promise.resolve(devilAnalyze(fullText)),
-    Promise.resolve(legalAnalyze(fullText)),
-    Promise.resolve(securityAnalyze(fullText)),
-  ]);
+  // All 7 agents are synchronous — run them all then collect results
+  const lead_dev   = leadDevAnalyze(fullText);
+  const pm         = pmAnalyze(fullText);
+  const architect  = architectAnalyze(fullText);
+  const ux         = uxAnalyze(fullText);
+  const devil      = devilAnalyze(fullText);
+  const legal      = legalAnalyze(fullText);
+  const security   = securityAnalyze(fullText);
 
   const votes = { lead_dev, pm, architect, ux, devil, legal, security };
   const { final_verdict, block_reasons, warnings, recommended } = decide(votes);

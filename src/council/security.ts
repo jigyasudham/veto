@@ -168,5 +168,55 @@ export function analyze(task: string): AgentVote {
     };
   }
 
+  // Topic-based security analysis for tasks with no specific pattern matches
+  const TOPIC_INSIGHTS: Array<{ pattern: RegExp; concern: string; recommendation: string }> = [
+    {
+      pattern: /plugin|extensi|loader|dynamic.?import|user.?code/i,
+      concern: 'User-supplied code executed in the same process as the MCP server has full access to the filesystem, network, and database. A malicious plugin could exfiltrate memory, delete sessions, or escalate to arbitrary code execution.',
+      recommendation: 'Run plugins in a vm.Script sandbox with a restricted module allowlist. Verify plugin exports schema before loading. Log all plugin loads to the audit trail with file hash.',
+    },
+    {
+      pattern: /llm|model|prompt|injection|user.?input/i,
+      concern: 'Prompt injection: a malicious user can craft a task description that overrides agent instructions, extracts system prompts, or causes the agent to produce harmful output.',
+      recommendation: 'Sanitize task inputs: strip control characters, enforce max length, validate against an allow-list of task types where possible. Never include raw user input verbatim in system prompts.',
+    },
+    {
+      pattern: /github|api|token|oauth|credential|key/i,
+      concern: 'API tokens stored in config files or environment variables can be read by any process with filesystem access. If the token leaks, all PRs and repositories it can access are compromised.',
+      recommendation: 'Never store tokens in plaintext config files. Use OS keychain or a secrets manager. Scope tokens to minimum required permissions (read-only for PR fetching).',
+    },
+    {
+      pattern: /http|transport|remote|server|port|network/i,
+      concern: 'Adding HTTP transport changes Veto from a local-only tool to a network service. Without authentication and TLS, any process on the local network can call all 41 tools including memory deletion and file watching.',
+      recommendation: 'HTTP transport must require authentication from day one — even locally. Use mutual TLS or bearer tokens. Bind to 127.0.0.1 by default, not 0.0.0.0.',
+    },
+    {
+      pattern: /mcp|tool|handler|input.?schema/i,
+      concern: 'MCP tool inputs are deserialized from JSON without schema validation in most handlers — args are accessed as `args?.field` with no type checking. A crafted tool call could pass unexpected types.',
+      recommendation: 'Validate all tool inputs with a schema library (zod) at the top of each handler. Reject calls with unexpected fields or wrong types immediately with a descriptive error.',
+    },
+    {
+      pattern: /audit|log|event|trace/i,
+      concern: 'Audit logs that include user-supplied task content may inadvertently store sensitive information (API keys pasted in task descriptions, PII in code review requests).',
+      recommendation: 'Truncate task content in audit logs to the first 200 characters. Scan audit log entries for secrets before writing. Provide a log rotation/expiry policy.',
+    },
+    {
+      pattern: /phase|feature|agent|improvement/i,
+      concern: 'New tools and agents increase the attack surface. Each new tool is a new entry point that can receive arbitrary user input and execute code.',
+      recommendation: 'For every new tool: define input validation, define maximum input size, consider what the worst-case malicious input looks like, and write a security note in the tool description.',
+    },
+  ];
+
+  const topicMatched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
+  if (topicMatched.length > 0) {
+    const top = topicMatched.slice(0, 2);
+    return {
+      verdict: 'warn',
+      reason: top[0].concern,
+      concerns: top.slice(1).map(t => t.concern),
+      recommendation: top.map(t => t.recommendation).join(' | '),
+    };
+  }
+
   return { verdict: 'approve', reason: 'No security threats identified in threat model.', concerns: [] };
 }

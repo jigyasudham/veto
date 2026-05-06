@@ -80,7 +80,8 @@ export const CREATE_TABLES = `
     legal       TEXT,
     security    TEXT,
     recommended TEXT,
-    debated_at  TEXT NOT NULL
+    debated_at  TEXT NOT NULL,
+    duration_ms INTEGER DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS learning_data (

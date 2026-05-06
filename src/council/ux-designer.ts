@@ -117,5 +117,50 @@ export function analyze(task: string): AgentVote {
     };
   }
 
-  return { verdict: 'approve', reason: 'UX looks solid. No user experience concerns.', concerns: [] };
+  // Topic-based UX analysis for tasks with no direct frontend signals
+  const TOPIC_INSIGHTS: Array<{ pattern: RegExp; concern: string; recommendation: string }> = [
+    {
+      pattern: /cli|terminal|command.?line|help|flag|arg/i,
+      concern: 'CLI UX is still UX. Commands that give no feedback on success, have inconsistent flag names, or print walls of unformatted text drive users to abandon the tool.',
+      recommendation: 'Every CLI command needs: success/fail output, consistent flag naming (kebab-case), and color-coded status (green/red/yellow). Test with a first-time user.',
+    },
+    {
+      pattern: /error|message|feedback|output|response/i,
+      concern: 'Technical error messages like "TypeError: Cannot read property of undefined" tell the developer nothing actionable. Users want to know what to do, not what went wrong internally.',
+      recommendation: 'Every user-facing error must include: what failed, why it failed (if knowable), and what the user should do next. Never expose stack traces.',
+    },
+    {
+      pattern: /install|setup|init|onboard|first.?run/i,
+      concern: 'Onboarding friction is the leading cause of tool abandonment. Every extra step in setup loses 20–30% of users. The first experience must succeed or users never return.',
+      recommendation: 'Time-box the happy path setup to under 2 minutes. Every step must have a clear success indicator. Provide a single copy-paste command that does everything.',
+    },
+    {
+      pattern: /vscode|extension|sidebar|panel|button/i,
+      concern: 'VS Code extensions that clutter the UI with too many buttons and panels feel like bloatware. Users uninstall extensions that are visually noisy.',
+      recommendation: 'Default to minimal UI: one status bar item. Expand to sidebar only when user explicitly enables it. Follow VS Code\'s own design patterns and icon conventions.',
+    },
+    {
+      pattern: /41.?tool|tool.?count|tool.?list|discover/i,
+      concern: '41 tools requires users to read documentation before they can use the product. No tool is valuable if users can\'t discover it exists.',
+      recommendation: 'Make veto_discover the entry point. Ship it as the first thing users learn about. Consider surfacing 3 "most useful for your current task" recommendations automatically.',
+    },
+    {
+      pattern: /wait|loading|slow|latency|timeout/i,
+      concern: 'Operations that take more than 300ms with no feedback feel broken to users. For LLM-backed operations (2–30s), silence is indistinguishable from a crash.',
+      recommendation: 'Show progress for any operation over 500ms. For long operations, stream partial results or show a "working..." status. Never leave the user in silence.',
+    },
+  ];
+
+  const topicMatched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
+  if (topicMatched.length > 0) {
+    const top = topicMatched.slice(0, 2);
+    return {
+      verdict: 'warn',
+      reason: top[0].concern,
+      concerns: top.slice(1).map(t => t.concern),
+      recommendation: top.map(t => t.recommendation).join(' | '),
+    };
+  }
+
+  return { verdict: 'approve', reason: 'UX looks solid. No user experience concerns identified.', concerns: [] };
 }

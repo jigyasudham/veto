@@ -39,7 +39,15 @@ export function getDb(): DatabaseSync {
   migrateCouncilOutcomes(_db);
   migrateCouncilColumns(_db);
   migrateSessionColumns(_db);
+  migrateCouncilDuration(_db);
   return _db;
+}
+
+// Adds duration_ms column to council_outcomes if it doesn't exist (v1.2.3 migration)
+function migrateCouncilDuration(db: DatabaseSync): void {
+  const cols = db.prepare('PRAGMA table_info(council_outcomes)').all() as Array<{ name: string }>;
+  const names = new Set(cols.map(c => c.name));
+  if (!names.has('duration_ms')) db.exec('ALTER TABLE council_outcomes ADD COLUMN duration_ms INTEGER DEFAULT 0');
 }
 
 // Adds active_client, last_resumed_at, and connection_type columns if they don't exist
@@ -182,6 +190,7 @@ export type SaveCouncilOutcomeInput = {
   legal: string;
   security: string;
   recommended: string;
+  duration_ms?: number;
 };
 
 export function saveCouncilOutcome(input: SaveCouncilOutcomeInput): string {
@@ -190,11 +199,11 @@ export function saveCouncilOutcome(input: SaveCouncilOutcomeInput): string {
   const now = new Date().toISOString();
   db.prepare(`
     INSERT INTO council_outcomes
-      (id, session_id, task, verdict, lead_dev, pm, architect, ux, devil, legal, security, recommended, debated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, session_id, task, verdict, lead_dev, pm, architect, ux, devil, legal, security, recommended, debated_at, duration_ms)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, input.session_id ?? null, input.task, input.verdict,
     input.lead_dev, input.pm, input.architect, input.ux, input.devil,
-    input.legal, input.security, input.recommended, now);
+    input.legal, input.security, input.recommended, now, input.duration_ms ?? 0);
   return id;
 }
 
@@ -266,8 +275,8 @@ export function searchKnowledge(opts: SearchKnowledgeOptions): KnowledgeRow[] {
   ).all(...params, limit) as KnowledgeRow[];
 
   if (rows.length > 0 && opts.query) {
-    const ids = rows.map(r => `'${r.id}'`).join(',');
-    db.exec(`UPDATE knowledge_base SET accessed_count = accessed_count + 1 WHERE id IN (${ids})`);
+    const updateStmt = db.prepare('UPDATE knowledge_base SET accessed_count = accessed_count + 1 WHERE id = ?');
+    for (const row of rows) updateStmt.run(row.id);
   }
 
   return rows;
@@ -387,7 +396,8 @@ export async function fetchAndCacheDocs(
   package_name: string,
   ecosystem: 'npm' | 'pypi' | 'crates',
   version?: string,
-  max_chars = 8000
+  max_chars = 8000,
+  agentVersion = '1.0.0'
 ): Promise<{ package_name: string; version: string; ecosystem: string; content: string; cached: boolean; fetched_at: string } | null> {
   const db = getDb();
 
@@ -428,7 +438,7 @@ export async function fetchAndCacheDocs(
     } else {
       const res = await fetch(`https://crates.io/api/v1/crates/${encodeURIComponent(package_name)}`, {
         signal: controller.signal,
-        headers: { 'User-Agent': 'veto-mcp/1.1.0' },
+        headers: { 'User-Agent': `veto-mcp/${agentVersion}` },
       });
       if (!res.ok) return null;
       const json = await res.json() as { crate: { newest_version: string; description: string; documentation: string } };
@@ -570,7 +580,6 @@ export function getAuditLog(opts: AuditLogOptions = {}): AuditEvent[] {
   ).all(...councilParams, limit) as Array<{ id: string; session_id: string | null; task: string; verdict: string; recommended: string | null; debated_at: string }>;
 
   for (const r of councilRows) {
-    if (opts.agent) continue; // council events don't have a single agent
     events.push({ timestamp: r.debated_at, event_type: 'council', session_id: r.session_id, agent: null, verdict: r.verdict, summary: r.task.slice(0, 100), affected_files: null });
   }
 
@@ -608,18 +617,12 @@ export function getHealthStats(): HealthStats {
   const count = (table: string) =>
     (db.prepare(`SELECT COUNT(*) as n FROM ${table}`).get() as { n: number }).n;
 
-  // Avg latency: approximate from 10 most recent council outcomes (debated_at timestamps as proxy)
-  const latencyRows = db.prepare(
-    'SELECT debated_at FROM council_outcomes ORDER BY debated_at DESC LIMIT 10'
-  ).all() as Array<{ debated_at: string }>;
-  let avg_council_latency_ms: number | null = null;
-  if (latencyRows.length >= 2) {
-    const diffs: number[] = [];
-    for (let i = 0; i < latencyRows.length - 1; i++) {
-      diffs.push(Math.abs(new Date(latencyRows[i].debated_at).getTime() - new Date(latencyRows[i + 1].debated_at).getTime()));
-    }
-    avg_council_latency_ms = Math.round(diffs.reduce((a, b) => a + b, 0) / diffs.length);
-  }
+  // Avg latency: average of actual recorded debate durations
+  const latencyRow = db.prepare(
+    'SELECT AVG(duration_ms) as avg_ms, COUNT(*) as n FROM council_outcomes WHERE duration_ms > 0'
+  ).get() as { avg_ms: number | null; n: number };
+  const avg_council_latency_ms: number | null =
+    latencyRow.n > 0 && latencyRow.avg_ms != null ? Math.round(latencyRow.avg_ms) : null;
 
   return {
     total_sessions: count('sessions'),

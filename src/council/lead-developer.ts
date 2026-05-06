@@ -77,6 +77,60 @@ const WARN_RULES: Array<{ pattern: RegExp; concern: string }> = [
 
 const TRIVIAL = /^(rename|fix typo|reorder|reformat|format code|update comment|add comment)\b/i;
 
+// Topic expertise: when no bad patterns match, extract domain topics and give expert opinion
+const TOPIC_INSIGHTS: Array<{ pattern: RegExp; concern: string; recommendation: string }> = [
+  {
+    pattern: /agent|worker|executor|pipeline|orchestrat/i,
+    concern: 'Agent architectures need clear contracts: every agent must have a defined input schema, output schema, and error behavior. Agents that silently return empty results on failure are impossible to debug.',
+    recommendation: 'Define typed input/output interfaces for each agent. Return structured errors, never null. Log agent invocations with task ID for traceability.',
+  },
+  {
+    pattern: /memory|session|persist|store|cache|knowledge/i,
+    concern: 'Persistent memory stores grow unbounded without eviction policies. Old entries degrade search quality and waste storage.',
+    recommendation: 'Add TTL or relevance-decay to knowledge entries. Implement max-entry limits per project. Provide a cleanup command for stale data.',
+  },
+  {
+    pattern: /plugin|extensi|hook|custom.?agent/i,
+    concern: 'Plugin systems are a common attack surface. Plugins with unchecked filesystem or network access can exfiltrate data or corrupt state.',
+    recommendation: 'Sandbox plugins: restrict to a defined API, no direct DB access, no arbitrary filesystem reads. Validate plugin schema on load.',
+  },
+  {
+    pattern: /llm|model|ai.?call|openai|anthropic|gemini|claude/i,
+    concern: 'LLM integration introduces latency (2–30s), cost variability, and non-determinism. A failing LLM call must not crash the tool — it must degrade gracefully.',
+    recommendation: 'Set explicit timeouts on every LLM call. Cache responses where determinism is acceptable. Return a structured fallback on failure, never an unhandled exception.',
+  },
+  {
+    pattern: /webhook|http.?server|express|endpoint|route|port/i,
+    concern: 'Adding HTTP transport changes the threat model from local-only to network-exposed. Authentication, rate limiting, and input validation are now mandatory.',
+    recommendation: 'Require authentication on all HTTP endpoints from day one. Apply request body size limits. Log all requests with IP and timestamp.',
+  },
+  {
+    pattern: /version|semver|bump|release|publish|npm/i,
+    concern: 'Version bumps without updating all hardcoded version strings create drift between what the server reports and what is actually running.',
+    recommendation: 'Single source of truth: read version from package.json at runtime. Search for hardcoded version strings before every release.',
+  },
+  {
+    pattern: /test|spec|coverage|vitest|jest|assert/i,
+    concern: 'Test suites that mock the database or external services can pass while production behavior fails. Regression gaps are most common at integration boundaries.',
+    recommendation: 'Integration tests should hit real SQLite (use in-memory DB). Unit test pure logic only. Track coverage per agent to find untested paths.',
+  },
+  {
+    pattern: /config|setting|environment|env.?var|dotenv/i,
+    concern: 'Config loaded from environment without validation fails silently in production. Missing required variables cause runtime errors far from the source.',
+    recommendation: 'Validate all required env vars at startup with explicit error messages. Use a schema (zod) for config validation. Fail fast, not late.',
+  },
+  {
+    pattern: /phase|plan|roadmap|feature|improvement/i,
+    concern: 'Feature planning without defined acceptance criteria leads to scope creep and unmeasurable completion. Each phase needs a clear "done" definition.',
+    recommendation: 'For each planned feature, define: input, expected output, edge cases, and a test that proves it works. Write the test first if possible.',
+  },
+  {
+    pattern: /concurrent|parallel|race|async|thread|mutex/i,
+    concern: 'Parallel execution over a shared SQLite connection will cause write conflicts unless WAL mode and proper serialisation are in place.',
+    recommendation: 'Verify WAL journal mode is enabled. Use transactions for multi-step writes. Test with concurrent load before shipping parallel agent features.',
+  },
+];
+
 export function analyze(task: string): AgentVote {
   if (TRIVIAL.test(task.trim())) {
     return { verdict: 'approve', reason: 'Trivial change — no security or quality concerns.', concerns: [] };
@@ -114,5 +168,17 @@ export function analyze(task: string): AgentVote {
     };
   }
 
-  return { verdict: 'approve', reason: 'No security or quality violations detected.', concerns: [] };
+  // No bad patterns — apply topic-based expert analysis
+  const matched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
+  if (matched.length > 0) {
+    const top = matched.slice(0, 2);
+    return {
+      verdict: 'warn',
+      reason: top[0].concern,
+      concerns: top.slice(1).map(t => t.concern),
+      recommendation: top.map(t => t.recommendation).join(' | '),
+    };
+  }
+
+  return { verdict: 'approve', reason: 'No security or quality violations detected. Code quality standards appear satisfied.', concerns: [] };
 }

@@ -59,6 +59,44 @@ const WARN_RULES: Array<{ pattern: RegExp; concern: string; recommendation: stri
 
 const TRIVIAL = /^(rename|fix typo|reorder|reformat|format|update comment|add comment)\b/i;
 
+const TOPIC_INSIGHTS: Array<{ pattern: RegExp; concern: string; recommendation: string }> = [
+  {
+    pattern: /vscode|vs.?code|ide|extension|sidebar|editor/i,
+    concern: 'IDE extensions have extremely high discoverability value — they make a tool real for developers who never touch a terminal. But extension development is a separate build pipeline, separate publish cycle, and a significant maintenance surface.',
+    recommendation: 'Scope the extension to the minimal feature set that creates daily habit: status bar + one command. Do not build the full sidebar until the core install flow is proven.',
+  },
+  {
+    pattern: /auto.?save|auto.?session|background.?save/i,
+    concern: 'Auto-save adds background noise — every user will see silent saves they did not trigger. The question is whether they trust it or find it alarming.',
+    recommendation: 'Show a subtle indicator when auto-save fires (e.g. "session saved" in status bar). Give users a way to disable it. Default threshold at 70% context is reasonable.',
+  },
+  {
+    pattern: /github|pr|pull.?request|jira|linear|issue/i,
+    concern: 'External integrations require API keys, OAuth flows, and rate limit handling for third-party services. Scope creep risk is high: users will expect full two-way sync once you ship read-only.',
+    recommendation: 'Ship read-only first: fetch PR diff and run analysis. Do not ship comment-posting until the read path is validated by real users.',
+  },
+  {
+    pattern: /llm|model.?call|ai.?backend|gpt|claude.?api|gemini.?api/i,
+    concern: 'LLM-backed agents will increase response latency from <100ms to 2–30s. Users who currently get instant responses will notice this immediately.',
+    recommendation: 'Show a loading indicator for LLM-backed operations. Make LLM backing opt-in per agent, not forced. Keep the fast heuristic path available as a fallback.',
+  },
+  {
+    pattern: /phase|roadmap|plan|milestone|feature.?list/i,
+    concern: 'Phases planned without user validation risk building features nobody wants. The strongest MCP servers grew from a single killer feature, not a comprehensive roadmap.',
+    recommendation: 'Identify the one feature that would make users tell others about Veto. Ship that first. Use real install/usage metrics to prioritise the next phase.',
+  },
+  {
+    pattern: /discover|onboard|help|tutorial|guide|doc/i,
+    concern: '41 tools is above the cognitive load threshold for new users. Without discoverability, most tools will never be used — this is the retention killer for complex products.',
+    recommendation: 'Add veto_discover immediately. Track which tools get called most. Consider a first-run guided experience via veto_status output.',
+  },
+  {
+    pattern: /mcp.?server|tool.?count|tool.?list/i,
+    concern: 'More tools ≠ more value. Each additional tool increases the cognitive load on users and the maintenance burden on you. The most successful MCP servers have 5–10 sharp tools, not 40+.',
+    recommendation: 'Audit tool usage data. If any tool has zero calls in 30 days, deprecate it. Consolidate tools that overlap in function.',
+  },
+];
+
 export function analyze(task: string): AgentVote {
   if (TRIVIAL.test(task.trim())) {
     return { verdict: 'approve', reason: 'Trivial change — no product concerns.', concerns: [] };
@@ -95,6 +133,17 @@ export function analyze(task: string): AgentVote {
       reason: `${concerns.length} product risk${concerns.length > 1 ? 's' : ''} — scope or complexity concern.`,
       concerns,
       recommendation: recommendations[0],
+    };
+  }
+
+  const matched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
+  if (matched.length > 0) {
+    const top = matched.slice(0, 2);
+    return {
+      verdict: 'warn',
+      reason: top[0].concern,
+      concerns: top.slice(1).map(t => t.concern),
+      recommendation: top.map(t => t.recommendation).join(' | '),
     };
   }
 

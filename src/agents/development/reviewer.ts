@@ -2,15 +2,30 @@ import { AgentPlan, AgentAnalysis, AgentFinding, FindingSeverity, WorkerAgentTyp
 
 // ─── plan ────────────────────────────────────────────────────────────────────
 
-export function plan(task: string, _context?: string): AgentPlan {
+export function plan(task: string, context?: string): AgentPlan {
+  const isApi      = /api|endpoint|route|rest|graphql/i.test(task);
+  const isDb       = /database|schema|migrat|sql|query/i.test(task);
+  const isSecurity = /auth|jwt|oauth|password|token|secret|crypt/i.test(task);
+  const isAsync    = /async|await|promise|concurrent|parallel/i.test(task);
+  const isPR       = /pr|pull.?request|diff|patch|commit/i.test(task);
+  const hasContext = context && context.length > 50;
+
+  const focusSteps: string[] = [];
+  if (isApi)      focusSteps.push('Verify all route handlers validate input with a schema — check for missing type guards on body/params/query');
+  if (isDb)       focusSteps.push('Check SQL queries for parameterisation — no string concatenation of user input', 'Verify every write is inside an explicit transaction');
+  if (isSecurity) focusSteps.push('Audit authentication and authorisation logic — verify role checks are server-side, not client-supplied', 'Check token expiry, storage location, and revocation path');
+  if (isAsync)    focusSteps.push('Trace every Promise — verify all are awaited or explicitly fire-and-forget with error logging', 'Look for race conditions in concurrent operations');
+  if (isPR)       focusSteps.push('Focus on changed lines only — do not review unchanged context', 'Check if tests were added for new behavior');
+
   return {
     agent: 'reviewer' as WorkerAgentType,
     task,
     tier: 2,
-    approach: 'Systematic code review: assess complexity, error handling, naming, magic literals, nesting depth, and test coverage. Produce scored findings with actionable fixes.',
+    approach: `Systematic review${isApi ? ' of API layer' : isDb ? ' of database layer' : isSecurity ? ' with security focus' : ''}: correctness first, then maintainability, then style. Produce scored findings with actionable fixes.${hasContext ? ' Project context has been injected.' : ''}`,
     steps: [
       'Read the module top-to-bottom to understand its purpose and public contract',
       'Identify all exported symbols and verify they are intentional',
+      ...focusSteps,
       'Check function lengths — flag any function exceeding 50 lines for extraction',
       'Assess cyclomatic complexity — any function with more than 10 branches is a risk',
       'Verify every async call is awaited or explicitly fire-and-forget',
@@ -18,10 +33,8 @@ export function plan(task: string, _context?: string): AgentPlan {
       'Scan for magic numbers and untyped string literals',
       'Measure nesting depth — refactor anything deeper than 3 levels',
       'Review naming — variables, functions, and types should be self-documenting',
-      'Check for TODO/FIXME comments and ensure each links to a tracking issue',
       'Verify unused imports and variables are removed',
-      'Confirm test coverage exists for every public function',
-      'Assess consistency with the rest of the codebase style',
+      isPR ? 'Check that tests were added or updated for every changed behavior' : 'Confirm test coverage exists for every public function',
     ],
     checklist: [
       '[ ] No function exceeds 50 lines of executable code',
@@ -30,30 +43,31 @@ export function plan(task: string, _context?: string): AgentPlan {
       '[ ] Every try/catch logs or rethrows — no silent swallow',
       '[ ] No magic numbers — use named constants',
       '[ ] No deeply nested if/for (max 3 levels)',
-      '[ ] All TODO/FIXME comments reference a ticket number',
       '[ ] No unused variables or imports',
       '[ ] Naming is consistent with the project convention (camelCase, PascalCase for types)',
       '[ ] No console.log left in production paths',
-      '[ ] Public functions have JSDoc',
       '[ ] Every exported function has at least one test',
       '[ ] No any types without an explanatory comment',
-      '[ ] No circular imports',
-    ],
+      isApi      ? '[ ] All route inputs validated with schema (zod/joi) at the handler boundary' : '',
+      isDb       ? '[ ] All queries use parameterised statements — no string concatenation' : '',
+      isSecurity ? '[ ] No credentials, tokens, or secrets in source or logs' : '',
+    ].filter(Boolean) as string[],
     pitfalls: [
-      'Approving a PR because it "looks fine" without running it locally',
-      'Missing async bugs — a synchronous function calling an async one without await silently drops the Promise',
-      'Over-reviewing style while missing logic errors — focus on correctness first',
-      'Not reading the tests — tests reveal intent, bad tests reveal bad design',
-      'Ignoring error handling because the happy path looks clean',
+      'Approving because it "looks fine" without verifying the error path',
+      'Missing async bugs — synchronous function calling async one without await silently drops the Promise',
+      'Over-reviewing style while missing logic errors — correctness first',
+      ...(isAsync ? ['Race conditions in concurrent code that only appear under load — check lock/mutex usage'] : []),
+      ...(isApi   ? ['Missing input validation on a rarely-used parameter — the security hole is always in the edge case'] : []),
+      ...(isDb    ? ['N+1 query inside a loop — only visible at scale'] : []),
     ],
     patterns: [
       'Guard clause pattern (early returns to reduce nesting)',
       'Strategy pattern (replace long switch/if chains)',
       'Extract function refactoring',
-      'Null Object pattern (replace null checks)',
-      'Result/Option type (replace throw-based error handling)',
+      ...(isApi  ? ['Middleware chain: authenticate → authorise → validate → handle'] : []),
+      ...(isDb   ? ['Repository pattern: isolate all DB access in one layer'] : []),
     ],
-    duration_estimate: '1-2 hours',
+    duration_estimate: isPR ? '30-60 min' : isDb || isSecurity ? '2-4 hours' : '1-2 hours',
   };
 }
 

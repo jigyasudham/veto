@@ -148,5 +148,50 @@ export function analyze(task: string): AgentVote {
     };
   }
 
+  // Topic-based legal analysis for tasks with no specific pattern matches
+  const TOPIC_INSIGHTS: Array<{ pattern: RegExp; concern: string; recommendation: string }> = [
+    {
+      pattern: /llm|ai|model|anthropic|openai|google/i,
+      concern: "Using AI models via API to process user code and data may implicate the provider's data use policies. Some providers use API inputs to train future models by default.",
+      recommendation: "Check data use policies for each AI provider used. For sensitive codebases, verify zero-data-retention options. Document in your privacy policy that AI providers process user data.",
+    },
+    {
+      pattern: /github|gitlab|jira|linear|third.?party|integration/i,
+      concern: 'Integrating with third-party platforms means handling OAuth tokens and potentially storing user data on their behalf. This creates data processor obligations under GDPR.',
+      recommendation: 'Document all third-party data flows. Sign Data Processing Agreements where required. Scope OAuth tokens to minimum permissions. Provide a way to revoke and delete tokens.',
+    },
+    {
+      pattern: /memory|session|persist|store|knowledge/i,
+      concern: 'Persisting user code, task descriptions, and session context locally creates a data retention obligation. Under GDPR, users have the right to request deletion of their data.',
+      recommendation: 'Provide veto_memory_delete and document how users can delete all stored data. Set default retention policies. Do not store data longer than necessary for the stated purpose.',
+    },
+    {
+      pattern: /npm|publish|distribut|package|open.?source/i,
+      concern: 'Publishing an npm package that bundles dependencies may unintentionally include GPL or AGPL licensed code. This can restrict how users can use and distribute the package.',
+      recommendation: 'Run license-checker before every publish. Block GPL/AGPL in CI for your MIT project. Review transitive dependency licenses, not just direct ones.',
+    },
+    {
+      pattern: /log|audit|monitor|track|telemetry/i,
+      concern: 'Logging task content and code snippets locally may capture personally identifiable information or commercially sensitive code that users did not intend to store.',
+      recommendation: 'Truncate task content in logs. Never log raw code in audit trails. Provide a clear privacy notice explaining what Veto stores locally and for how long.',
+    },
+    {
+      pattern: /vscode|extension|marketplace/i,
+      concern: 'VS Code Marketplace has specific policies around data collection, telemetry, and what must be disclosed in the extension description. Violations can result in delisting.',
+      recommendation: 'If collecting any telemetry, disclose it in the Marketplace listing and use VS Code\'s telemetry API which respects user opt-out settings. Consult Marketplace policies before publishing.',
+    },
+  ];
+
+  const topicMatched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
+  if (topicMatched.length > 0) {
+    const top = topicMatched.slice(0, 2);
+    return {
+      verdict: 'warn',
+      reason: top[0].concern,
+      concerns: top.slice(1).map(t => t.concern),
+      recommendation: top.map(t => t.recommendation).join(' | '),
+    };
+  }
+
   return { verdict: 'approve', reason: 'No legal or compliance issues detected.', concerns: [] };
 }
