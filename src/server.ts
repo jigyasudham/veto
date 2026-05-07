@@ -53,6 +53,38 @@ const SERVER_START_TIME = Date.now();
 let serverErrorCount = 0;
 let lastServerError: string | null = null;
 
+// Auto-save: cached context from the last explicit session save. Populated by
+// veto_session_save and veto_handoff. Cleared on server restart (in-memory only).
+interface AutoSaveCache {
+  summary: string;
+  context: string;
+  task_state?: string;
+  platform: string;
+  project_dir?: string;
+}
+const autoSave = {
+  threshold_pct: 70,
+  cooldown_ms: 5 * 60 * 1000, // 5 min between auto-saves
+  last_save_at: null as string | null,
+  last_session_id: null as string | null,
+  cached: null as AutoSaveCache | null,
+};
+
+function maybeAutoSave(token_count: number, platform: string): { triggered: boolean; session_id?: string; usage_pct?: number } {
+  if (!autoSave.cached) return { triggered: false };
+  const window_size = CONTEXT_WINDOWS[platform] ?? 200_000;
+  const usage_pct = Math.round((token_count / window_size) * 100);
+  if (usage_pct < autoSave.threshold_pct) return { triggered: false };
+  if (autoSave.last_save_at) {
+    const elapsed = Date.now() - new Date(autoSave.last_save_at).getTime();
+    if (elapsed < autoSave.cooldown_ms) return { triggered: false };
+  }
+  const result = saveSession({ ...autoSave.cached, token_count, platform });
+  autoSave.last_save_at = result.saved_at;
+  autoSave.last_session_id = result.session_id;
+  return { triggered: true, session_id: result.session_id, usage_pct };
+}
+
 const server = new Server(
   { name: 'veto', version: VERSION },
   {
@@ -70,7 +102,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: 'veto_status',
-      description: 'Returns Veto server status, version, and database info.',
+      description: 'Returns Veto server status, version, and database info. Pass token_count to trigger auto-save if context usage crosses 70%.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          token_count: {
+            type: 'number',
+            description: 'Current session token count. If provided and context usage ≥ 70%, Veto auto-saves the last known session context in the background.',
+          },
+          platform: {
+            type: 'string',
+            description: 'AI platform (claude, gemini, codex). Used to select the correct context window for threshold calculation. Defaults to "claude".',
+            enum: ['claude', 'gemini', 'codex'],
+          },
+        },
+        required: [],
+      },
+    },
+    {
+      name: 'veto_autosave_status',
+      description: 'Returns the current auto-save state: whether a context is cached, the threshold, the last auto-save time, and the session ID.',
       inputSchema: {
         type: 'object',
         properties: {},
@@ -736,6 +787,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   switch (name) {
     case 'veto_status': {
+      const statusTokenCount = typeof args?.token_count === 'number' ? args.token_count : null;
+      const statusPlatform = args?.platform ? String(args.platform) : 'claude';
+      const autoSaveResult = statusTokenCount !== null ? maybeAutoSave(statusTokenCount, statusPlatform) : null;
       return {
         content: [
           {
@@ -745,7 +799,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 status: 'running',
                 version: VERSION,
                 server: 'veto',
-                phase: 15,
+                phase: 16,
                 capabilities: [
                   'session_save', 'session_restore', 'sessions_list',
                   'router', 'rate_monitor',
@@ -761,10 +815,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   'plugins',
                   'docs_fetch', 'context_status', 'task_parse',
                   'usage_status', 'audit_log', 'health',
+                  'auto_save',
                 ],
                 db_path: getDbPath(),
                 uptime_ms: process.uptime() * 1000,
                 timestamp: new Date().toISOString(),
+                ...(autoSaveResult?.triggered ? { auto_save: { triggered: true, session_id: autoSaveResult.session_id, usage_pct: autoSaveResult.usage_pct } } : {}),
               },
               null,
               2
@@ -774,18 +830,43 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
+    case 'veto_autosave_status': {
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            threshold_pct: autoSave.threshold_pct,
+            cooldown_ms: autoSave.cooldown_ms,
+            context_cached: autoSave.cached !== null,
+            cached_summary: autoSave.cached?.summary ?? null,
+            last_save_at: autoSave.last_save_at,
+            last_session_id: autoSave.last_session_id,
+            note: 'Auto-save fires when veto_status is called with token_count ≥ threshold_pct% of context window.',
+          }, null, 2),
+        }],
+      };
+    }
+
     case 'veto_session_save': {
       const sessionProjectDir = args?.project_dir ? String(args.project_dir) : undefined;
       if (sessionProjectDir) activeProjectDir = sessionProjectDir;
+      const savePlatform = args?.platform ? String(args.platform) : 'claude';
+      const saveSummary = String(args?.summary ?? '');
+      const saveContext = String(args?.context ?? '');
+      const saveTaskState = args?.task_state ? String(args.task_state) : undefined;
       const result = saveSession({
-        summary: String(args?.summary ?? ''),
-        context: String(args?.context ?? ''),
-        task_state: args?.task_state ? String(args.task_state) : undefined,
-        platform: args?.platform ? String(args.platform) : 'claude',
+        summary: saveSummary,
+        context: saveContext,
+        task_state: saveTaskState,
+        platform: savePlatform,
         connection_type: args?.connection_type ? String(args.connection_type) : 'subscription',
         project_dir: sessionProjectDir,
         token_count: typeof args?.token_count === 'number' ? args.token_count : 0,
       });
+      // Cache for auto-save: future veto_status calls with high token_count will re-save this context
+      autoSave.cached = { summary: saveSummary, context: saveContext, task_state: saveTaskState, platform: savePlatform, project_dir: sessionProjectDir };
+      autoSave.last_save_at = result.saved_at;
+      autoSave.last_session_id = result.session_id;
 
       const responseObj: Record<string, unknown> = {
         success: true,
@@ -1273,15 +1354,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!summary || !context) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'summary and context are required.' }) }], isError: true };
       }
+      const handoffPlatform = args?.from_platform ? String(args.from_platform) : 'claude';
+      const handoffTaskState = args?.task_state ? String(args.task_state) : undefined;
+      const handoffProjectDir = args?.project_dir ? String(args.project_dir) : undefined;
       const result = handoff({
         summary,
         context,
-        task_state: args?.task_state ? String(args.task_state) : undefined,
-        from_platform: args?.from_platform ? String(args.from_platform) as Platform : 'claude',
+        task_state: handoffTaskState,
+        from_platform: handoffPlatform as Platform,
         to_platform: args?.to_platform ? String(args.to_platform) as Platform : undefined,
-        project_dir: args?.project_dir ? String(args.project_dir) : undefined,
+        project_dir: handoffProjectDir,
         token_count: typeof args?.token_count === 'number' ? args.token_count : 0,
       });
+      // Cache for auto-save
+      autoSave.cached = { summary, context, task_state: handoffTaskState, platform: handoffPlatform, project_dir: handoffProjectDir };
+      autoSave.last_save_at = result.saved_at;
+      autoSave.last_session_id = result.session_id;
       // Close the current session so ended_at is recorded
       if (activeProjectDir) {
         const sessions = listSessions(1);
