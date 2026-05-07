@@ -1,6 +1,6 @@
 # veto
 
-> **50 agents. 42 tools. 3 AIs. Self-learning. Zero extra cost.**
+> **50 agents. 43 tools. 3 AIs. Self-learning. Zero extra cost.**
 
 An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, and Gemini CLI using your existing subscriptions — giving every AI a council of specialist agents, persistent cross-platform memory, a self-learning router, live usage tracking, CI/CD pipeline gates, live documentation fetching, auto session save, and the ability to say no to bad decisions.
 
@@ -132,7 +132,7 @@ VS Code uses `"servers"` with `"type": "stdio"`:
 | **Handoff** | `veto_handoff` · `veto_continue` · `veto_platform_setup` |
 | **Intelligence** | `veto_docs_fetch` · `veto_context_status` · `veto_task_parse` |
 | **Observability** | `veto_usage_status` · `veto_audit_log` · `veto_health` |
-| **CI/CD** | `veto_ci_gate` |
+| **CI/CD** | `veto_ci_gate` · `veto_pr_review` |
 | **Plugins** | `veto_plugins` |
 
 ## MCP Resources
@@ -174,7 +174,7 @@ npx @jigyasudham/veto help       # Same help output, no install needed
 npx @jigyasudham/veto status     # Check status from any machine
 ```
 
-`veto help` shows all CLI commands, all 42 MCP tool names, MCP Resources, and MCP Prompts — the full reference in one place.
+`veto help` shows all CLI commands, all 43 MCP tool names, MCP Resources, and MCP Prompts — the full reference in one place.
 
 ---
 
@@ -212,6 +212,29 @@ veto_diff_review { project_dir: "/your/project" }
 ```
 
 Works as a pre-commit hook or CI step. The `summary` field is a single string ready to post as a PR comment.
+
+---
+
+## GitHub PR Review
+
+Pass a PR URL — Veto fetches the diff and runs the full triple-scan automatically:
+
+```
+veto_pr_review { pr_url: "https://github.com/owner/repo/pull/42" }
+→ {
+    verdict: "warn",
+    pr: { title: "Add auth middleware", author: "jigyasudham", changed_files: 6, ... },
+    checks: {
+      code_review: { score: 78, critical: 0, high: 2 },
+      security:    { score: 91, critical: 0, high: 0 },
+      secrets:     { clean: true }
+    },
+    review_comment: "## ⚠️ Veto Review — WARN\n...",  ← paste directly into GitHub
+    blocking_issues: []
+  }
+```
+
+Set `GITHUB_TOKEN` in your environment for private repos. Public repos need no auth.
 
 ---
 

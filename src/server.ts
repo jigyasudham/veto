@@ -34,6 +34,7 @@ import { startWatch, pollWatch, stopWatch, listWatches } from './watcher/index.j
 import { runPipeline } from './workflow/pipeline.js';
 import type { PipelineStep } from './workflow/pipeline.js';
 import { loadPlugins, listPlugins } from './plugins/loader.js';
+import { fetchPrDiff } from './github/pr-fetcher.js';
 import { readFileSync, statSync } from 'node:fs';
 import { extname, basename, join, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -758,6 +759,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           fail_on:     { type: 'string', enum: ['warn', 'fail'], description: 'Whether WARN counts as a failure (exit code 1). Default: "fail" — only FAIL exits non-zero.' },
         },
         required: ['project_dir'],
+      },
+    },
+    {
+      name: 'veto_pr_review',
+      description: 'Fetches a GitHub PR diff and runs the full Veto triple-scan (code review + security + secrets). Returns a structured verdict and ready-to-post GitHub review comments. Set GITHUB_TOKEN env var for private repos.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          pr_url:  { type: 'string', description: 'Full GitHub PR URL. e.g. https://github.com/owner/repo/pull/123' },
+          context: { type: 'string', description: 'Optional: PR description or ticket number for extra context.' },
+          fail_on: { type: 'string', enum: ['warn', 'fail'], description: 'Whether WARN counts as a failure. Default: "fail".' },
+        },
+        required: ['pr_url'],
       },
     },
   ],
@@ -1779,6 +1793,78 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
             blocking_issues,
             ci_summary,
+            duration_ms: Date.now() - start,
+          }, null, 2),
+        }],
+      };
+    }
+
+    case 'veto_pr_review': {
+      const pr_url  = String(args?.pr_url ?? '').trim();
+      const context = args?.context ? String(args.context) : '';
+      const fail_on = args?.fail_on === 'warn' ? 'warn' : 'fail';
+
+      if (!pr_url) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'pr_url is required.' }) }], isError: true };
+      }
+
+      const start = Date.now();
+      const fetched = await fetchPrDiff(pr_url);
+      if (!fetched.ok) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: fetched.error }) }], isError: true };
+      }
+
+      const { diff, meta } = fetched;
+      const prContext = [
+        `PR: ${meta.title} (${meta.html_url})`,
+        `Author: ${meta.author} · ${meta.head_branch} → ${meta.base_branch}`,
+        `Changes: +${meta.additions} -${meta.deletions} across ${meta.changed_files} files`,
+        context,
+      ].filter(Boolean).join('\n');
+
+      const { reviewResult, secResult, secretsResult, verdict } = await runTripleScan(diff, prContext);
+      const exit_code = verdict === 'fail' || (verdict === 'warn' && fail_on === 'warn') ? 1 : 0;
+
+      const codeScore    = reviewResult.analysis?.score ?? Math.round((reviewResult.output?.confidence ?? 0.8) * 100);
+      const secScore     = secResult.analysis?.score    ?? Math.round((secResult.output?.confidence    ?? 0.8) * 100);
+      const secretsClean = (secretsResult.analysis?.findings?.length ?? 0) === 0;
+
+      const blocking_issues: string[] = [];
+      if ((reviewResult.analysis?.critical_count ?? 0) > 0) blocking_issues.push(`Code review: ${reviewResult.analysis?.summary ?? 'critical issues found'}`);
+      if ((secResult.analysis?.critical_count    ?? 0) > 0) blocking_issues.push(`Security: ${secResult.analysis?.summary ?? 'vulnerabilities detected'}`);
+      if (!secretsClean) blocking_issues.push(`Secrets: ${secretsResult.analysis?.summary ?? 'exposed credentials detected'}`);
+
+      // Build ready-to-post GitHub review comment (Markdown)
+      const icon = verdict === 'pass' ? '✅' : verdict === 'warn' ? '⚠️' : '❌';
+      const review_comment = [
+        `## ${icon} Veto Review — ${verdict.toUpperCase()}`,
+        ``,
+        `| Check | Score | Status |`,
+        `|---|---|---|`,
+        `| Code Review | ${codeScore}% | ${(reviewResult.analysis?.critical_count ?? 0) === 0 ? '✅' : '❌'} |`,
+        `| Security Scan | ${secScore}% | ${(secResult.analysis?.critical_count ?? 0) === 0 ? '✅' : '❌'} |`,
+        `| Secrets Scan | — | ${secretsClean ? '✅ Clean' : '❌ Found'} |`,
+        ``,
+        blocking_issues.length > 0
+          ? `**Blocking issues:**\n${blocking_issues.map(i => `- ${i}`).join('\n')}`
+          : `No blocking issues found.`,
+        ``,
+        `> Reviewed by [Veto](https://github.com/jigyasudham/veto) · ${meta.changed_files} files · +${meta.additions}/-${meta.deletions} · ${Date.now() - start}ms`,
+      ].join('\n');
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            verdict, exit_code,
+            pr: { title: meta.title, author: meta.author, url: meta.html_url, base: meta.base_branch, head: meta.head_branch, additions: meta.additions, deletions: meta.deletions, changed_files: meta.changed_files },
+            checks: {
+              code_review: { score: codeScore, critical: reviewResult.analysis?.critical_count ?? 0, high: reviewResult.analysis?.high_count ?? 0 },
+              security:    { score: secScore,  critical: secResult.analysis?.critical_count    ?? 0, high: secResult.analysis?.high_count    ?? 0 },
+              secrets:     { clean: secretsClean, findings: secretsResult.analysis?.findings ?? [] },
+            },
+            blocking_issues,
+            review_comment,
             duration_ms: Date.now() - start,
           }, null, 2),
         }],
