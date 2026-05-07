@@ -4,8 +4,8 @@
 // Suppress Node experimental warnings (node:sqlite) for clean UX
 process.removeAllListeners('warning');
 
-import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
-import { join, dirname, extname, resolve } from 'node:path';
+import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, dirname, resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -33,7 +33,7 @@ function printBanner() {
   console.log(c.bold(c.cyan('   ╚████╔╝ ███████╗   ██║   ╚██████╔╝')));
   console.log(c.bold(c.cyan('    ╚═══╝  ╚══════╝   ╚═╝    ╚═════╝')));
   console.log('');
-  console.log(c.dim(`  50 agents. 44 tools. 3 AIs. Self-learning. Zero extra cost.`));
+  console.log(c.dim(`  50 agents. 45 tools. 3 AIs. Self-learning. Zero extra cost.`));
   console.log(c.dim(`  v${VERSION}`));
   console.log('');
 }
@@ -141,12 +141,18 @@ async function initCommand() {
 
   // 3. Auto-scan current project and store project map
   const cwd = resolve(process.cwd());
-  const { getDb: _getDb, updateProjectMap } = await import('./memory/local.js');
+  const { updateProjectMap } = await import('./memory/local.js');
+  const { discoverProject } = await import('./discover.js');
   try {
     process.stdout.write('  · Scanning project directory...');
-    const { structure, key_modules, tech_stack } = scanProjectDir(cwd);
-    updateProjectMap({ project_dir: cwd, structure: JSON.stringify(structure), key_modules, tech_stack });
-    const stackStr = tech_stack.length ? ` (${tech_stack.slice(0, 4).join(', ')})` : '';
+    const disc = discoverProject(cwd, 'standard');
+    updateProjectMap({
+      project_dir: disc.project_dir,
+      structure: { ecosystems: disc.ecosystems, key_files: disc.key_files, file_counts: disc.file_counts, total_files: disc.total_files, scanned_at: disc.scanned_at },
+      key_modules: disc.key_files,
+      tech_stack: disc.tech_stack,
+    });
+    const stackStr = disc.tech_stack.length ? ` (${disc.tech_stack.slice(0, 4).join(', ')})` : '';
     console.log(c.green(' ✓') + ` Project map saved${stackStr}`);
   } catch {
     console.log(c.dim(' skipped'));
@@ -237,76 +243,119 @@ async function initCommand() {
   }
 }
 
-// ─── Project Map Scanner ────────────────────────────────────────────────────────
 
-function scanProjectDir(dir: string): { structure: object; key_modules: string[]; tech_stack: string[] } {
-  const structure: Record<string, unknown> = {};
-  const key_modules: string[] = [];
-  const tech_stack: string[] = [];
+// ─── Doctor Command ─────────────────────────────────────────────────────────────
 
-  // Read package.json for stack detection
-  const pkgPath = join(dir, 'package.json');
-  if (existsSync(pkgPath)) {
+async function doctorCommand() {
+  console.log('');
+  console.log(c.bold('  Veto Doctor') + c.dim(' — system health check'));
+  console.log(c.dim('  ─────────────────────────────────────────────────────'));
+  console.log('');
+
+  let issues = 0;
+
+  // Node.js version
+  const nodeMajor = parseInt(process.version.slice(1).split('.')[0], 10);
+  if (nodeMajor >= 22) {
+    console.log(`  ${c.green('✓')} Node.js ${process.version}`);
+  } else {
+    console.log(`  ${c.red('✗')} Node.js ${process.version} — need >= 22`);
+    issues++;
+  }
+
+  // ~/.veto directory
+  if (existsSync(VETO_DIR)) {
+    console.log(`  ${c.green('✓')} ${c.dim(VETO_DIR)} exists`);
+  } else {
+    console.log(`  ${c.red('✗')} ${VETO_DIR} missing — run: ${c.cyan('veto init')}`);
+    issues++;
+  }
+
+  // SQLite database
+  try {
+    const { getDb, getDbPath } = await import('./memory/local.js');
+    const db = getDb();
+    const dbPath = getDbPath();
+    const sessions  = (db.prepare('SELECT COUNT(*) as c FROM sessions').get()       as { c: number }).c;
+    const memories  = (db.prepare('SELECT COUNT(*) as c FROM knowledge_base').get() as { c: number }).c;
+    const patterns  = (db.prepare('SELECT COUNT(*) as c FROM patterns').get()       as { c: number }).c;
+    console.log(`  ${c.green('✓')} Database ${c.dim(dbPath)}`);
+    console.log(`  ${c.dim('    ')}${sessions} sessions · ${memories} memories · ${patterns} patterns`);
+  } catch (err: unknown) {
+    console.log(`  ${c.red('✗')} Database error: ${err instanceof Error ? err.message : String(err)}`);
+    issues++;
+  }
+
+  console.log('');
+  console.log('  ' + c.bold('MCP Registrations'));
+  console.log(c.dim('  ─────────────────────────────────────────────────────'));
+
+  // Claude Code — check via `claude mcp list`, fall back to reading settings.json
+  const claudeDir = join(HOME, '.claude');
+  if (existsSync(claudeDir)) {
+    let claudeOk = false;
+    let claudeNote = '';
     try {
-      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-      structure['name'] = pkg.name;
-      structure['version'] = pkg.version;
-      const allDeps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
-      structure['dep_count'] = allDeps.length;
+      const out = execSync('claude mcp list', { encoding: 'utf8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] });
+      if (/veto/i.test(out)) { claudeOk = true; }
+    } catch { /* claude CLI not in PATH */ }
 
-      const stackMap: Array<[string[], string]> = [
-        [['next'], 'Next.js'], [['react'], 'React'], [['vue'], 'Vue'],
-        [['express'], 'Express'], [['fastify'], 'Fastify'], [['hono'], 'Hono'],
-        [['prisma'], 'Prisma'], [['drizzle-orm'], 'Drizzle'], [['typeorm'], 'TypeORM'],
-        [['@modelcontextprotocol/sdk'], 'MCP'], [['typescript'], 'TypeScript'],
-        [['jest'], 'Jest'], [['vitest'], 'Vitest'], [['tailwindcss'], 'Tailwind'],
-        [['zod'], 'Zod'], [['graphql'], 'GraphQL'],
-      ];
-      for (const [keywords, label] of stackMap) {
-        if (keywords.some(k => allDeps.some(d => d.toLowerCase().includes(k)))) {
-          tech_stack.push(label);
-        }
+    // Fall back: check known config files directly
+    if (!claudeOk) {
+      for (const f of ['settings.json', 'mcp_servers.json']) {
+        try {
+          const s = JSON.parse(readFileSync(join(claudeDir, f), 'utf8'));
+          if (s?.mcpServers?.veto) { claudeOk = true; claudeNote = c.dim(` (${f})`); break; }
+        } catch { /* skip */ }
       }
-    } catch { /* malformed */ }
-  }
-
-  // Detect key config files
-  const CONFIG_FILES = ['tsconfig.json', 'vite.config.ts', 'vite.config.js', 'next.config.ts',
-    'next.config.js', 'tailwind.config.ts', 'drizzle.config.ts', 'prisma/schema.prisma',
-    'docker-compose.yml', '.env.example'];
-  const foundConfigs = CONFIG_FILES.filter(f => existsSync(join(dir, f)));
-  if (foundConfigs.length) structure['config_files'] = foundConfigs;
-
-  // Scan src/ directory
-  const srcDir = join(dir, 'src');
-  if (existsSync(srcDir)) {
-    let tsCount = 0;
-    let testCount = 0;
-    const topDirs: string[] = [];
-    for (const entry of readdirSync(srcDir)) {
-      const full = join(srcDir, entry);
-      try {
-        if (statSync(full).isDirectory()) {
-          topDirs.push(entry);
-          key_modules.push(`src/${entry}`);
-        } else {
-          const ext = extname(entry);
-          if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) tsCount++;
-          if (entry.includes('.test.') || entry.includes('.spec.')) testCount++;
-        }
-      } catch { /* skip */ }
     }
-    structure['src_dirs'] = topDirs;
-    structure['ts_files_in_src'] = tsCount;
-    if (testCount > 0) structure['test_files'] = testCount;
+    if (claudeOk) {
+      console.log(`  ${c.green('✓')} Claude Code — registered${claudeNote}`);
+    } else {
+      console.log(`  ${c.red('✗')} Claude Code — not registered`);
+      console.log(`  ${c.dim('    fix: claude mcp add veto -s user -- npx -y --package @jigyasudham/veto veto-server')}`);
+      issues++;
+    }
+  } else {
+    console.log(`  ${c.dim('·')} ${c.dim('Claude Code — not installed')}`);
   }
 
-  // Entry points
-  const entryPoints = ['src/index.ts', 'src/main.ts', 'src/app.ts', 'src/server.ts', 'src/cli.ts', 'index.ts'];
-  const found = entryPoints.filter(f => existsSync(join(dir, f)));
-  if (found.length) structure['entry_points'] = found;
+  // Other platforms — check their config JSON files
+  const platforms = [
+    { name: 'Gemini CLI', configPath: join(HOME, '.gemini', 'settings.json'),               detectionDir: join(HOME, '.gemini'),             key: 'mcpServers' },
+    { name: 'Codex CLI',  configPath: join(HOME, '.codex', 'config.json'),                  detectionDir: join(HOME, '.codex'),              key: 'mcpServers' },
+    { name: 'Cursor',     configPath: join(HOME, '.cursor', 'mcp.json'),                    detectionDir: join(HOME, '.cursor'),             key: 'mcpServers' },
+    { name: 'Windsurf',   configPath: join(HOME, '.codeium', 'windsurf', 'mcp_config.json'), detectionDir: join(HOME, '.codeium', 'windsurf'), key: 'mcpServers' },
+  ];
 
-  return { structure, key_modules, tech_stack };
+  for (const p of platforms) {
+    if (!existsSync(p.detectionDir)) {
+      console.log(`  ${c.dim('·')} ${c.dim(`${p.name} — not installed`)}`);
+      continue;
+    }
+    try {
+      const config = JSON.parse(readFileSync(p.configPath, 'utf8'));
+      if (config?.[p.key]?.veto) {
+        console.log(`  ${c.green('✓')} ${p.name} — registered`);
+      } else {
+        console.log(`  ${c.red('✗')} ${p.name} — veto missing from config`);
+        console.log(`  ${c.dim('    fix: veto init')}`);
+        issues++;
+      }
+    } catch {
+      console.log(`  ${c.red('✗')} ${p.name} — config missing or unreadable`);
+      console.log(`  ${c.dim('    fix: veto init')}`);
+      issues++;
+    }
+  }
+
+  console.log('');
+  if (issues === 0) {
+    console.log(c.green('  ✓ All checks passed — Veto is healthy!'));
+  } else {
+    console.log(c.yellow(`  ⚠  ${issues} issue${issues !== 1 ? 's' : ''} found.`) + ` Run ${c.cyan('veto init')} to repair.`);
+  }
+  console.log('');
 }
 
 // ─── CLI Subcommands ────────────────────────────────────────────────────────────
@@ -397,18 +446,19 @@ async function patternsCommand() {
 
 function helpCommand() {
   console.log('');
-  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(' — 50 agents. 44 tools. 3 AIs. Self-learning. Zero extra cost.'));
+  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(' — 50 agents. 45 tools. 3 AIs. Self-learning. Zero extra cost.'));
   console.log('');
   console.log(c.bold('  CLI Commands'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
   console.log(`  ${c.cyan('veto init')}                    Configure all AI tools + scan project`);
+  console.log(`  ${c.cyan('veto doctor')}                  Check MCP registrations + system health`);
   console.log(`  ${c.cyan('veto status')}                  Version, DB path, memory/session counts`);
   console.log(`  ${c.cyan('veto sessions')}                List last 20 saved sessions`);
   console.log(`  ${c.cyan('veto memory')} ${c.dim('[query]')}         Search knowledge base`);
   console.log(`  ${c.cyan('veto patterns')} ${c.dim('[prefix]')}      List learned agent/routing patterns`);
   console.log(`  ${c.cyan('veto help')}                    Show this help`);
   console.log('');
-  console.log(c.bold('  MCP Tools (44)'));
+  console.log(c.bold('  MCP Tools (45)'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
   console.log(`  ${c.dim('Session')}       veto_status · veto_session_save · veto_session_restore · veto_sessions_list`);
   console.log(`  ${c.dim('Router')}        veto_route_task · veto_rate_status`);
@@ -426,7 +476,7 @@ function helpCommand() {
   console.log(`  ${c.dim('Intelligence')}  veto_docs_fetch · veto_context_status · veto_task_parse`);
   console.log(`  ${c.dim('Observability')} veto_usage_status · veto_audit_log · veto_health`);
   console.log(`  ${c.dim('CI/CD')}         veto_ci_gate · veto_pr_review`);
-  console.log(`  ${c.dim('Discover')}      veto_discover`);
+  console.log(`  ${c.dim('Discover')}      veto_discover · veto_summarize`);
   console.log(`  ${c.dim('Plugins')}       veto_plugins`);
   console.log('');
   console.log(c.bold('  MCP Resources'));
@@ -549,6 +599,13 @@ switch (command) {
 
   case 'patterns':
     patternsCommand().catch((err) => {
+      console.error(c.red(`Error: ${err.message}`));
+      process.exit(1);
+    });
+    break;
+
+  case 'doctor':
+    doctorCommand().catch((err) => {
       console.error(c.red(`Error: ${err.message}`));
       process.exit(1);
     });

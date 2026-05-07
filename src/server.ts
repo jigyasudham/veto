@@ -35,8 +35,9 @@ import { runPipeline } from './workflow/pipeline.js';
 import type { PipelineStep } from './workflow/pipeline.js';
 import { loadPlugins, listPlugins } from './plugins/loader.js';
 import { fetchPrDiff } from './github/pr-fetcher.js';
-import { readFileSync, statSync, readdirSync } from 'node:fs';
-import { extname, basename, join, dirname, resolve } from 'node:path';
+import { discoverProject } from './discover.js';
+import { readFileSync, statSync } from 'node:fs';
+import { extname, basename, join, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { execSync as execSyncTop } from 'node:child_process';
@@ -774,7 +775,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['pr_url'],
       },
     },
-    // ── Phase 16: Workspace Discovery ─────────────────────────────────────────
+    // ── Phase 16: Workspace Discovery & Summarization ─────────────────────────
     {
       name: 'veto_discover',
       description: 'Scans a project directory and builds a rich context map: git state, tech stack, file structure, dependencies, and key config files. Stores the result in Veto memory so agents always have accurate project context. Call this once per project or after major structural changes.',
@@ -786,6 +787,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           store: { type: 'boolean', description: 'Whether to store the discovery in Veto memory as a project map. Default: true.' },
         },
         required: ['project_dir'],
+      },
+    },
+    {
+      name: 'veto_summarize',
+      description: 'Generates a concise expert briefing of a project, directory, or file. Use at the start of a session to orient yourself on unfamiliar code. Returns bullet-point summary, key components, tech stack, and entry points. Faster and higher-level than veto_explain.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          project_dir: { type: 'string', description: 'Absolute path to a project directory to summarize.' },
+          file_path:   { type: 'string', description: 'Absolute path to a single file to summarize. If both project_dir and file_path are given, file_path takes precedence.' },
+          focus:       { type: 'string', description: 'Optional focus area: e.g. "security", "APIs", "data flow", "architecture". Narrows the summary.' },
+          format:      { type: 'string', enum: ['brief', 'detailed'], description: 'brief: 4–6 bullet points (default). detailed: paragraph-level prose.' },
+        },
+        required: [],
       },
     },
   ],
@@ -843,7 +858,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   'plugins',
                   'docs_fetch', 'context_status', 'task_parse',
                   'usage_status', 'audit_log', 'health',
-                  'auto_save', 'discover',
+                  'auto_save', 'discover', 'summarize',
                 ],
                 db_path: getDbPath(),
                 uptime_ms: process.uptime() * 1000,
@@ -1885,10 +1900,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    // ── Phase 16: Workspace Discovery ─────────────────────────────────────────
+    // ── Phase 16: Workspace Discovery & Summarization ─────────────────────────
 
     case 'veto_discover': {
-      const discoverDir = resolve(String(args?.project_dir ?? '').trim());
+      const discoverDir = String(args?.project_dir ?? '').trim();
       const discoverDepth = (['quick', 'standard', 'full'].includes(String(args?.depth ?? '')))
         ? String(args!.depth) as 'quick' | 'standard' | 'full'
         : 'standard';
@@ -1901,137 +1916,94 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Directory not found: ${discoverDir}` }) }], isError: true };
       }
 
-      const dStart = Date.now();
-      const dExec = (cmd: string): string => {
-        try { return execSyncTop(cmd, { cwd: discoverDir, encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).trim(); }
-        catch { return ''; }
-      };
-      const dRead = (p: string): string | null => { try { return readFileSync(p, 'utf8'); } catch { return null; } };
+      const result = discoverProject(discoverDir, discoverDepth);
 
-      // ── Git state ──────────────────────────────────────────────────────────
-      const git_branch     = dExec('git rev-parse --abbrev-ref HEAD');
-      const git_remote     = dExec('git remote get-url origin');
-      const git_commit     = dExec('git rev-parse --short HEAD');
-      const git_status_raw = dExec('git status --short');
-      const git_log_raw    = dExec('git log --oneline -10 --no-color');
-      const dirty_files    = git_status_raw.split('\n').filter(Boolean).map(l => l.trim());
-      const recent_commits = git_log_raw.split('\n').filter(Boolean);
-
-      // ── Package metadata & stack ───────────────────────────────────────────
-      const ecosystems: Record<string, string> = {};
-      const tech_stack: string[] = [];
-      let dependencies: string[] = [];
-
-      const pkgRaw = dRead(join(discoverDir, 'package.json'));
-      if (pkgRaw) {
-        try {
-          const pkg = JSON.parse(pkgRaw) as Record<string, unknown>;
-          ecosystems['node'] = `${String(pkg.name ?? 'unknown')} v${String(pkg.version ?? '?')}`;
-          const allDeps = { ...(pkg.dependencies as Record<string, string> ?? {}), ...(pkg.devDependencies as Record<string, string> ?? {}) };
-          dependencies = Object.keys(allDeps).slice(0, 30);
-          tech_stack.push(...readProjectContext(discoverDir).tech_stack);
-        } catch { /* malformed */ }
-      }
-
-      const pyprojectRaw = dRead(join(discoverDir, 'pyproject.toml'));
-      const requirementsRaw = dRead(join(discoverDir, 'requirements.txt'));
-      if (pyprojectRaw || requirementsRaw) {
-        ecosystems['python'] = pyprojectRaw ? 'pyproject.toml' : 'requirements.txt';
-        if (!tech_stack.includes('Python')) tech_stack.push('Python');
-      }
-
-      const cargoRaw = dRead(join(discoverDir, 'Cargo.toml'));
-      if (cargoRaw) {
-        const nm = cargoRaw.match(/^name\s*=\s*"(.+)"/m);
-        const vm = cargoRaw.match(/^version\s*=\s*"(.+)"/m);
-        ecosystems['rust'] = `${nm?.[1] ?? 'crate'} v${vm?.[1] ?? '?'}`;
-        if (!tech_stack.includes('Rust')) tech_stack.push('Rust');
-      }
-
-      const goModRaw = dRead(join(discoverDir, 'go.mod'));
-      if (goModRaw) {
-        const mm = goModRaw.match(/^module\s+(.+)/m);
-        ecosystems['go'] = mm?.[1]?.trim() ?? 'go module';
-        if (!tech_stack.includes('Go')) tech_stack.push('Go');
-      }
-
-      // ── File tree (standard/full) ──────────────────────────────────────────
-      const file_count_by_ext: Record<string, number> = {};
-      const structure: string[] = [];
-      const SKIP_DIRS = new Set(['node_modules', '.git', '__pycache__', '.next', 'dist', 'build', 'target', '.cache', 'coverage', '.venv', 'venv', '.idea', '.vs', 'out', '.turbo']);
-
-      if (discoverDepth !== 'quick') {
-        const walkDir = (dir: string, prefix: string, d: number): void => {
-          if (d > 3 || structure.length > 200) return;
-          let entries: string[];
-          try { entries = readdirSync(dir); } catch { return; }
-          for (const entry of entries.filter(e => !SKIP_DIRS.has(e)).sort()) {
-            const full = join(dir, entry);
-            let st; try { st = statSync(full); } catch { continue; }
-            if (st.isDirectory()) {
-              structure.push(`${prefix}${entry}/`);
-              walkDir(full, prefix + '  ', d + 1);
-            } else {
-              structure.push(`${prefix}${entry}`);
-              const ext = extname(entry) || '(none)';
-              file_count_by_ext[ext] = (file_count_by_ext[ext] ?? 0) + 1;
-            }
-          }
-        };
-        walkDir(discoverDir, '', 0);
-      }
-
-      // ── Key config files ───────────────────────────────────────────────────
-      const CONFIG_CHECK = [
-        'tsconfig.json', 'vite.config.ts', 'vite.config.js', 'next.config.ts', 'next.config.js',
-        'tailwind.config.ts', 'tailwind.config.js', 'drizzle.config.ts', 'prisma/schema.prisma',
-        '.env.example', 'Dockerfile', 'docker-compose.yml', '.github/workflows',
-        'eslint.config.js', '.eslintrc.json', 'vitest.config.ts', 'jest.config.ts',
-        'pyproject.toml', 'requirements.txt', 'Cargo.toml', 'go.mod', 'CLAUDE.md', 'README.md',
-      ];
-      const key_files = CONFIG_CHECK.filter(f => { try { statSync(join(discoverDir, f)); return true; } catch { return false; } });
-
-      const total_files = Object.values(file_count_by_ext).reduce((s, c) => s + c, 0);
-      const unique_stack = [...new Set(tech_stack)];
-
-      // ── Store in Veto memory ───────────────────────────────────────────────
       if (discoverStore) {
         updateProjectMap({
-          project_dir: discoverDir,
-          structure: { ecosystems, key_files, file_count_by_ext, total_files, scanned_at: new Date().toISOString() },
-          key_modules: key_files,
-          tech_stack: unique_stack,
+          project_dir: result.project_dir,
+          structure: { ecosystems: result.ecosystems, key_files: result.key_files, file_count_by_ext: result.file_counts, total_files: result.total_files, scanned_at: result.scanned_at },
+          key_modules: result.key_files,
+          tech_stack: result.tech_stack,
         });
         storeKnowledge({
           type: 'solution',
-          title: `Project discovery: ${discoverDir}`,
-          content: `Stack: ${unique_stack.join(', ') || 'unknown'}. Branch: ${git_branch || 'none'}. Commit: ${git_commit || 'none'}. Files: ${total_files}. Ecosystems: ${Object.keys(ecosystems).join(', ') || 'none'}. Key files: ${key_files.join(', ')}.`,
-          tags: ['discover', ...unique_stack.map(t => t.toLowerCase().replace(/[^a-z0-9]/g, ''))],
-          project_dir: discoverDir,
+          title: `Project discovery: ${result.project_dir}`,
+          content: `Stack: ${result.tech_stack.join(', ') || 'unknown'}. Branch: ${result.git.branch || 'none'}. Commit: ${result.git.commit || 'none'}. Files: ${result.total_files}. Ecosystems: ${Object.keys(result.ecosystems).join(', ') || 'none'}. Key files: ${result.key_files.join(', ')}.`,
+          tags: ['discover', ...result.tech_stack.map(t => t.toLowerCase().replace(/[^a-z0-9]/g, ''))],
+          project_dir: result.project_dir,
         });
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            success: true,
-            stored: discoverStore,
-            project_dir: discoverDir,
-            scanned_at: new Date().toISOString(),
-            depth: discoverDepth,
-            git: { branch: git_branch || null, remote: git_remote || null, commit: git_commit || null, dirty_files, recent_commits },
-            ecosystems,
-            tech_stack: unique_stack,
-            dependencies,
-            key_files,
-            structure: discoverDepth !== 'quick' ? structure : [],
-            file_counts: file_count_by_ext,
-            total_files,
-            duration_ms: Date.now() - dStart,
-          }, null, 2),
-        }],
-      };
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, stored: discoverStore, ...result }, null, 2) }] };
+    }
+
+    case 'veto_summarize': {
+      const sumFilePath   = args?.file_path   ? String(args.file_path).trim()   : undefined;
+      const sumProjectDir = args?.project_dir ? String(args.project_dir).trim() : undefined;
+      const sumFocus      = args?.focus        ? String(args.focus)               : undefined;
+      const sumFormat     = args?.format === 'detailed' ? 'detailed' : 'brief';
+
+      if (!sumFilePath && !sumProjectDir) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'Provide project_dir or file_path.' }) }], isError: true };
+      }
+
+      const sumStart = Date.now();
+
+      // ── File summary ───────────────────────────────────────────────────────
+      if (sumFilePath) {
+        let fileContent: string;
+        try { fileContent = readFileSync(sumFilePath, 'utf8'); }
+        catch { return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Cannot read file: ${sumFilePath}` }) }], isError: true }; }
+
+        const ext = extname(sumFilePath).toLowerCase();
+        const name_ = basename(sumFilePath).toLowerCase();
+        let agent: WorkerAgentType = 'documentation';
+        if (['.tsx', '.jsx', '.vue', '.svelte'].includes(ext)) agent = 'frontend';
+        else if (['.sql', '.prisma'].includes(ext) || name_.includes('schema')) agent = 'database';
+        else if (/\.(test|spec)\.(ts|js)$/.test(name_)) agent = 'tester';
+        else if (['.yaml', '.yml', '.dockerfile'].includes(ext) || name_ === 'dockerfile') agent = 'devops';
+        else if (name_.includes('auth') || name_.includes('jwt')) agent = 'auth';
+
+        const focusNote = sumFocus ? ` Focus on: ${sumFocus}.` : '';
+        const depthNote = sumFormat === 'detailed' ? 'Write paragraph-level prose.' : 'Return 4–6 bullet points only.';
+        const task = `Summarize this file concisely for a developer who has never seen it.${focusNote} ${depthNote} File: ${basename(sumFilePath)}`;
+        const r = await executeOne({ id: 'sum-file', agent, task, code: fileContent.slice(0, 8000) });
+
+        return { content: [{ type: 'text', text: JSON.stringify({
+          success: true, subject: 'file', path: sumFilePath, format: sumFormat,
+          summary: r.plan ?? r.analysis ?? r.output,
+          agent_used: agent, duration_ms: Date.now() - sumStart,
+        }, null, 2) }] };
+      }
+
+      // ── Project / directory summary ────────────────────────────────────────
+      const discResult = discoverProject(sumProjectDir!, 'standard');
+      const ctx = [
+        `Project: ${sumProjectDir}`,
+        `Stack: ${discResult.tech_stack.join(', ') || 'unknown'}`,
+        `Ecosystems: ${JSON.stringify(discResult.ecosystems)}`,
+        `Key files: ${discResult.key_files.join(', ')}`,
+        `Total files: ${discResult.total_files}`,
+        `Git branch: ${discResult.git.branch ?? 'none'}, commit: ${discResult.git.commit ?? 'none'}`,
+        discResult.structure.length > 0 ? `\nFile tree (top 60 lines):\n${discResult.structure.slice(0, 60).join('\n')}` : '',
+      ].filter(Boolean).join('\n');
+
+      const focusNote = sumFocus ? ` Focus especially on: ${sumFocus}.` : '';
+      const depthNote = sumFormat === 'detailed' ? 'Write paragraph-level prose with sections.' : 'Return 5–7 bullet points that capture the essence.';
+      const task = `You are a senior engineer briefing a colleague on this codebase.${focusNote} ${depthNote} Be concise and precise — no filler.`;
+
+      const r = await executeOne({ id: 'sum-proj', agent: 'project-mapper', task, context: ctx });
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        success: true, subject: 'project', path: sumProjectDir, format: sumFormat,
+        tech_stack: discResult.tech_stack,
+        ecosystems: discResult.ecosystems,
+        key_files: discResult.key_files,
+        total_files: discResult.total_files,
+        git: discResult.git,
+        summary: r.plan ?? r.analysis ?? r.output,
+        agent_used: 'project-mapper', duration_ms: Date.now() - sumStart,
+      }, null, 2) }] };
     }
 
     default:
