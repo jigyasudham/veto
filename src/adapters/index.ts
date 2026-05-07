@@ -164,11 +164,12 @@ function buildContinueResult(session: ReturnType<typeof listSessions>[0], now: s
 export function getPlatformSetup(platform: Platform, vetoServerPath: string): PlatformSetupResult {
   const configs: Record<Platform, { configPath: string; configKey: string; installCmd: string; notes: string[] }> = {
     claude: {
-      configPath: '~/.claude/mcp_servers.json',
+      configPath: '~/.claude/settings.json (managed by `claude mcp add`)',
       configKey:  'mcpServers',
-      installCmd: 'npm install -g @jigyasudham/veto',
+      installCmd: 'claude mcp add veto -s user -- npx -y --package @jigyasudham/veto veto-server',
       notes: [
-        'Claude Code connects via stdio MCP — the server runs as a child process.',
+        'Claude Code manages MCPs via `claude mcp add`, NOT via mcp_servers.json.',
+        'The -s user flag is required — without it, the MCP is project-scoped and disappears in new windows.',
         'All veto_* tools appear natively in Claude Code once connected.',
         'Rate limits tracked per day — call veto_rate_status to check headroom.',
       ],
@@ -198,15 +199,25 @@ export function getPlatformSetup(platform: Platform, vetoServerPath: string): Pl
   const cfg = configs[platform] ?? configs['claude'];
   const mcpEntry = { command: 'npx', args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
 
+  const claudeSteps = [
+    `1. Run: claude mcp add veto -s user -- npx -y --package @jigyasudham/veto veto-server`,
+    `   The -s user flag makes Veto available in ALL Claude Code windows and projects.`,
+    `2. Fully restart Claude Code (quit and reopen — not just reload window)`,
+    `3. Verify: call veto_status — should return { "status": "running" }`,
+    `   Tip: run this once and it persists globally. No need to re-run per project.`,
+  ];
+
+  const genericSteps = [
+    `1. Install: ${cfg.installCmd}`,
+    `2. Run: npx @jigyasudham/veto init  (writes MCP config to ${cfg.configPath})`,
+    `3. Fully restart ${platform} CLI (config is global — applies to all projects)`,
+    `4. Verify: call veto_status — should return { "status": "running" }`,
+  ];
+
   return {
     platform,
     mcp_config: { [cfg.configKey]: { veto: mcpEntry } },
-    setup_steps: [
-      `1. Install: ${cfg.installCmd}`,
-      `2. Run: npx @jigyasudham/veto init  (writes MCP config automatically)`,
-      `3. Restart ${platform} CLI`,
-      `4. Verify: call veto_status — should return { "status": "running", "phase": 15 }`,
-    ],
+    setup_steps: platform === 'claude' ? claudeSteps : genericSteps,
     rate_limit_signals: ['rate limit', 'too many requests', '429', 'quota exceeded', 'resource exhausted'],
     continue_command: 'veto_continue',
     notes: cfg.notes,

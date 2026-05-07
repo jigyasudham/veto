@@ -6,6 +6,7 @@ process.removeAllListeners('warning');
 
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, extname, resolve } from 'node:path';
+import { execSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -32,7 +33,7 @@ function printBanner() {
   console.log(c.bold(c.cyan('   ╚████╔╝ ███████╗   ██║   ╚██████╔╝')));
   console.log(c.bold(c.cyan('    ╚═══╝  ╚══════╝   ╚═╝    ╚═════╝')));
   console.log('');
-  console.log(c.dim(`  50 agents. 43 tools. 3 AIs. Self-learning. Zero extra cost.`));
+  console.log(c.dim(`  50 agents. 44 tools. 3 AIs. Self-learning. Zero extra cost.`));
   console.log(c.dim(`  v${VERSION}`));
   console.log('');
 }
@@ -74,13 +75,9 @@ function writeVetoConfig(
 }
 
 // All platforms Veto supports, with their config paths and formats.
+// Claude Code is NOT in this list — it's handled separately via `claude mcp add -s user`
+// because Claude Code does NOT read mcp_servers.json; it uses its own internal MCP registry.
 const PLATFORMS = [
-  {
-    name: 'Claude Code',
-    path: join(HOME, '.claude', 'mcp_servers.json'),
-    format: 'mcpServers' as const,
-    detectionDir: join(HOME, '.claude'),
-  },
   {
     name: 'Gemini CLI',
     path: join(HOME, '.gemini', 'settings.json'),
@@ -163,6 +160,41 @@ async function initCommand() {
   let configured = 0;
   let skipped = 0;
 
+  // ── Claude Code: use `claude mcp add -s user` (global across all windows/projects) ──
+  // Claude Code does NOT read mcp_servers.json — it manages MCPs via its own registry.
+  // The -s user flag stores the config at user scope so every window/project picks it up.
+  const claudeDir = join(HOME, '.claude');
+  if (existsSync(claudeDir)) {
+    const mcpCmd = 'claude mcp add veto -s user -- npx -y --package @jigyasudham/veto veto-server';
+    try {
+      execSync(mcpCmd, { stdio: 'pipe', timeout: 15000 });
+      console.log(c.green('  ✓ ') + 'Claude Code — registered (user scope: all windows & projects)');
+      configured++;
+    } catch (err: unknown) {
+      const stderr = (err instanceof Error && 'stderr' in err) ? String((err as NodeJS.ErrnoException & { stderr?: Buffer }).stderr) : '';
+      // "already exists" means it was previously registered — treat as success
+      if (/already|exists/i.test(stderr)) {
+        console.log(c.green('  ✓ ') + 'Claude Code — already registered (user scope)');
+        configured++;
+      } else {
+        // claude CLI not in PATH — fall back to ~/.claude/settings.json directly
+        const result = writeVetoConfig(join(claudeDir, 'settings.json'), 'mcpServers');
+        if (result === 'skipped') {
+          console.log(c.yellow('  ⚠ ') + 'Claude Code — could not auto-configure. Run manually:');
+          console.log(c.dim(`          ${mcpCmd}`));
+          skipped++;
+        } else {
+          console.log(c.yellow('  ⚠ ') + `Claude Code — wrote settings.json (restart Claude Code)`);
+          console.log(c.dim(`         For global scope, also run: ${mcpCmd}`));
+          configured++;
+        }
+      }
+    }
+  } else {
+    console.log(c.dim('  · ') + c.dim('Claude Code — not detected, skipping'));
+  }
+
+  // ── All other platforms: write global config files ─────────────────────────
   for (const platform of PLATFORMS) {
     const detected = existsSync(platform.detectionDir);
     if (!detected) {
@@ -176,10 +208,10 @@ async function initCommand() {
       console.log(c.yellow('  ⚠ ') + `${platform.name} — config unreadable, skipped`);
       skipped++;
     } else if (result === 'created') {
-      console.log(c.green('  ✓ ') + `${platform.name} — configured`);
+      console.log(c.green('  ✓ ') + `${platform.name} — configured (restart ${platform.name} to pick up)`);
       configured++;
     } else {
-      console.log(c.green('  ✓ ') + `${platform.name} — updated`);
+      console.log(c.green('  ✓ ') + `${platform.name} — updated (restart ${platform.name} to pick up)`);
       configured++;
     }
   }
@@ -191,11 +223,16 @@ async function initCommand() {
     console.log('  Install Claude Code, Gemini CLI, or Codex CLI and run veto init again.');
     console.log('');
   } else {
+    console.log('');
     console.log(c.green(`  ✓ Veto configured for ${configured} tool${configured !== 1 ? 's' : ''}!`));
     console.log('');
     console.log('  Next steps:');
-    console.log(c.dim('  1.') + ' Restart your AI CLI or IDE');
-    console.log(c.dim('  2.') + ' Run: veto_status  — should return { "status": "running", "version": "' + VERSION + '" }');
+    console.log(c.dim('  1.') + ' Fully restart each configured AI client (not just reload)');
+    console.log(c.dim('  2.') + ' For Claude Code: config is user-scoped — every window picks it up automatically');
+    console.log(c.dim('  3.') + ' For Gemini / Cursor / Windsurf: config is written globally to your home dir');
+    console.log(c.dim('  4.') + ' Verify: call veto_status in your AI client — should return { "status": "running" }');
+    console.log('');
+    console.log(c.dim('  Tip: run `veto init` again anytime to install newly-added AI tools.'));
     console.log('');
   }
 }
@@ -360,7 +397,7 @@ async function patternsCommand() {
 
 function helpCommand() {
   console.log('');
-  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(' — 50 agents. 43 tools. 3 AIs. Self-learning. Zero extra cost.'));
+  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(' — 50 agents. 44 tools. 3 AIs. Self-learning. Zero extra cost.'));
   console.log('');
   console.log(c.bold('  CLI Commands'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
@@ -371,7 +408,7 @@ function helpCommand() {
   console.log(`  ${c.cyan('veto patterns')} ${c.dim('[prefix]')}      List learned agent/routing patterns`);
   console.log(`  ${c.cyan('veto help')}                    Show this help`);
   console.log('');
-  console.log(c.bold('  MCP Tools (41)'));
+  console.log(c.bold('  MCP Tools (44)'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
   console.log(`  ${c.dim('Session')}       veto_status · veto_session_save · veto_session_restore · veto_sessions_list`);
   console.log(`  ${c.dim('Router')}        veto_route_task · veto_rate_status`);
@@ -388,7 +425,8 @@ function helpCommand() {
   console.log(`  ${c.dim('Handoff')}       veto_handoff · veto_continue · veto_platform_setup`);
   console.log(`  ${c.dim('Intelligence')}  veto_docs_fetch · veto_context_status · veto_task_parse`);
   console.log(`  ${c.dim('Observability')} veto_usage_status · veto_audit_log · veto_health`);
-  console.log(`  ${c.dim('CI/CD')}         veto_ci_gate`);
+  console.log(`  ${c.dim('CI/CD')}         veto_ci_gate · veto_pr_review`);
+  console.log(`  ${c.dim('Discover')}      veto_discover`);
   console.log(`  ${c.dim('Plugins')}       veto_plugins`);
   console.log('');
   console.log(c.bold('  MCP Resources'));
@@ -404,6 +442,12 @@ function helpCommand() {
   console.log('');
   console.log(c.bold('  Troubleshooting'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
+  console.log(`  ${c.yellow('Veto not available in a new VS Code window / project')}`);
+  console.log(`  ${c.dim('→')} Claude Code: MCP must be registered at user scope, not project scope`);
+  console.log(`  ${c.dim('→')} Run: ${c.cyan('claude mcp add veto -s user -- npx -y --package @jigyasudham/veto veto-server')}`);
+  console.log(`  ${c.dim('→')} The ${c.cyan('-s user')} flag makes Veto global across ALL windows and projects`);
+  console.log(`  ${c.dim('→')} Gemini / Cursor / Windsurf: run ${c.cyan('veto init')} once — config is written globally`);
+  console.log('');
   console.log(`  ${c.yellow('MCP disconnected / tools not loading')}`);
   console.log(`  ${c.dim('→')} Run ${c.cyan('veto init')} again, then fully restart your AI client (Claude / Gemini / Cursor)`);
   console.log(`  ${c.dim('→')} Verify the MCP entry in your AI client config file`);
