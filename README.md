@@ -1,8 +1,8 @@
 # veto
 
-> **50 agents. 41 tools. 3 AIs. Self-learning. Zero extra cost.**
+> **50 agents. 42 tools. 3 AIs. Self-learning. Zero extra cost.**
 
-An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, and Gemini CLI using your existing subscriptions — giving every AI a council of specialist agents, persistent cross-platform memory, a self-learning router, live usage tracking, CI/CD pipeline gates, live documentation fetching, and the ability to say no to bad decisions.
+An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, and Gemini CLI using your existing subscriptions — giving every AI a council of specialist agents, persistent cross-platform memory, a self-learning router, live usage tracking, CI/CD pipeline gates, live documentation fetching, auto session save, and the ability to say no to bad decisions.
 
 ---
 
@@ -116,11 +116,11 @@ VS Code uses `"servers"` with `"type": "stdio"`:
 
 ---
 
-## MCP Tools (41)
+## MCP Tools (42)
 
 | Category | Tools |
 |---|---|
-| **Session** | `veto_status` · `veto_session_save` · `veto_session_restore` · `veto_sessions_list` |
+| **Session** | `veto_status` · `veto_session_save` · `veto_session_restore` · `veto_sessions_list` · `veto_autosave_status` |
 | **Router** | `veto_route_task` · `veto_rate_status` |
 | **Council** | `veto_council_debate` |
 | **Agents** | `veto_agent_plan` · `veto_execute_parallel` · `veto_explain` |
@@ -174,7 +174,7 @@ npx @jigyasudham/veto help       # Same help output, no install needed
 npx @jigyasudham/veto status     # Check status from any machine
 ```
 
-`veto help` shows all CLI commands, all 41 MCP tool names, MCP Resources, and MCP Prompts — the full reference in one place.
+`veto help` shows all CLI commands, all 42 MCP tool names, MCP Resources, and MCP Prompts — the full reference in one place.
 
 ---
 
