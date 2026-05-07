@@ -7,8 +7,10 @@ process.removeAllListeners('warning');
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, extname, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 
-const VERSION = '1.2.2';
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const { version: VERSION } = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
 const VETO_DIR = join(homedir(), '.veto');
 const HOME = homedir();
 
@@ -30,7 +32,7 @@ function printBanner() {
   console.log(c.bold(c.cyan('   ╚████╔╝ ███████╗   ██║   ╚██████╔╝')));
   console.log(c.bold(c.cyan('    ╚═══╝  ╚══════╝   ╚═╝    ╚═════╝')));
   console.log('');
-  console.log(c.dim(`  50 agents. 41 tools. 3 AIs. Self-learning. Zero extra cost.`));
+  console.log(c.dim(`  50 agents. 43 tools. 3 AIs. Self-learning. Zero extra cost.`));
   console.log(c.dim(`  v${VERSION}`));
   console.log('');
 }
@@ -358,7 +360,7 @@ async function patternsCommand() {
 
 function helpCommand() {
   console.log('');
-  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(' — 50 agents. 41 tools. 3 AIs. Self-learning. Zero extra cost.'));
+  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(' — 50 agents. 43 tools. 3 AIs. Self-learning. Zero extra cost.'));
   console.log('');
   console.log(c.bold('  CLI Commands'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
