@@ -1,8 +1,8 @@
 # veto
 
-> **50 agents. 43 tools. 3 AIs. Self-learning. Zero extra cost.**
+> **50 agents. 45 tools. 3 AIs. Self-learning. Zero extra cost.**
 
-An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, and Gemini CLI using your existing subscriptions — giving every AI a council of specialist agents, persistent cross-platform memory, a self-learning router, live usage tracking, CI/CD pipeline gates, live documentation fetching, auto session save, and the ability to say no to bad decisions.
+An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, and Gemini CLI using your existing subscriptions — giving every AI a council of specialist agents, persistent cross-platform memory, a self-learning router, live usage tracking, CI/CD pipeline gates, workspace discovery, live documentation fetching, auto session save, and the ability to say no to bad decisions.
 
 ---
 
@@ -25,35 +25,33 @@ node --version   # must be v22.5.0 or higher
 npx @jigyasudham/veto@latest init
 ```
 
-`init` auto-detects every AI tool installed on your machine, configures them all, and builds a project map from your current directory — no manual steps.
+`init` auto-detects every AI tool installed on your machine, configures them all in one shot, and builds a project map from your current directory — no manual steps.
 
-| Platform | Config file |
+### Claude Code (global — works in every window and project)
+
+```bash
+claude mcp add veto -s user -- npx -y --package @jigyasudham/veto veto-server
+```
+
+The `-s user` flag registers Veto at user scope so it is available in **every VS Code window and project** without re-running anything. `veto init` does this automatically.
+
+### Other platforms
+
+| Platform | Config file written by `veto init` |
 |---|---|
-| **Claude Code** | `~/.claude/mcp_servers.json` |
 | **Gemini CLI** | `~/.gemini/settings.json` |
 | **Codex CLI** | `~/.codex/config.json` |
 | **Cursor** | `~/.cursor/mcp.json` |
 | **Windsurf** | `~/.codeium/windsurf/mcp_config.json` |
-| **VS Code** | `.vscode/mcp.json` |
+
+All config files are home-directory relative — they apply globally across all projects and windows. Restart the AI client after `veto init` to pick up the new config.
 
 ```json
 {
   "mcpServers": {
     "veto": {
-      "command": "veto-server"
-    }
-  }
-}
-```
-
-VS Code uses `"servers"` with `"type": "stdio"`:
-
-```json
-{
-  "servers": {
-    "veto": {
-      "type": "stdio",
-      "command": "veto-server"
+      "command": "npx",
+      "args": ["-y", "--package", "@jigyasudham/veto", "veto-server"]
     }
   }
 }
@@ -74,6 +72,10 @@ VS Code uses `"servers"` with `"type": "stdio"`:
 **50 Agents** — Domain experts for every task type. Each agent knows when it is the right tool and when to defer.
 
 **Memory** — Sessions, decisions, knowledge, and coding patterns persist across every conversation and every platform. Memory is automatically scoped to the active session's project directory — two instances working on different projects stay isolated without any extra configuration.
+
+**Workspace discovery** — `veto_discover` scans a project once and builds a rich context map: git state, tech stack, file tree, dependencies, and key config files. Stored in Veto memory so every agent has accurate project context without re-reading files each time.
+
+**Project summarization** — `veto_summarize` generates a concise expert briefing of a project, directory, or file in seconds. Use it at the start of a session to orient yourself on unfamiliar code.
 
 **Diff review** — `veto_diff_review` runs code review, security scan, and secrets scan in parallel across a git diff. Returns a pass/warn/fail verdict with per-file findings — ready for CI and pre-commit hooks.
 
@@ -116,7 +118,7 @@ VS Code uses `"servers"` with `"type": "stdio"`:
 
 ---
 
-## MCP Tools (42)
+## MCP Tools (45)
 
 | Category | Tools |
 |---|---|
@@ -133,6 +135,7 @@ VS Code uses `"servers"` with `"type": "stdio"`:
 | **Intelligence** | `veto_docs_fetch` · `veto_context_status` · `veto_task_parse` |
 | **Observability** | `veto_usage_status` · `veto_audit_log` · `veto_health` |
 | **CI/CD** | `veto_ci_gate` · `veto_pr_review` |
+| **Discover** | `veto_discover` · `veto_summarize` |
 | **Plugins** | `veto_plugins` |
 
 ## MCP Resources
@@ -163,6 +166,7 @@ After installing globally (`npm i -g @jigyasudham/veto`) or via npx:
 
 ```bash
 veto init                        # Configure all AI tools + scan project
+veto doctor                      # Check MCP registrations + system health
 veto status                      # Version, DB path, session/memory/outcome counts
 veto sessions                    # List last 20 saved sessions
 veto memory [query]              # Search knowledge base (blank = all entries)
@@ -172,9 +176,85 @@ veto help                        # Full command + MCP tools reference
 # Without installing:
 npx @jigyasudham/veto help       # Same help output, no install needed
 npx @jigyasudham/veto status     # Check status from any machine
+npx @jigyasudham/veto doctor     # Diagnose MCP setup from any machine
 ```
 
-`veto help` shows all CLI commands, all 43 MCP tool names, MCP Resources, and MCP Prompts — the full reference in one place.
+`veto help` shows all CLI commands, all 45 MCP tool names, MCP Resources, and MCP Prompts — the full reference in one place.
+
+### `veto doctor`
+
+Diagnoses your full Veto setup in one command:
+
+```
+veto doctor
+
+  Veto Doctor — system health check
+  ─────────────────────────────────────────────────────
+  ✓ Node.js v22.5.0
+  ✓ ~/.veto exists
+  ✓ Database ~/.veto/veto.db
+    17 sessions · 12 memories · 3 patterns
+
+  MCP Registrations
+  ─────────────────────────────────────────────────────
+  ✓ Claude Code — registered
+  ✓ Gemini CLI — registered
+  · Codex CLI — not installed
+  · Cursor — not installed
+
+  ✓ All checks passed — Veto is healthy!
+```
+
+Run `veto init` to repair any failing check.
+
+---
+
+## Workspace Discovery
+
+`veto_discover` scans a project once and stores a rich context map in Veto memory. Every subsequent agent call can read from this map instead of re-scanning files.
+
+```
+veto_discover { "project_dir": "/your/project" }
+→ {
+    git:        { branch: "main", commit: "a3f2b1", dirty_files: [], recent_commits: [...] },
+    ecosystems: { node: "my-app v2.1.0" },
+    tech_stack: ["TypeScript", "React", "Prisma"],
+    key_files:  ["tsconfig.json", "prisma/schema.prisma", ".env.example"],
+    total_files: 142,
+    structure:  ["src/", "  components/", "  api/", ...]
+  }
+```
+
+Three depth levels: `quick` (git + package metadata only), `standard` (+ file tree, default), `full`.
+
+---
+
+## Project Summarization
+
+`veto_summarize` gives you a concise expert briefing on any project or file — useful when starting work on unfamiliar code.
+
+```
+veto_summarize { "project_dir": "/your/project" }
+→ {
+    subject: "project",
+    tech_stack: ["TypeScript", "Next.js", "Prisma"],
+    summary: {
+      bullets: [
+        "Full-stack Next.js app with Prisma ORM and PostgreSQL",
+        "Auth via NextAuth — sessions stored in DB, not JWT",
+        "API routes under /src/app/api — RESTful, no tRPC",
+        "Background jobs via BullMQ with Redis",
+        "Deployed on Vercel — preview branches auto-deploy"
+      ]
+    }
+  }
+
+# File-level:
+veto_summarize { "file_path": "/your/project/src/auth.ts", "focus": "security" }
+
+# Detailed prose instead of bullets:
+veto_summarize { "project_dir": "/your/project", "format": "detailed" }
+```
 
 ---
 
@@ -352,7 +432,6 @@ Machine B  →  veto_memory_import  →  veto_session_restore
 | Codex CLI | ✅ MCP support |
 | Cursor | ✅ MCP support |
 | Windsurf | ✅ MCP support |
-| VS Code | ✅ MCP support |
 
 ---
 
@@ -374,7 +453,8 @@ Machine B  →  veto_memory_import  →  veto_session_restore
 | 12 — CLI Subcommands + Diff Review | ✅ Complete | v1.0.0 |
 | 13 — Developer Intelligence + Auto Docs | ✅ Complete | v1.1.0 |
 | 14 — Observability + Usage Stats + Audit Log | ✅ Complete | v1.2.0 |
-| 15 — CI/CD Pipeline Gates | ✅ Complete | v1.2.0 |
+| 15 — CI/CD Gates + GitHub PR Review | ✅ Complete | v1.2.5 |
+| 16 — Workspace Discovery + Summarization + Doctor | ✅ Complete | v1.2.8 |
 
 ---
 
@@ -384,7 +464,7 @@ Machine B  →  veto_memory_import  →  veto_session_restore
 - **Runtime:** Node.js 22.5+ (built-in `node:sqlite` — no native compilation)
 - **Dependencies:** `@modelcontextprotocol/sdk` only — one package, zero native addons
 - **Memory:** Local SQLite — zero config, works offline, portable via JSON export
-- **Platforms:** Claude Code · Gemini CLI · Codex CLI · Cursor · Windsurf · VS Code
+- **Platforms:** Claude Code · Gemini CLI · Codex CLI · Cursor · Windsurf
 
 ---
 

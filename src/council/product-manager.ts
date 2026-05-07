@@ -87,7 +87,7 @@ const TOPIC_INSIGHTS: Array<{ pattern: RegExp; concern: string; recommendation: 
   },
   {
     pattern: /discover|onboard|help|tutorial|guide|doc/i,
-    concern: '41 tools is above the cognitive load threshold for new users. Without discoverability, most tools will never be used — this is the retention killer for complex products.',
+    concern: '45 tools is above the cognitive load threshold for new users. Without discoverability, most tools will never be used — this is the retention killer for complex products.',
     recommendation: 'Add veto_discover immediately. Track which tools get called most. Consider a first-run guided experience via veto_status output.',
   },
   {

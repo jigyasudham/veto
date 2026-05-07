@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Veto MCP Server — 41 tools, 15 phases, self-learning router
+// Veto MCP Server — 45 tools, 16 phases, self-learning router
 
 // Suppress node:sqlite experimental warning — it would corrupt the MCP stdio protocol
 process.removeAllListeners('warning');
@@ -842,7 +842,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 status: 'running',
                 version: VERSION,
                 server: 'veto',
-                phase: 16,
+                phase: 17,
                 capabilities: [
                   'session_save', 'session_restore', 'sessions_list',
                   'router', 'rate_monitor',

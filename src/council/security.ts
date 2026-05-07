@@ -187,7 +187,7 @@ export function analyze(task: string): AgentVote {
     },
     {
       pattern: /http|transport|remote|server|port|network/i,
-      concern: 'Adding HTTP transport changes Veto from a local-only tool to a network service. Without authentication and TLS, any process on the local network can call all 41 tools including memory deletion and file watching.',
+      concern: 'Adding HTTP transport changes Veto from a local-only tool to a network service. Without authentication and TLS, any process on the local network can call all 45 tools including memory deletion and file watching.',
       recommendation: 'HTTP transport must require authentication from day one — even locally. Use mutual TLS or bearer tokens. Bind to 127.0.0.1 by default, not 0.0.0.0.',
     },
     {

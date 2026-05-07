@@ -140,8 +140,8 @@ export function analyze(task: string): AgentVote {
       recommendation: 'Default to minimal UI: one status bar item. Expand to sidebar only when user explicitly enables it. Follow VS Code\'s own design patterns and icon conventions.',
     },
     {
-      pattern: /41.?tool|tool.?count|tool.?list|discover/i,
-      concern: '41 tools requires users to read documentation before they can use the product. No tool is valuable if users can\'t discover it exists.',
+      pattern: /45.?tool|tool.?count|tool.?list|discover/i,
+      concern: '45 tools requires users to read documentation before they can use the product. No tool is valuable if users can\'t discover it exists.',
       recommendation: 'Make veto_discover the entry point. Ship it as the first thing users learn about. Consider surfacing 3 "most useful for your current task" recommendations automatically.',
     },
     {
