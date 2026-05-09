@@ -60,13 +60,14 @@ function writeVetoConfig(
 
   const wasEmpty = Object.keys(existing).length === 0;
 
+  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   if (format === 'mcpServers') {
     const servers = (existing.mcpServers as Record<string, unknown>) ?? {};
-    servers['veto'] = { command: 'npx', args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
+    servers['veto'] = { command: npxCmd, args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
     existing.mcpServers = servers;
   } else {
     const servers = (existing.servers as Record<string, unknown>) ?? {};
-    servers['veto'] = { type: 'stdio', command: 'npx', args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
+    servers['veto'] = { type: 'stdio', command: npxCmd, args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
     existing.servers = servers;
   }
 
