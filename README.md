@@ -458,6 +458,24 @@ Machine B  →  veto_memory_import  →  veto_session_restore
 
 ---
 
+## Changelog
+
+### v1.2.11
+- **fix:** `veto init` now registers Codex CLI via `codex mcp add` (writes to `~/.codex/config.toml`) instead of `config.json` — Codex CLI ignores `mcpServers` in JSON entirely
+- **fix:** `veto doctor` checks `codex mcp list` / `config.toml` for Codex registration instead of the wrong `config.json` key
+- **fix:** `veto_platform_setup` for Codex now shows the correct TOML-based config path, `codex mcp add` install command, and a Windows `npx.cmd` note
+- **fix:** Windows — `veto init` passes `npx.cmd` to `codex mcp add` so the Codex Rust binary can resolve the command
+
+### v1.2.10
+- **fix:** `veto init` writes `npx.cmd` (not `npx`) for all platform configs on Windows — Node's `child_process.spawn` cannot resolve bare `npx` on Windows
+
+### v1.2.8 — v1.2.9
+- `veto_summarize` tool — compress any session into a portable summary
+- `veto doctor` CLI command — full system health check with per-platform registration status
+- Shared `discover` module powering both `veto_discover` and `veto init` project scanning
+
+---
+
 ## Tech Stack
 
 - **Language:** TypeScript (strict mode)
