@@ -39,7 +39,7 @@ function printBanner() {
 }
 
 // Merge veto entry into an existing JSON config file, creating it if needed.
-// Supports both "mcpServers" format (Claude/Gemini/Codex/Cursor/Windsurf)
+// Supports both "mcpServers" format (Gemini/Cursor/Windsurf)
 // and "servers" format (VS Code).
 function writeVetoConfig(
   configPath: string,
@@ -75,21 +75,33 @@ function writeVetoConfig(
   return wasEmpty ? 'created' : 'updated';
 }
 
+// Append a [mcp_servers.veto] section to a TOML config file (used for Codex CLI fallback).
+function writeVetoTomlEntry(configPath: string): 'created' | 'updated' | 'skipped' {
+  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  try {
+    let existing = '';
+    if (existsSync(configPath)) {
+      try { existing = readFileSync(configPath, 'utf8'); } catch { return 'skipped'; }
+      if (/\[mcp_servers\.veto\]/.test(existing)) return 'updated';
+    }
+    const entry = `\n[mcp_servers.veto]\ncommand = '${npxCmd}'\nargs = ['-y', '--package', '@jigyasudham/veto', 'veto-server']\n`;
+    writeFileSync(configPath, existing + entry, 'utf8');
+    return existing.trim() === '' ? 'created' : 'updated';
+  } catch {
+    return 'skipped';
+  }
+}
+
 // All platforms Veto supports, with their config paths and formats.
-// Claude Code is NOT in this list — it's handled separately via `claude mcp add -s user`
-// because Claude Code does NOT read mcp_servers.json; it uses its own internal MCP registry.
+// Claude Code and Codex CLI are NOT in this list — they are handled separately via
+// their own CLIs (`claude mcp add -s user` / `codex mcp add`) because they store MCP
+// registrations internally and do NOT read plain mcpServers JSON files.
 const PLATFORMS = [
   {
     name: 'Gemini CLI',
     path: join(HOME, '.gemini', 'settings.json'),
     format: 'mcpServers' as const,
     detectionDir: join(HOME, '.gemini'),
-  },
-  {
-    name: 'Codex CLI',
-    path: join(HOME, '.codex', 'config.json'),
-    format: 'mcpServers' as const,
-    detectionDir: join(HOME, '.codex'),
   },
   {
     name: 'Cursor',
@@ -199,6 +211,39 @@ async function initCommand() {
     }
   } else {
     console.log(c.dim('  · ') + c.dim('Claude Code — not detected, skipping'));
+  }
+
+  // ── Codex CLI: use `codex mcp add` (writes to config.toml, NOT config.json) ──
+  // Codex CLI stores MCP servers under [mcp_servers.name] in config.toml.
+  // Writing to config.json with mcpServers format has no effect on Codex.
+  const codexDir = join(HOME, '.codex');
+  if (existsSync(codexDir)) {
+    const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+    const codexMcpCmd = `codex mcp add veto -- ${npxCmd} -y --package @jigyasudham/veto veto-server`;
+    try {
+      execSync(codexMcpCmd, { stdio: 'pipe', timeout: 15000 });
+      console.log(c.green('  ✓ ') + 'Codex CLI — registered');
+      configured++;
+    } catch (err: unknown) {
+      const stderr = (err instanceof Error && 'stderr' in err) ? String((err as NodeJS.ErrnoException & { stderr?: Buffer }).stderr) : '';
+      if (/already|exists/i.test(stderr)) {
+        console.log(c.green('  ✓ ') + 'Codex CLI — already registered');
+        configured++;
+      } else {
+        // codex CLI not in PATH — write directly to config.toml
+        const tomlResult = writeVetoTomlEntry(join(codexDir, 'config.toml'));
+        if (tomlResult === 'skipped') {
+          console.log(c.yellow('  ⚠ ') + 'Codex CLI — could not auto-configure. Run manually:');
+          console.log(c.dim(`          ${codexMcpCmd}`));
+          skipped++;
+        } else {
+          console.log(c.yellow('  ⚠ ') + 'Codex CLI — wrote config.toml (restart Codex to pick up)');
+          configured++;
+        }
+      }
+    }
+  } else {
+    console.log(c.dim('  · ') + c.dim('Codex CLI — not detected, skipping'));
   }
 
   // ── All other platforms: write global config files ─────────────────────────
@@ -321,10 +366,37 @@ async function doctorCommand() {
     console.log(`  ${c.dim('·')} ${c.dim('Claude Code — not installed')}`);
   }
 
+  // Codex CLI — check via `codex mcp list`, fall back to reading config.toml
+  const codexDirD = join(HOME, '.codex');
+  if (existsSync(codexDirD)) {
+    let codexOk = false;
+    try {
+      const out = execSync('codex mcp list', { encoding: 'utf8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] });
+      if (/veto/i.test(out)) { codexOk = true; }
+    } catch { /* codex CLI not in PATH */ }
+
+    if (!codexOk) {
+      try {
+        const toml = readFileSync(join(codexDirD, 'config.toml'), 'utf8');
+        if (/\[mcp_servers\.veto\]/.test(toml)) { codexOk = true; }
+      } catch { /* skip */ }
+    }
+
+    if (codexOk) {
+      console.log(`  ${c.green('✓')} Codex CLI — registered`);
+    } else {
+      const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+      console.log(`  ${c.red('✗')} Codex CLI — not registered`);
+      console.log(`  ${c.dim(`    fix: codex mcp add veto -- ${npxCmd} -y --package @jigyasudham/veto veto-server`)}`);
+      issues++;
+    }
+  } else {
+    console.log(`  ${c.dim('·')} ${c.dim('Codex CLI — not installed')}`);
+  }
+
   // Other platforms — check their config JSON files
   const platforms = [
     { name: 'Gemini CLI', configPath: join(HOME, '.gemini', 'settings.json'),               detectionDir: join(HOME, '.gemini'),             key: 'mcpServers' },
-    { name: 'Codex CLI',  configPath: join(HOME, '.codex', 'config.json'),                  detectionDir: join(HOME, '.codex'),              key: 'mcpServers' },
     { name: 'Cursor',     configPath: join(HOME, '.cursor', 'mcp.json'),                    detectionDir: join(HOME, '.cursor'),             key: 'mcpServers' },
     { name: 'Windsurf',   configPath: join(HOME, '.codeium', 'windsurf', 'mcp_config.json'), detectionDir: join(HOME, '.codeium', 'windsurf'), key: 'mcpServers' },
   ];

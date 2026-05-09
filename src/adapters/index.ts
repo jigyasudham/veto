@@ -185,12 +185,14 @@ export function getPlatformSetup(platform: Platform, vetoServerPath: string): Pl
       ],
     },
     codex: {
-      configPath: '~/.codex/config.json',
-      configKey:  'mcpServers',
-      installCmd: 'npm install -g @openai/codex',
+      configPath: '~/.codex/config.toml (managed by `codex mcp add`)',
+      configKey:  'mcp_servers.veto',
+      installCmd: 'codex mcp add veto -- npx -y --package @jigyasudham/veto veto-server',
       notes: [
-        'Codex CLI connects via stdio MCP — same server instance as Claude and Gemini.',
-        'Uses GPT-4o / o4-mini depending on the tier assigned by the Veto router.',
+        'Codex CLI stores MCP servers in config.toml under [mcp_servers.name], NOT in config.json.',
+        'Use `codex mcp add veto -- npx -y --package @jigyasudham/veto veto-server` to register.',
+        'On Windows, replace `npx` with `npx.cmd` — the Rust binary cannot resolve bare npx.',
+        'Verify registration with `codex mcp list` — veto should appear as enabled.',
         'ChatGPT web app does NOT support MCP — Codex CLI is the only OpenAI option.',
       ],
     },
@@ -207,6 +209,16 @@ export function getPlatformSetup(platform: Platform, vetoServerPath: string): Pl
     `   Tip: run this once and it persists globally. No need to re-run per project.`,
   ];
 
+  const codexSteps = [
+    `1. Run: codex mcp add veto -- npx -y --package @jigyasudham/veto veto-server`,
+    `   On Windows, use npx.cmd instead of npx (Codex Rust binary requires the .cmd extension).`,
+    `   Windows: codex mcp add veto -- npx.cmd -y --package @jigyasudham/veto veto-server`,
+    `2. Verify registration: codex mcp list  (veto should appear as enabled)`,
+    `3. Fully restart Codex CLI`,
+    `4. Verify: call veto_status — should return { "status": "running" }`,
+    `   NOTE: Do NOT edit ~/.codex/config.json — Codex ignores mcpServers in that file.`,
+  ];
+
   const genericSteps = [
     `1. Install: ${cfg.installCmd}`,
     `2. Run: npx @jigyasudham/veto init  (writes MCP config to ${cfg.configPath})`,
@@ -214,10 +226,17 @@ export function getPlatformSetup(platform: Platform, vetoServerPath: string): Pl
     `4. Verify: call veto_status — should return { "status": "running" }`,
   ];
 
+  const codexMcpConfig = {
+    toml_path: '~/.codex/config.toml',
+    toml_entry: '[mcp_servers.veto]\ncommand = \'npx.cmd\'  # Windows; use \'npx\' on Linux/Mac\nargs = [\'-y\', \'--package\', \'@jigyasudham/veto\', \'veto-server\']',
+    preferred_method: 'codex mcp add veto -- npx.cmd -y --package @jigyasudham/veto veto-server',
+    warning: 'config.json mcpServers key is ignored by Codex CLI — use config.toml only',
+  };
+
   return {
     platform,
-    mcp_config: { [cfg.configKey]: { veto: mcpEntry } },
-    setup_steps: platform === 'claude' ? claudeSteps : genericSteps,
+    mcp_config: platform === 'codex' ? codexMcpConfig : { [cfg.configKey]: { veto: mcpEntry } },
+    setup_steps: platform === 'claude' ? claudeSteps : platform === 'codex' ? codexSteps : genericSteps,
     rate_limit_signals: ['rate limit', 'too many requests', '429', 'quota exceeded', 'resource exhausted'],
     continue_command: 'veto_continue',
     notes: cfg.notes,
