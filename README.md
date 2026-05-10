@@ -460,6 +460,9 @@ Machine B  →  veto_memory_import  →  veto_session_restore
 
 ## Changelog
 
+### v1.2.12
+- **feat:** `veto_pr_review` — pass a GitHub PR URL, Veto fetches the diff via GitHub API and runs the full triple-scan (code review + security + secrets). Returns a structured verdict and ready-to-post GitHub review comment. Set `GITHUB_TOKEN` for private repos.
+
 ### v1.2.11
 - **fix:** `veto init` now registers Codex CLI via `codex mcp add` (writes to `~/.codex/config.toml`) instead of `config.json` — Codex CLI ignores `mcpServers` in JSON entirely
 - **fix:** `veto doctor` checks `codex mcp list` / `config.toml` for Codex registration instead of the wrong `config.json` key

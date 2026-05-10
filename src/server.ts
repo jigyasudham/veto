@@ -848,7 +848,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   'router', 'rate_monitor',
                   'council_debate',
                   'agent_plan', 'parallel_exec',
-                  'code_review', 'diff_review', 'security_scan', 'secrets_scan', 'ci_gate',
+                  'code_review', 'diff_review', 'security_scan', 'secrets_scan', 'ci_gate', 'pr_review',
                   'workflow', 'watch',
                   'explain',
                   'memory_store', 'memory_search', 'memory_delete', 'memory_export', 'memory_import',
