@@ -2,7 +2,7 @@
 
 import { scoreComplexity } from './complexity-scorer.js';
 import { selectModel } from './model-selector.js';
-import { getRateStatus, trackRequest, getRoutingAdvice } from './rate-monitor.js';
+import { getRateStatus, trackRequest, trackTokens, getRoutingAdvice } from './rate-monitor.js';
 import { compressContext, estimateTokens } from './context-compressor.js';
 import { recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent } from './learning-updater.js';
 
@@ -11,7 +11,7 @@ export type { AgentType, Tier, ModelRecommendation } from './model-selector.js';
 export type { Platform, RateLimitEntry, RateStatus } from './rate-monitor.js';
 export type { CompressionStrategy, CompressionResult } from './context-compressor.js';
 export type { LearningStats, LearnedThresholds, AgentPerformanceStat, TaskTypeBreakdown, CouncilInsight } from './learning-updater.js';
-export { estimateTokens, getRateStatus, trackRequest, recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent };
+export { estimateTokens, getRateStatus, trackRequest, trackTokens, recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent };
 
 export type RouteOptions = {
   agentType?: import('./model-selector.js').AgentType;

@@ -25,7 +25,8 @@ import {
 } from './memory/local.js';
 import { exportMemory, importMemory, getLocalDbSize } from './memory/sync.js';
 import { runDebate } from './council/index.js';
-import { routeTask, getRateStatus, recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent } from './router/index.js';
+import { routeTask, getRateStatus, trackTokens, recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent } from './router/index.js';
+import { getConfig, setConfig } from './memory/config.js';
 import type { AgentType, Platform } from './router/index.js';
 import { executeParallel, executeOne } from './agents/executor.js';
 import type { AgentTask, WorkerAgentType } from './agents/types.js';
@@ -832,6 +833,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case 'veto_status': {
       const statusTokenCount = typeof args?.token_count === 'number' ? args.token_count : null;
       const statusPlatform = args?.platform ? String(args.platform) : 'claude';
+      if (statusTokenCount !== null && statusTokenCount > 0) {
+        trackTokens(statusPlatform as Platform, statusTokenCount);
+      }
       const autoSaveResult = statusTokenCount !== null ? maybeAutoSave(statusTokenCount, statusPlatform) : null;
       return {
         content: [
@@ -1717,8 +1721,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // ── Phase 14: Observability & Safety ──────────────────────────────────────
 
     case 'veto_usage_status': {
+      if (args?.set_budget && typeof args.set_budget === 'object') {
+        const b = args.set_budget as Record<string, unknown>;
+        const current = getConfig().dailyTokenBudget;
+        setConfig({
+          dailyTokenBudget: {
+            claude: typeof b.claude === 'number' ? b.claude : current.claude,
+            gemini: typeof b.gemini === 'number' ? b.gemini : current.gemini,
+            codex:  typeof b.codex  === 'number' ? b.codex  : current.codex,
+          },
+        });
+      }
       const status = getUsageStatus();
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...status }, null, 2) }] };
+      const { dailyTokenBudget } = getConfig();
+      const rateStatus = getRateStatus();
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            success: true,
+            ...status,
+            daily_token_budget: dailyTokenBudget,
+            tokens_today: {
+              claude: rateStatus.claude.tokens_today,
+              gemini: rateStatus.gemini.tokens_today,
+              codex:  rateStatus.codex.tokens_today,
+            },
+            budget_used_pct: {
+              claude: rateStatus.claude.used_percent,
+              gemini: rateStatus.gemini.used_percent,
+              codex:  rateStatus.codex.used_percent,
+            },
+          }, null, 2),
+        }],
+      };
     }
 
     case 'veto_audit_log': {

@@ -1,16 +1,17 @@
-// Tracks request counts per platform per day, exposes routing advice
-// Veto cannot read actual API rate limits — it tracks its own routed requests
-// and lets users configure their daily limits in patterns table
+// Tracks token usage per platform per day against user-configured daily budgets.
+// Token counts come from the AI's own token_count reports via veto_status calls.
 
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../memory/local.js';
+import { getConfig } from '../memory/config.js';
 
 export type Platform = 'claude' | 'gemini' | 'codex';
 
 export type RateLimitEntry = {
   platform: Platform;
   requests_today: number;
-  daily_limit: number;
+  tokens_today: number;
+  daily_token_budget: number;
   used_percent: number;
   resets_at: string;
   status: 'normal' | 'warning' | 'critical';
@@ -21,12 +22,6 @@ export type RateStatus = {
   gemini: RateLimitEntry;
   codex: RateLimitEntry;
   updated_at: string;
-};
-
-const DEFAULT_LIMITS: Record<Platform, number> = {
-  claude: 100,
-  gemini: 200,
-  codex: 150,
 };
 
 function getTodayKey(): string {
@@ -43,39 +38,66 @@ function getNextResetISO(): string {
 export function trackRequest(platform: Platform, count = 1): void {
   const db = getDb();
   const today = getTodayKey();
-
   const existing = db.prepare(
     'SELECT id, request_count FROM rate_usage WHERE platform = ? AND date_key = ?'
   ).get(platform, today) as { id: string; request_count: number } | undefined;
-
   if (existing) {
     db.prepare(
       'UPDATE rate_usage SET request_count = ?, updated_at = ? WHERE id = ?'
     ).run(existing.request_count + count, new Date().toISOString(), existing.id);
   } else {
     db.prepare(
-      'INSERT INTO rate_usage (id, platform, date_key, request_count) VALUES (?, ?, ?, ?)'
+      'INSERT INTO rate_usage (id, platform, date_key, request_count, token_count) VALUES (?, ?, ?, ?, 0)'
     ).run(randomUUID(), platform, today, count);
   }
 }
 
-function getRequestCount(platform: Platform): number {
+// Records the AI's reported token count for the current session. Uses MAX so
+// the running total only moves forward within a session, and sums across sessions.
+export function trackTokens(platform: Platform, tokens: number): void {
+  if (tokens <= 0) return;
   const db = getDb();
-  const row = db.prepare(
-    'SELECT request_count FROM rate_usage WHERE platform = ? AND date_key = ?'
-  ).get(platform, getTodayKey()) as { request_count: number } | undefined;
-  return row?.request_count ?? 0;
+  const today = getTodayKey();
+  const existing = db.prepare(
+    'SELECT id, token_count FROM rate_usage WHERE platform = ? AND date_key = ?'
+  ).get(platform, today) as { id: string; token_count: number } | undefined;
+  if (existing) {
+    const updated = Math.max(existing.token_count, tokens);
+    db.prepare(
+      'UPDATE rate_usage SET token_count = ?, updated_at = ? WHERE id = ?'
+    ).run(updated, new Date().toISOString(), existing.id);
+  } else {
+    db.prepare(
+      'INSERT INTO rate_usage (id, platform, date_key, request_count, token_count) VALUES (?, ?, ?, 0, ?)'
+    ).run(randomUUID(), platform, today, tokens);
+  }
+}
+
+function getRow(platform: Platform): { request_count: number; token_count: number } {
+  const db = getDb();
+  return (db.prepare(
+    'SELECT request_count, token_count FROM rate_usage WHERE platform = ? AND date_key = ?'
+  ).get(platform, getTodayKey()) as { request_count: number; token_count: number } | undefined)
+    ?? { request_count: 0, token_count: 0 };
 }
 
 function buildEntry(platform: Platform): RateLimitEntry {
-  const requests_today = getRequestCount(platform);
-  const daily_limit = DEFAULT_LIMITS[platform];
-  const used_percent = Math.min(100, Math.round((requests_today / daily_limit) * 100));
+  const { request_count, token_count } = getRow(platform);
+  const daily_token_budget = getConfig().dailyTokenBudget[platform];
+  const used_percent = Math.min(100, Math.round((token_count / daily_token_budget) * 100));
   let status: 'normal' | 'warning' | 'critical';
   if (used_percent >= 90) status = 'critical';
   else if (used_percent >= 70) status = 'warning';
   else status = 'normal';
-  return { platform, requests_today, daily_limit, used_percent, resets_at: getNextResetISO(), status };
+  return {
+    platform,
+    requests_today: request_count,
+    tokens_today: token_count,
+    daily_token_budget,
+    used_percent,
+    resets_at: getNextResetISO(),
+    status,
+  };
 }
 
 export function getRateStatus(): RateStatus {

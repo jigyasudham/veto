@@ -40,7 +40,15 @@ export function getDb(): DatabaseSync {
   migrateCouncilColumns(_db);
   migrateSessionColumns(_db);
   migrateCouncilDuration(_db);
+  migrateRateUsageTokens(_db);
   return _db;
+}
+
+// Adds token_count column to rate_usage if it doesn't exist (v1.2.13 migration)
+function migrateRateUsageTokens(db: DatabaseSync): void {
+  const cols = db.prepare('PRAGMA table_info(rate_usage)').all() as Array<{ name: string }>;
+  const names = new Set(cols.map(c => c.name));
+  if (!names.has('token_count')) db.exec('ALTER TABLE rate_usage ADD COLUMN token_count INTEGER DEFAULT 0');
 }
 
 // Adds duration_ms column to council_outcomes if it doesn't exist (v1.2.3 migration)
