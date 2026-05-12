@@ -41,6 +41,7 @@ export function getDb(): DatabaseSync {
   migrateSessionColumns(_db);
   migrateCouncilDuration(_db);
   migrateRateUsageTokens(_db);
+  migrateUsageLog(_db);
   return _db;
 }
 
@@ -49,6 +50,21 @@ function migrateRateUsageTokens(db: DatabaseSync): void {
   const cols = db.prepare('PRAGMA table_info(rate_usage)').all() as Array<{ name: string }>;
   const names = new Set(cols.map(c => c.name));
   if (!names.has('token_count')) db.exec('ALTER TABLE rate_usage ADD COLUMN token_count INTEGER DEFAULT 0');
+}
+
+// Creates usage_log table if it doesn't exist (v1.2.14 migration)
+function migrateUsageLog(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS usage_log (
+      id               TEXT PRIMARY KEY,
+      tool_name        TEXT NOT NULL,
+      session_id       TEXT,
+      max_tokens       INTEGER NOT NULL,
+      estimated_tokens INTEGER NOT NULL,
+      exceeded         INTEGER NOT NULL DEFAULT 0,
+      created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
 }
 
 // Adds duration_ms column to council_outcomes if it doesn't exist (v1.2.3 migration)
@@ -640,4 +656,52 @@ export function getHealthStats(): HealthStats {
     total_decisions: count('decisions'),
     avg_council_latency_ms,
   };
+}
+
+// ── Token budget logging (#20) ────────────────────────────────────────────────
+
+export type UsageLogRow = {
+  id: string;
+  tool_name: string;
+  session_id: string | null;
+  max_tokens: number;
+  estimated_tokens: number;
+  exceeded: number;
+  created_at: string;
+};
+
+export function logUsage(entry: {
+  tool_name: string;
+  session_id?: string;
+  max_tokens: number;
+  output: string;
+}): { exceeded: boolean; estimated_tokens: number } {
+  const db = getDb();
+  const estimated_tokens = Math.ceil(entry.output.length / 4);
+  const exceeded = estimated_tokens > entry.max_tokens ? 1 : 0;
+  db.prepare(
+    `INSERT INTO usage_log (id, tool_name, session_id, max_tokens, estimated_tokens, exceeded, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`
+  ).run(
+    randomUUID(),
+    entry.tool_name,
+    entry.session_id ?? null,
+    entry.max_tokens,
+    estimated_tokens,
+    exceeded,
+  );
+  return { exceeded: exceeded === 1, estimated_tokens };
+}
+
+export function getUsageLogs(opts: { limit?: number; tool_name?: string } = {}): UsageLogRow[] {
+  const db = getDb();
+  const limit = opts.limit ?? 20;
+  if (opts.tool_name) {
+    return db.prepare(
+      'SELECT * FROM usage_log WHERE tool_name = ? ORDER BY created_at DESC LIMIT ?'
+    ).all(opts.tool_name, limit) as UsageLogRow[];
+  }
+  return db.prepare(
+    'SELECT * FROM usage_log ORDER BY created_at DESC LIMIT ?'
+  ).all(limit) as UsageLogRow[];
 }

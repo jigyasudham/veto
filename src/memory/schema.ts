@@ -113,6 +113,16 @@ export const CREATE_TABLES = `
     UNIQUE(platform, date_key)
   );
 
+  CREATE TABLE IF NOT EXISTS usage_log (
+    id               TEXT PRIMARY KEY,
+    tool_name        TEXT NOT NULL,
+    session_id       TEXT,
+    max_tokens       INTEGER NOT NULL,
+    estimated_tokens INTEGER NOT NULL,
+    exceeded         INTEGER NOT NULL DEFAULT 0,
+    created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS knowledge_base (
     id             TEXT PRIMARY KEY,
     type           TEXT NOT NULL DEFAULT 'solution',

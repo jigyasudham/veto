@@ -22,6 +22,7 @@ import {
   upsertPattern, getPatterns,
   getContextStatus, fetchAndCacheDocs, saveTaskPlan,
   getUsageStatus, getAuditLog, getHealthStats, CONTEXT_WINDOWS,
+  logUsage, getUsageLogs,
 } from './memory/local.js';
 import { exportMemory, importMemory, getLocalDbSize } from './memory/sync.js';
 import { runDebate } from './council/index.js';
@@ -99,10 +100,65 @@ const server = new Server(
   }
 );
 
+// ─── Tool Risk Annotations (#21) ─────────────────────────────────────────────
+// readOnlyHint: tool makes no writes. destructiveHint: writes are irreversible.
+// openWorldHint: tool reaches outside the local DB (network, filesystem, processes).
+
+const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint?: boolean; openWorldHint?: boolean }> = {
+  // read-only — query/inspect only
+  veto_status:           { readOnlyHint: true },
+  veto_autosave_status:  { readOnlyHint: true },
+  veto_sessions_list:    { readOnlyHint: true },
+  veto_rate_status:      { readOnlyHint: true },
+  veto_route_task:       { readOnlyHint: true },
+  veto_agent_plan:       { readOnlyHint: true },
+  veto_code_review:      { readOnlyHint: true },
+  veto_diff_review:      { readOnlyHint: true },
+  veto_security_scan:    { readOnlyHint: true },
+  veto_secrets_scan:     { readOnlyHint: true },
+  veto_project_map_get:  { readOnlyHint: true },
+  veto_patterns_list:    { readOnlyHint: true },
+  veto_learning_stats:   { readOnlyHint: true },
+  veto_watch_poll:       { readOnlyHint: true },
+  veto_plugins:          { readOnlyHint: true },
+  veto_context_status:   { readOnlyHint: true },
+  veto_audit_log:        { readOnlyHint: true },
+  veto_health:           { readOnlyHint: true },
+  veto_discover:         { readOnlyHint: true },
+  veto_summarize:        { readOnlyHint: true },
+  veto_explain:          { readOnlyHint: true },
+  // read-only + open world (external network)
+  veto_docs_fetch:       { readOnlyHint: true,  openWorldHint: true },
+  veto_pr_review:        { readOnlyHint: true,  openWorldHint: true },
+  // reversible writes (local DB — can be deleted/reset)
+  veto_council_debate:    { readOnlyHint: false, destructiveHint: false },
+  veto_execute_parallel:  { readOnlyHint: false, destructiveHint: false },
+  veto_session_save:      { readOnlyHint: false, destructiveHint: false },
+  veto_session_restore:   { readOnlyHint: false, destructiveHint: false },
+  veto_memory_store:      { readOnlyHint: false, destructiveHint: false },
+  veto_project_map_update:{ readOnlyHint: false, destructiveHint: false },
+  veto_pattern_store:     { readOnlyHint: false, destructiveHint: false },
+  veto_memory_export:     { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  veto_record_outcome:    { readOnlyHint: false, destructiveHint: false },
+  veto_learning_apply:    { readOnlyHint: false, destructiveHint: false },
+  veto_handoff:           { readOnlyHint: false, destructiveHint: false },
+  veto_continue:          { readOnlyHint: false, destructiveHint: false },
+  veto_task_parse:        { readOnlyHint: false, destructiveHint: false },
+  veto_watch:             { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  veto_watch_stop:        { readOnlyHint: false, destructiveHint: false },
+  veto_workflow:          { readOnlyHint: false, destructiveHint: false },
+  veto_ci_gate:           { readOnlyHint: false, destructiveHint: false },
+  veto_usage_status:      { readOnlyHint: false, destructiveHint: false },
+  // destructive — permanent deletes or config overwrites
+  veto_memory_delete:     { readOnlyHint: false, destructiveHint: true },
+  veto_memory_import:     { readOnlyHint: false, destructiveHint: true },
+  veto_platform_setup:    { readOnlyHint: false, destructiveHint: true,  openWorldHint: true },
+};
+
 // ─── Tool Definitions ─────────────────────────────────────────────────────────
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  const tools = [
     {
       name: 'veto_status',
       description: 'Returns Veto server status, version, and database info. Pass token_count to trigger auto-save if context usage crosses 70%.',
@@ -281,6 +337,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             type: 'string',
             description: 'Optional: session ID to associate this council outcome with an active session.',
           },
+          max_tokens: {
+            type: 'number',
+            description: 'Optional: token budget for this operation. Veto estimates output tokens and warns in the response if the estimate exceeds this limit. Logged to usage_log for tracking.',
+          },
         },
         required: ['task'],
       },
@@ -374,6 +434,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
             },
           },
           project_dir: { type: 'string', description: 'Optional: project directory applied to all tasks (per-task project_dir overrides this). Auto-injects codebase context.' },
+          max_tokens: {
+            type: 'number',
+            description: 'Optional: token budget for this parallel execution. Veto estimates combined output tokens and warns if the estimate exceeds this limit. Logged to usage_log.',
+          },
         },
         required: ['tasks'],
       },
@@ -804,8 +868,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: [],
       },
     },
-  ],
-}));
+  ];
+  return { tools: tools.map(t => ({ ...t, annotations: TOOL_ANNOTATIONS[t.name] ?? {} })) };
+});
 
 // ─── Shared Scan Utility ──────────────────────────────────────────────────────
 
@@ -1056,8 +1121,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
       const debateDuration = Date.now() - debateStart;
 
+      const sessionId = args?.session_id ? String(args.session_id) : undefined;
       const outcomeId = saveCouncilOutcome({
-        session_id: args?.session_id ? String(args.session_id) : undefined,
+        session_id: sessionId,
         task,
         verdict: result.final_verdict,
         lead_dev: JSON.stringify(result.votes.lead_dev),
@@ -1071,33 +1137,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         duration_ms: debateDuration,
       });
 
+      const responsePayload = {
+        outcome_id: outcomeId,
+        final_verdict: result.final_verdict,
+        block_reasons: result.block_reasons,
+        warnings: result.warnings,
+        recommended: result.recommended,
+        debated_at: result.debated_at,
+        votes: {
+          lead_dev: result.votes.lead_dev.verdict,
+          pm: result.votes.pm.verdict,
+          architect: result.votes.architect.verdict,
+          ux: result.votes.ux.verdict,
+          devil: result.votes.devil.verdict,
+          legal: result.votes.legal.verdict,
+          security: result.votes.security.verdict,
+        },
+      } as Record<string, unknown>;
+
+      const fullText = result.formatted_output + '\n\n' + JSON.stringify(responsePayload, null, 2);
+
+      if (typeof args?.max_tokens === 'number') {
+        const { exceeded, estimated_tokens } = logUsage({
+          tool_name: 'veto_council_debate',
+          session_id: sessionId,
+          max_tokens: args.max_tokens,
+          output: fullText,
+        });
+        if (exceeded) {
+          responsePayload.budget_warning = `Estimated output tokens (${estimated_tokens}) exceeded max_tokens budget (${args.max_tokens}).`;
+        }
+      }
+
       return {
-        content: [
-          {
-            type: 'text',
-            text: result.formatted_output + '\n\n' + JSON.stringify(
-              {
-                outcome_id: outcomeId,
-                final_verdict: result.final_verdict,
-                block_reasons: result.block_reasons,
-                warnings: result.warnings,
-                recommended: result.recommended,
-                debated_at: result.debated_at,
-                votes: {
-                  lead_dev: result.votes.lead_dev.verdict,
-                  pm: result.votes.pm.verdict,
-                  architect: result.votes.architect.verdict,
-                  ux: result.votes.ux.verdict,
-                  devil: result.votes.devil.verdict,
-                  legal: result.votes.legal.verdict,
-                  security: result.votes.security.verdict,
-                },
-              },
-              null,
-              2
-            ),
-          },
-        ],
+        content: [{ type: 'text', text: fullText }],
       };
     }
 
@@ -1248,21 +1321,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         project_dir: t.project_dir ? String(t.project_dir) : parallelProjectDir,
       }));
       const results = await executeParallel(tasks);
+
+      const parallelPayload: Record<string, unknown> = {
+        count: results.length,
+        total_duration_ms: results.reduce((s, r) => s + r.duration_ms, 0),
+        results: results.map(r => ({
+          id: r.id,
+          agent: r.agent,
+          duration_ms: r.duration_ms,
+          error: r.error,
+          output: { ...(r.plan ?? r.analysis), structured: r.output },
+        })),
+      };
+
+      if (typeof args?.max_tokens === 'number') {
+        const outputText = JSON.stringify(parallelPayload, null, 2);
+        const { exceeded, estimated_tokens } = logUsage({
+          tool_name: 'veto_execute_parallel',
+          max_tokens: args.max_tokens,
+          output: outputText,
+        });
+        if (exceeded) {
+          parallelPayload.budget_warning = `Estimated output tokens (${estimated_tokens}) exceeded max_tokens budget (${args.max_tokens}).`;
+        }
+      }
+
       return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            count: results.length,
-            total_duration_ms: results.reduce((s, r) => s + r.duration_ms, 0),
-            results: results.map(r => ({
-              id: r.id,
-              agent: r.agent,
-              duration_ms: r.duration_ms,
-              error: r.error,
-              output: { ...(r.plan ?? r.analysis), structured: r.output },
-            })),
-          }, null, 2),
-        }],
+        content: [{ type: 'text', text: JSON.stringify(parallelPayload, null, 2) }],
       };
     }
 
@@ -1735,6 +1820,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const status = getUsageStatus();
       const { dailyTokenBudget } = getConfig();
       const rateStatus = getRateStatus();
+      const recentBudgetLog = getUsageLogs({ limit: 10 });
       return {
         content: [{
           type: 'text',
@@ -1752,6 +1838,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               gemini: rateStatus.gemini.used_percent,
               codex:  rateStatus.codex.used_percent,
             },
+            operation_budget_log: recentBudgetLog.map(e => ({
+              tool: e.tool_name,
+              max_tokens: e.max_tokens,
+              estimated_tokens: e.estimated_tokens,
+              exceeded: e.exceeded === 1,
+              at: e.created_at,
+            })),
           }, null, 2),
         }],
       };
