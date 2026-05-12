@@ -455,10 +455,18 @@ Machine B  →  veto_memory_import  →  veto_session_restore
 | 14 — Observability + Usage Stats + Audit Log | ✅ Complete | v1.2.0 |
 | 15 — CI/CD Gates + GitHub PR Review | ✅ Complete | v1.2.5 |
 | 16 — Workspace Discovery + Summarization + Doctor | ✅ Complete | v1.2.8 |
+| 17 — VS Code Extension + Token Budget + Risk Annotations | ✅ Complete | v1.2.14 |
 
 ---
 
 ## Changelog
+
+### v1.2.14
+- **feat:** Token budget per operation — `max_tokens` optional param on `veto_council_debate` and `veto_execute_parallel`; warns if estimated output exceeds budget; all calls logged to new `usage_log` table; `veto_usage_status` now includes `operation_budget_log`
+- **feat:** MCP tool risk annotations — all 45 tools annotated with `readOnlyHint`, `destructiveHint`, `openWorldHint` using the official MCP SDK annotation fields; 23 read-only, 3 destructive, 2 open-world
+
+### v1.2.13
+- **feat:** Real token tracking for Rate Status — `tokens_today` and `budget_used_pct` per platform; `veto_usage_status` accepts `set_budget` to configure daily token limits (defaults: Claude 500K, Gemini 1M, Codex 200K)
 
 ### v1.2.12
 - **feat:** `veto_pr_review` — pass a GitHub PR URL, Veto fetches the diff via GitHub API and runs the full triple-scan (code review + security + secrets). Returns a structured verdict and ready-to-post GitHub review comment. Set `GITHUB_TOKEN` for private repos.

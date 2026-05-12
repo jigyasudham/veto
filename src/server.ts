@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Veto MCP Server — 45 tools, 16 phases, self-learning router
+// Veto MCP Server — 45 tools, 17 phases complete, self-learning router
 
 // Suppress node:sqlite experimental warning — it would corrupt the MCP stdio protocol
 process.removeAllListeners('warning');
