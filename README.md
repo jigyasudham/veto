@@ -482,10 +482,14 @@ Machine B  →  veto_memory_import  →  veto_session_restore
 | 17 — VS Code Extension + Token Budget + Risk Annotations | ✅ Complete | v1.2.14 |
 | 18 — Extension Upgrades (status bar, PR review, Learning Stats panel, secrets trigger) | ✅ Complete | veto-vscode v0.6.0 |
 | 19 — Auto-Learning Hooks (every agent tool auto-records outcomes) | ✅ Complete | v1.2.15 |
+| 20 — Auto-Store Memory (RED verdict + critical scan findings → Memory panel) | ✅ Complete | v1.2.16 |
 
 ---
 
 ## Changelog
+
+### v1.2.16
+- **feat:** Auto-store knowledge entries on RED council verdict and critical scan failures — entries appear in the VS Code Memory panel immediately without any manual `veto_memory_store` call. RED verdict stores block reasons + warnings + recommended action. Critical findings from `veto_diff_review`, `veto_ci_gate`, and `veto_pr_review` store the blocking issue list when verdict is `fail`.
 
 ### v1.2.15
 - **feat:** Auto-learning hooks — `learning_data` now fills automatically from every agent-producing tool. No manual `veto_record_outcome` calls needed. Hooks fire on `veto_council_debate` (verdict → quality score), `veto_workflow` (per-step confidence), `veto_execute_parallel` (per-task confidence), `veto_route_task` (tier distribution), plus `veto_agent_plan`, `veto_code_review`, `veto_security_scan`, `veto_secrets_scan`, `veto_diff_review`, `veto_ci_gate`, `veto_pr_review`, `veto_explain`, `veto_task_parse`, and `veto_summarize`. After any working session, `veto_learning_stats` shows live data and `veto_learning_apply` starts producing real threshold adjustments after ~20 calls.
