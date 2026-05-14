@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Veto MCP Server — 45 tools, 17 phases complete, self-learning router
+// Veto MCP Server — 45 tools, 19 phases complete, auto-learning router
 
 // Suppress node:sqlite experimental warning — it would corrupt the MCP stdio protocol
 process.removeAllListeners('warning');
@@ -1085,6 +1085,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         preferredPlatform: args?.preferred_platform ? (String(args.preferred_platform) as Platform) : 'claude',
       });
       const recommended_agent = getRecommendedAgent(routeTaskStr, fileExt);
+      // #41: auto-record every routing so tier distribution stats are always populated
+      recordOutcome(routeTaskStr.slice(0, 50), result.complexity.score, result.model.tier, 'router', 70);
       return {
         content: [{
           type: 'text',
@@ -1136,6 +1138,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         recommended: result.recommended,
         duration_ms: debateDuration,
       });
+
+      // #38: auto-record learning outcome from verdict — no manual veto_record_outcome needed
+      {
+        const qMap: Record<string, number> = { GREEN: 90, YELLOW: 60, RED: 20, DEADLOCK: 50 };
+        const tMap: Record<string, 1|2|3> = { GREEN: 1, YELLOW: 2, RED: 3, DEADLOCK: 2 };
+        recordOutcome(task.slice(0, 50), 50, tMap[result.final_verdict] ?? 2, 'council', qMap[result.final_verdict] ?? 50);
+      }
 
       const responsePayload = {
         outcome_id: outcomeId,
@@ -1321,6 +1330,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         project_dir: t.project_dir ? String(t.project_dir) : parallelProjectDir,
       }));
       const results = await executeParallel(tasks);
+
+      // #40: auto-record learning outcome per completed parallel task
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i];
+        if (r.error) continue;
+        const quality = Math.round(r.output.confidence * 100);
+        const tier: 1|2|3 = quality >= 80 ? 1 : quality >= 40 ? 2 : 3;
+        recordOutcome(tasks[i]?.task.slice(0, 50) ?? r.agent, 50, tier, r.agent, quality);
+      }
 
       const parallelPayload: Record<string, unknown> = {
         count: results.length,
@@ -1644,6 +1662,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         gate: typeof s.gate === 'number' ? s.gate : undefined,
       }));
       const result = await runPipeline(steps, args?.project_dir ? String(args.project_dir) : undefined);
+
+      // #39: auto-record learning outcome per executed workflow step
+      for (const step of result.results) {
+        if (step.status === 'skipped') continue;
+        const quality = step.error ? 0 : step.confidence;
+        const tier: 1|2|3 = quality >= 80 ? 1 : quality >= 40 ? 2 : 3;
+        const taskStr = steps.find(s => s.id === step.id)?.task.slice(0, 50) ?? step.id;
+        recordOutcome(taskStr, 50, tier, step.agent, quality);
+      }
+
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
 
