@@ -2,7 +2,7 @@
 
 > **50 agents. 45 tools. 3 AIs. Self-learning. Zero extra cost.**
 
-An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, and Gemini CLI using your existing subscriptions — giving every AI a council of specialist agents, persistent cross-platform memory, a self-learning router, live usage tracking, CI/CD pipeline gates, workspace discovery, live documentation fetching, auto session save, and the ability to say no to bad decisions.
+An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, and Gemini CLI using your existing subscriptions — giving every AI a council of specialist agents, persistent cross-platform memory, a self-learning router that improves automatically from every tool call, live usage tracking, CI/CD pipeline gates, workspace discovery, live documentation fetching, auto session save, and the ability to say no to bad decisions.
 
 ---
 
@@ -356,20 +356,44 @@ veto_watch_poll { watch_id: "a3f2b1c0" }
 
 ## Self-Learning Router
 
-The router gets smarter as you use it:
+The router improves automatically — no manual steps needed.
+
+Every tool that runs an agent auto-records a `learning_data` row when it completes. After any normal working session, `veto_learning_stats` will show live data and `veto_learning_apply` will start producing meaningful threshold adjustments after ~20 tool calls.
+
+**What auto-records (all of these, without any extra call):**
+
+| Tool | Quality signal used |
+|---|---|
+| `veto_council_debate` | Verdict: GREEN → 90, YELLOW → 60, RED → 20, DEADLOCK → 50 |
+| `veto_workflow` | Per-step confidence score |
+| `veto_execute_parallel` | Per-task confidence score |
+| `veto_route_task` | Routing registered (tier distribution) |
+| `veto_agent_plan` | Agent confidence |
+| `veto_code_review` | Analysis score |
+| `veto_security_scan` | Analysis score |
+| `veto_secrets_scan` | Clean = 100, findings found = score |
+| `veto_diff_review` | Average of code + security scores |
+| `veto_ci_gate` | Average of code + security scores |
+| `veto_pr_review` | Average of code + security scores |
+| `veto_explain` | Agent confidence |
+| `veto_task_parse` | Planner confidence |
+| `veto_summarize` | Agent confidence |
+
+You can still record manually for custom signals:
 
 ```bash
-# After completing a task:
 veto_record_outcome {
   task_type: "fix-auth-bug",
   complexity: 45,
   model_tier: 2,
   output_quality: 88,
   agent: "debugger",
-  file_ext: ".ts"         # ← teaches the router which agent works best for .ts files
+  file_ext: ".ts"         # ← teaches which agent works best for .ts files
 }
+```
 
-# After 20+ outcomes:
+```bash
+# After 20+ outcomes (auto or manual):
 veto_learning_apply       # adjusts tier thresholds from your actual data
 
 # Next route_task call:
@@ -456,10 +480,15 @@ Machine B  →  veto_memory_import  →  veto_session_restore
 | 15 — CI/CD Gates + GitHub PR Review | ✅ Complete | v1.2.5 |
 | 16 — Workspace Discovery + Summarization + Doctor | ✅ Complete | v1.2.8 |
 | 17 — VS Code Extension + Token Budget + Risk Annotations | ✅ Complete | v1.2.14 |
+| 18 — Extension Upgrades (status bar, PR review, Learning Stats panel, secrets trigger) | ✅ Complete | veto-vscode v0.6.0 |
+| 19 — Auto-Learning Hooks (every agent tool auto-records outcomes) | ✅ Complete | v1.2.15 |
 
 ---
 
 ## Changelog
+
+### v1.2.15
+- **feat:** Auto-learning hooks — `learning_data` now fills automatically from every agent-producing tool. No manual `veto_record_outcome` calls needed. Hooks fire on `veto_council_debate` (verdict → quality score), `veto_workflow` (per-step confidence), `veto_execute_parallel` (per-task confidence), `veto_route_task` (tier distribution), plus `veto_agent_plan`, `veto_code_review`, `veto_security_scan`, `veto_secrets_scan`, `veto_diff_review`, `veto_ci_gate`, `veto_pr_review`, `veto_explain`, `veto_task_parse`, and `veto_summarize`. After any working session, `veto_learning_stats` shows live data and `veto_learning_apply` starts producing real threshold adjustments after ~20 calls.
 
 ### v1.2.14
 - **feat:** Token budget per operation — `max_tokens` optional param on `veto_council_debate` and `veto_execute_parallel`; warns if estimated output exceeds budget; all calls logged to new `usage_log` table; `veto_usage_status` now includes `operation_budget_log`
