@@ -886,7 +886,18 @@ async function runTripleScan(diff: string, context: string) {
   const hasWarnings = (reviewResult.analysis?.high_count ?? 0) > 0
     || (secResult.analysis?.high_count ?? 0) > 0;
   const verdict = hasBlocking ? 'fail' : hasWarnings ? 'warn' : 'pass';
+  // auto-record per agent so learning accumulates from every scan (diff_review, ci_gate, pr_review)
+  autoRecord('scan', 'reviewer',         reviewResult.analysis?.score ?? Math.round(reviewResult.output.confidence * 100));
+  autoRecord('scan', 'security-scanner', secResult.analysis?.score    ?? Math.round(secResult.output.confidence    * 100));
+  autoRecord('scan', 'secrets', (secretsResult.analysis?.findings?.length ?? 0) === 0 ? 100 : secretsResult.analysis?.score ?? Math.round(secretsResult.output.confidence * 100));
   return { reviewResult, secResult, secretsResult, verdict };
+}
+
+// Auto-learning helper — records a learning_data row from any agent result.
+// Keeps call sites to one line rather than repeating the tier/quality logic.
+function autoRecord(taskType: string, agent: string, quality: number, complexity = 50): void {
+  const tier: 1|2|3 = quality >= 80 ? 1 : quality >= 40 ? 2 : 3;
+  recordOutcome(taskType.slice(0, 50), complexity, tier, agent, quality);
 }
 
 // ─── Tool Handlers ────────────────────────────────────────────────────────────
@@ -1199,6 +1210,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (result.error) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
       }
+      autoRecord(task, agentType, Math.round(result.output.confidence * 100));
       return { content: [{ type: 'text', text: JSON.stringify({ ...(result.plan ?? result.analysis), output: result.output }, null, 2) }] };
     }
 
@@ -1211,6 +1223,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (result.error) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
       }
+      autoRecord('code review', 'reviewer', result.analysis?.score ?? Math.round(result.output.confidence * 100));
       return { content: [{ type: 'text', text: JSON.stringify(result.analysis, null, 2) }] };
     }
 
@@ -1300,6 +1313,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (result.error) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
       }
+      autoRecord('security scan', 'security-scanner', result.analysis?.score ?? Math.round(result.output.confidence * 100));
       return { content: [{ type: 'text', text: JSON.stringify(result.analysis, null, 2) }] };
     }
 
@@ -1312,6 +1326,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (result.error) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
       }
+      autoRecord('secrets scan', 'secrets', (result.analysis?.findings?.length ?? 0) === 0 ? 100 : result.analysis?.score ?? Math.round(result.output.confidence * 100));
       return { content: [{ type: 'text', text: JSON.stringify(result.analysis, null, 2) }] };
     }
 
@@ -1704,6 +1719,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const task = `Explain this ${ext} file at ${depth} depth. File: ${basename(filePath)}${userContext ? `. Focus: ${userContext}` : ''}`;
 
       const result = await executeOne({ id: 'explain-1', agent, task, code: fileContent, project_dir: undefined });
+      autoRecord(`explain ${basename(filePath)}`, agent, Math.round(result.output.confidence * 100));
       return {
         content: [{ type: 'text', text: JSON.stringify({
           file: filePath, agent_used: agent, depth,
@@ -1825,6 +1841,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         duration_estimate: planResult.plan?.duration_estimate ?? 'unknown',
       };
 
+      autoRecord(description, 'task-planner', Math.round(planResult.output.confidence * 100));
       const hash = createHash('sha256').update(description).digest('hex').slice(0, 16);
       const plan_id = saveTaskPlan(JSON.stringify(plan), hash, project_dir);
 
@@ -2125,6 +2142,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const depthNote = sumFormat === 'detailed' ? 'Write paragraph-level prose.' : 'Return 4–6 bullet points only.';
         const task = `Summarize this file concisely for a developer who has never seen it.${focusNote} ${depthNote} File: ${basename(sumFilePath)}`;
         const r = await executeOne({ id: 'sum-file', agent, task, code: fileContent.slice(0, 8000) });
+        autoRecord(`summarize ${basename(sumFilePath)}`, agent, Math.round(r.output.confidence * 100));
 
         return { content: [{ type: 'text', text: JSON.stringify({
           success: true, subject: 'file', path: sumFilePath, format: sumFormat,
@@ -2150,6 +2168,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const task = `You are a senior engineer briefing a colleague on this codebase.${focusNote} ${depthNote} Be concise and precise — no filler.`;
 
       const r = await executeOne({ id: 'sum-proj', agent: 'project-mapper', task, context: ctx });
+      autoRecord('summarize project', 'project-mapper', Math.round(r.output.confidence * 100));
 
       return { content: [{ type: 'text', text: JSON.stringify({
         success: true, subject: 'project', path: sumProjectDir, format: sumFormat,
