@@ -900,6 +900,21 @@ function autoRecord(taskType: string, agent: string, quality: number, complexity
   recordOutcome(taskType.slice(0, 50), complexity, tier, agent, quality);
 }
 
+// Auto-store helper — writes a knowledge_base entry when a scan produces critical/blocking issues.
+// This is what populates the Memory panel in the VS Code extension automatically.
+function autoStoreCritical(title: string, blockingIssues: string[], projectDir?: string, extraTags: string[] = [], sessionId?: string): void {
+  if (blockingIssues.length === 0) return;
+  storeKnowledge({
+    type: 'decision',
+    title: title.slice(0, 100),
+    content: `Blocking issues:\n${blockingIssues.map(i => `- ${i}`).join('\n')}`,
+    tags: ['critical', 'blocked', ...extraTags],
+    project_dir: projectDir,
+    session_id: sessionId,
+    relevance: 1.0,
+  });
+}
+
 // ─── Tool Handlers ────────────────────────────────────────────────────────────
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -1157,6 +1172,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         recordOutcome(task.slice(0, 50), 50, tMap[result.final_verdict] ?? 2, 'council', qMap[result.final_verdict] ?? 50);
       }
 
+      // Auto-store RED verdicts so they appear in the Memory panel immediately
+      if (result.final_verdict === 'RED') {
+        const lines: string[] = [`Task: ${task}`];
+        if (result.block_reasons.length > 0) lines.push(`\nBlocked by:\n${result.block_reasons.map(r => `- ${r}`).join('\n')}`);
+        if (result.warnings.length > 0) lines.push(`\nWarnings:\n${result.warnings.map(w => `- ${w}`).join('\n')}`);
+        if (result.recommended) lines.push(`\nRecommended: ${result.recommended}`);
+        storeKnowledge({
+          type: 'decision',
+          title: `RED: ${task.slice(0, 80)}`,
+          content: lines.join(''),
+          tags: ['red-verdict', 'blocked', 'council'],
+          project_dir: args?.project_dir ? String(args.project_dir) : undefined,
+          session_id: sessionId,
+          relevance: 1.0,
+        });
+      }
+
       const responsePayload = {
         outcome_id: outcomeId,
         final_verdict: result.final_verdict,
@@ -1264,6 +1296,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       for (const finding of [...(reviewResult.analysis?.findings ?? []), ...(secResult.analysis?.findings ?? [])]) {
         const match = changedFiles.find(f => finding.location?.includes(f));
         if (match) fileFindings[match]++;
+      }
+
+      if (verdict === 'fail') {
+        const blockingIssues: string[] = [];
+        if ((reviewResult.analysis?.critical_count ?? 0) > 0) blockingIssues.push(`Code: ${reviewResult.analysis?.summary ?? 'critical issues found'}`);
+        if ((secResult.analysis?.critical_count ?? 0) > 0) blockingIssues.push(`Security: ${secResult.analysis?.summary ?? 'vulnerabilities detected'}`);
+        if ((secretsResult.analysis?.findings?.length ?? 0) > 0) blockingIssues.push(`Secrets: exposed credentials detected`);
+        autoStoreCritical(`Diff review failed: ${changedFiles.slice(0, 2).join(', ')}`, blockingIssues, projectDir, ['diff-review']);
       }
 
       return {
@@ -1984,6 +2024,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         blocking_issues.length > 0 ? `\n**Blocking issues:**\n${blocking_issues.map(i => `- ${i}`).join('\n')}` : '',
       ].filter(Boolean).join('\n');
 
+      autoStoreCritical(`CI gate failed: ${project_dir}`, blocking_issues, project_dir, ['ci-gate']);
+
       return {
         content: [{
           type: 'text',
@@ -2054,6 +2096,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         ``,
         `> Reviewed by [Veto](https://github.com/jigyasudham/veto) · ${meta.changed_files} files · +${meta.additions}/-${meta.deletions} · ${Date.now() - start}ms`,
       ].join('\n');
+
+      autoStoreCritical(`PR review failed: ${meta.title}`, blocking_issues, undefined, ['pr-review']);
 
       return {
         content: [{
