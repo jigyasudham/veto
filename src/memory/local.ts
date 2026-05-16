@@ -43,7 +43,25 @@ export function getDb(): DatabaseSync {
   migrateRateUsageTokens(_db);
   migrateUsageLog(_db);
   migrateSessionSaveType(_db);
+  migrateScanDiagnostics(_db);
   return _db;
+}
+
+// Creates scan_diagnostics table if it doesn't exist (v1.2.18 migration)
+function migrateScanDiagnostics(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scan_diagnostics (
+      id         TEXT PRIMARY KEY,
+      file_path  TEXT NOT NULL,
+      line       INTEGER NOT NULL DEFAULT 0,
+      col_start  INTEGER NOT NULL DEFAULT 0,
+      message    TEXT NOT NULL,
+      severity   TEXT NOT NULL DEFAULT 'warning',
+      source     TEXT NOT NULL DEFAULT 'veto',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_scan_diag_file ON scan_diagnostics(file_path)`);
 }
 
 // Adds save_type column to sessions if it doesn't exist (v1.2.17 migration)
@@ -635,6 +653,52 @@ export function getAuditLog(opts: AuditLogOptions = {}): AuditEvent[] {
 
   // Sort combined and return limit
   return events.sort((a, b) => b.timestamp.localeCompare(a.timestamp)).slice(0, limit);
+}
+
+// ─── Scan Diagnostics ─────────────────────────────────────────────────────────
+
+export type ScanDiagnosticRow = {
+  id: string;
+  file_path: string;
+  line: number;
+  col_start: number;
+  message: string;
+  severity: string;
+  source: string;
+  created_at: string;
+};
+
+export function storeScanDiagnostics(
+  filePath: string,
+  findings: Array<{ line: number; col_start?: number; message: string; severity: string }>,
+  source = 'veto',
+): void {
+  const db = getDb();
+  db.prepare('DELETE FROM scan_diagnostics WHERE file_path = ?').run(filePath);
+  if (findings.length === 0) return;
+  const stmt = db.prepare(
+    'INSERT INTO scan_diagnostics (id, file_path, line, col_start, message, severity, source) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const f of findings) {
+    stmt.run(randomUUID(), filePath, Math.max(0, f.line - 1), f.col_start ?? 0, f.message, f.severity, source);
+  }
+}
+
+export function getScanDiagnostics(filePath?: string): ScanDiagnosticRow[] {
+  const db = getDb();
+  if (filePath) {
+    return db.prepare('SELECT * FROM scan_diagnostics WHERE file_path = ? ORDER BY line').all(filePath) as ScanDiagnosticRow[];
+  }
+  return db.prepare('SELECT * FROM scan_diagnostics ORDER BY file_path, line').all() as ScanDiagnosticRow[];
+}
+
+export function clearScanDiagnostics(filePath?: string): void {
+  const db = getDb();
+  if (filePath) {
+    db.prepare('DELETE FROM scan_diagnostics WHERE file_path = ?').run(filePath);
+  } else {
+    db.exec('DELETE FROM scan_diagnostics');
+  }
 }
 
 // ─── Health Stats ─────────────────────────────────────────────────────────────

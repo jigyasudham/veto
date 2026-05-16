@@ -147,6 +147,19 @@ export const CREATE_TABLES = `
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS scan_diagnostics (
+    id         TEXT PRIMARY KEY,
+    file_path  TEXT NOT NULL,
+    line       INTEGER NOT NULL DEFAULT 0,
+    col_start  INTEGER NOT NULL DEFAULT 0,
+    message    TEXT NOT NULL,
+    severity   TEXT NOT NULL DEFAULT 'warning',
+    source     TEXT NOT NULL DEFAULT 'veto',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_scan_diag_file ON scan_diagnostics(file_path);
+
   CREATE INDEX IF NOT EXISTS idx_sessions_platform    ON sessions(platform);
   CREATE INDEX IF NOT EXISTS idx_decisions_session    ON decisions(session_id);
   CREATE INDEX IF NOT EXISTS idx_files_session        ON files_modified(session_id);

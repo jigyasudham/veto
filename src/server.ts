@@ -23,6 +23,7 @@ import {
   getContextStatus, fetchAndCacheDocs, saveTaskPlan,
   getUsageStatus, getAuditLog, getHealthStats, CONTEXT_WINDOWS,
   logUsage, getUsageLogs, getDb,
+  storeScanDiagnostics, clearScanDiagnostics,
 } from './memory/local.js';
 import { exportMemory, importMemory, getLocalDbSize } from './memory/sync.js';
 import { runDebate } from './council/index.js';
@@ -366,12 +367,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     },
     {
       name: 'veto_code_review',
-      description: 'Runs the Code Reviewer agent on provided code. Returns scored findings (complexity, error handling, magic numbers, nesting, dead code) with severity and fixes.',
+      description: 'Runs the Code Reviewer agent on provided code. Returns scored findings (complexity, error handling, magic numbers, nesting, dead code) with severity and fixes. Pass file_path to surface findings as VS Code inline diagnostics (squiggles).',
       inputSchema: {
         type: 'object',
         properties: {
-          code: { type: 'string', description: 'The code to review.' },
-          context: { type: 'string', description: 'Optional: file name, module description, or review focus.' },
+          code:      { type: 'string', description: 'The code to review.' },
+          context:   { type: 'string', description: 'Optional: file name, module description, or review focus.' },
+          file_path: { type: 'string', description: 'Optional: absolute path to the file being reviewed. When provided, findings are stored as VS Code inline diagnostics.' },
         },
         required: ['code'],
       },
@@ -391,23 +393,25 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     },
     {
       name: 'veto_security_scan',
-      description: 'Runs the Security Scanner (OWASP Top 10) on provided code. Returns vulnerabilities with severity, CWE/OWASP category, and remediation steps.',
+      description: 'Runs the Security Scanner (OWASP Top 10) on provided code. Returns vulnerabilities with severity, CWE/OWASP category, and remediation steps. Pass file_path to surface findings as VS Code inline diagnostics.',
       inputSchema: {
         type: 'object',
         properties: {
-          code: { type: 'string', description: 'The code to scan.' },
-          context: { type: 'string', description: 'Optional: language, framework, or specific concerns.' },
+          code:      { type: 'string', description: 'The code to scan.' },
+          context:   { type: 'string', description: 'Optional: language, framework, or specific concerns.' },
+          file_path: { type: 'string', description: 'Optional: absolute path to the file being scanned. When provided, findings are stored as VS Code inline diagnostics.' },
         },
         required: ['code'],
       },
     },
     {
       name: 'veto_secrets_scan',
-      description: 'Scans text or code for exposed credentials — API keys, tokens, passwords, connection strings, private keys. Returns findings with masked values and line numbers.',
+      description: 'Scans text or code for exposed credentials — API keys, tokens, passwords, connection strings, private keys. Returns findings with masked values and line numbers. Pass file_path to surface findings as VS Code inline diagnostics.',
       inputSchema: {
         type: 'object',
         properties: {
-          text: { type: 'string', description: 'The text or code to scan for secrets.' },
+          text:      { type: 'string', description: 'The text or code to scan for secrets.' },
+          file_path: { type: 'string', description: 'Optional: absolute path to the file being scanned. When provided, findings are stored as VS Code inline diagnostics.' },
         },
         required: ['text'],
       },
@@ -909,6 +913,18 @@ async function runTripleScan(diff: string, context: string) {
   return { reviewResult, secResult, secretsResult, verdict };
 }
 
+function parseLineFromLocation(location?: string): number {
+  if (!location) return 1;
+  const m = location.match(/(?:^|line\s+)(\d+)/i);
+  return m ? parseInt(m[1], 10) : 1;
+}
+
+function mapSeverityToVscode(severity?: string): string {
+  if (severity === 'critical' || severity === 'high') return 'error';
+  if (severity === 'medium') return 'warning';
+  return 'information';
+}
+
 // Auto-learning helper — records a learning_data row from any agent result.
 // Keeps call sites to one line rather than repeating the tier/quality logic.
 // After every 20 outcomes the thresholds are applied automatically.
@@ -1272,11 +1288,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!code) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'code is required.' }) }], isError: true };
       }
+      const reviewFilePath = args?.file_path ? String(args.file_path) : undefined;
       const result = await executeOne({ id: 'review-1', agent: 'reviewer', task: 'review this code', code, context: args?.context ? String(args.context) : undefined });
       if (result.error) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
       }
       autoRecord('code review', 'reviewer', result.analysis?.score ?? Math.round(result.output.confidence * 100));
+      if (reviewFilePath && result.analysis?.findings) {
+        storeScanDiagnostics(reviewFilePath, result.analysis.findings.map((f: { location?: string; description?: string; severity?: string }) => ({
+          line: parseLineFromLocation(f.location),
+          message: f.description ?? '',
+          severity: mapSeverityToVscode(f.severity),
+        })), 'code-review');
+      } else if (reviewFilePath) {
+        clearScanDiagnostics(reviewFilePath);
+      }
       return { content: [{ type: 'text', text: JSON.stringify(result.analysis, null, 2) }] };
     }
 
@@ -1370,11 +1396,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!code) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'code is required.' }) }], isError: true };
       }
+      const secFilePath = args?.file_path ? String(args.file_path) : undefined;
       const result = await executeOne({ id: 'scan-1', agent: 'security-scanner', task: 'scan this code for security issues', code, context: args?.context ? String(args.context) : undefined });
       if (result.error) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
       }
       autoRecord('security scan', 'security-scanner', result.analysis?.score ?? Math.round(result.output.confidence * 100));
+      if (secFilePath && result.analysis?.findings) {
+        storeScanDiagnostics(secFilePath, result.analysis.findings.map((f: { location?: string; description?: string; severity?: string }) => ({
+          line: parseLineFromLocation(f.location),
+          message: f.description ?? '',
+          severity: mapSeverityToVscode(f.severity),
+        })), 'security');
+      } else if (secFilePath) {
+        clearScanDiagnostics(secFilePath);
+      }
       return { content: [{ type: 'text', text: JSON.stringify(result.analysis, null, 2) }] };
     }
 
@@ -1383,11 +1419,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!text) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'text is required.' }) }], isError: true };
       }
+      const secretsFilePath = args?.file_path ? String(args.file_path) : undefined;
       const result = await executeOne({ id: 'secrets-1', agent: 'secrets', task: 'scan for exposed credentials', code: text });
       if (result.error) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
       }
       autoRecord('secrets scan', 'secrets', (result.analysis?.findings?.length ?? 0) === 0 ? 100 : result.analysis?.score ?? Math.round(result.output.confidence * 100));
+      if (secretsFilePath && result.analysis?.findings) {
+        storeScanDiagnostics(secretsFilePath, result.analysis.findings.map((f: { location?: string; description?: string; severity?: string }) => ({
+          line: parseLineFromLocation(f.location),
+          message: f.description ?? '',
+          severity: mapSeverityToVscode(f.severity),
+        })), 'secrets');
+      } else if (secretsFilePath) {
+        clearScanDiagnostics(secretsFilePath);
+      }
       return { content: [{ type: 'text', text: JSON.stringify(result.analysis, null, 2) }] };
     }
 
