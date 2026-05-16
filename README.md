@@ -496,6 +496,9 @@ Machine B  →  veto_memory_import  →  veto_session_restore
 
 ## Changelog
 
+### v1.2.19
+- **fix:** `veto_session_save` accepts optional `session_id` — updates that row in-place instead of inserting a new one, preventing session inflation when refreshing mid-conversation
+
 ### v1.2.18
 - **feat:** Auto-apply learned thresholds — after every 20 `autoRecord()` calls the router thresholds update automatically, no manual `veto_learning_apply` needed
 - **feat:** `veto hook install` / `veto hook remove` — writes a `.git/hooks/pre-commit` that blocks commits containing critical/high secrets

@@ -24,6 +24,7 @@ import {
   getUsageStatus, getAuditLog, getHealthStats, CONTEXT_WINDOWS,
   logUsage, getUsageLogs, getDb,
   storeScanDiagnostics, clearScanDiagnostics,
+  updateSession,
 } from './memory/local.js';
 import { exportMemory, importMemory, getLocalDbSize } from './memory/sync.js';
 import { runDebate } from './council/index.js';
@@ -192,7 +193,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     {
       name: 'veto_session_save',
       description:
-        'Saves the current session context to SQLite for later restoration across AI platforms.',
+        'Saves the current session context to SQLite. Pass session_id to update an existing session instead of creating a new one — use this when refreshing context mid-conversation rather than starting a new snapshot.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -225,6 +226,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           token_count: {
             type: 'number',
             description: 'Approximate tokens used this session. Veto uses this for context window monitoring.',
+          },
+          session_id: {
+            type: 'string',
+            description: 'Optional. UUID of an existing session to update in-place. When provided, Veto updates that row instead of inserting a new one — prevents session inflation when refreshing mid-conversation.',
           },
         },
         required: ['summary', 'context'],
@@ -1029,7 +1034,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const saveSummary = String(args?.summary ?? '');
       const saveContext = String(args?.context ?? '');
       const saveTaskState = args?.task_state ? String(args.task_state) : undefined;
-      const result = saveSession({
+      const existingId = args?.session_id ? String(args.session_id) : undefined;
+
+      const sessionInput = {
         summary: saveSummary,
         context: saveContext,
         task_state: saveTaskState,
@@ -1037,7 +1044,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         connection_type: args?.connection_type ? String(args.connection_type) : 'subscription',
         project_dir: sessionProjectDir,
         token_count: typeof args?.token_count === 'number' ? args.token_count : 0,
-      });
+      };
+
+      let result: { session_id: string; saved_at: string; usage_pct: number; context_warning: boolean; continuation_prompt: string | null };
+      let wasUpdate = false;
+
+      if (existingId) {
+        const updated = updateSession(existingId, sessionInput);
+        if (updated) {
+          result = { session_id: updated.session_id, saved_at: updated.saved_at, usage_pct: 0, context_warning: false, continuation_prompt: null };
+          wasUpdate = true;
+        } else {
+          result = saveSession(sessionInput);
+        }
+      } else {
+        result = saveSession(sessionInput);
+      }
       // Cache for auto-save: future veto_status calls with high token_count will re-save this context
       autoSave.cached = { summary: saveSummary, context: saveContext, task_state: saveTaskState, platform: savePlatform, project_dir: sessionProjectDir };
       autoSave.last_save_at = result.saved_at;
@@ -1045,13 +1067,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const responseObj: Record<string, unknown> = {
         success: true,
-        message: result.context_warning
-          ? `⚠️ Context at ${result.usage_pct}% — consider handing off soon.`
-          : 'Session saved. Use this ID to restore on any AI platform.',
+        message: wasUpdate
+          ? `Session updated in-place. ID unchanged: ${result.session_id}`
+          : result.context_warning
+            ? `⚠️ Context at ${result.usage_pct}% — consider handing off soon.`
+            : 'Session saved. Use this ID to restore on any AI platform.',
         session_id: result.session_id,
         saved_at: result.saved_at,
-        usage_pct: result.usage_pct,
-        context_warning: result.context_warning,
+        updated: wasUpdate,
+        ...(wasUpdate ? {} : { usage_pct: result.usage_pct, context_warning: result.context_warning }),
       };
       if (result.continuation_prompt) responseObj.continuation_prompt = result.continuation_prompt;
 

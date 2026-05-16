@@ -199,6 +199,39 @@ export type RestoreSessionResult = {
   session?: SessionRow;
 };
 
+export type UpdateSessionResult = {
+  updated: boolean;
+  session_id: string;
+  saved_at: string;
+};
+
+export function updateSession(session_id: string, input: SaveSessionInput): UpdateSessionResult | null {
+  const db = getDb();
+  const existing = db.prepare('SELECT id FROM sessions WHERE id = ?').get(session_id) as { id: string } | undefined;
+  if (!existing) return null;
+
+  const now = new Date().toISOString();
+  db.prepare(`
+    UPDATE sessions SET
+      summary     = ?,
+      context     = ?,
+      task_state  = ?,
+      token_count = ?,
+      save_type   = 'manual',
+      created_at  = ?
+    WHERE id = ?
+  `).run(
+    input.summary ?? null,
+    input.context ? JSON.stringify(input.context) : null,
+    input.task_state ? JSON.stringify(input.task_state) : null,
+    input.token_count ?? 0,
+    now,
+    session_id
+  );
+
+  return { updated: true, session_id, saved_at: now };
+}
+
 export function restoreSession(session_id: string, active_client?: string): RestoreSessionResult {
   const db = getDb();
   const row = db.prepare('SELECT * FROM sessions WHERE id = ?').get(session_id) as SessionRow | undefined;
