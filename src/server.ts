@@ -83,7 +83,7 @@ function maybeAutoSave(token_count: number, platform: string): { triggered: bool
     const elapsed = Date.now() - new Date(autoSave.last_save_at).getTime();
     if (elapsed < autoSave.cooldown_ms) return { triggered: false };
   }
-  const result = saveSession({ ...autoSave.cached, token_count, platform });
+  const result = saveSession({ ...autoSave.cached, token_count, platform, save_type: 'auto' });
   autoSave.last_save_at = result.saved_at;
   autoSave.last_session_id = result.session_id;
   return { triggered: true, session_id: result.session_id, usage_pct };

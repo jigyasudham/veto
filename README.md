@@ -168,10 +168,13 @@ After installing globally (`npm i -g @jigyasudham/veto`) or via npx:
 veto init                        # Configure all AI tools + scan project
 veto doctor                      # Check MCP registrations + system health
 veto status                      # Version, DB path, session/memory/outcome counts
-veto sessions                    # List last 20 saved sessions
+veto version                     # Alias for veto status
+veto sessions                    # List last 20 saved sessions ([auto] badge on auto-saves)
+veto sessions --clean            # Remove auto-saves older than 7 days
 veto memory [query]              # Search knowledge base (blank = all entries)
 veto patterns [prefix]           # List learned agent/routing patterns
-veto help                        # Full command + MCP tools reference
+veto help                        # Commands + MCP tools reference
+veto help --troubleshoot         # Full troubleshooting guide (14 scenarios)
 
 # Without installing:
 npx @jigyasudham/veto help       # Same help output, no install needed
@@ -179,7 +182,7 @@ npx @jigyasudham/veto status     # Check status from any machine
 npx @jigyasudham/veto doctor     # Diagnose MCP setup from any machine
 ```
 
-`veto help` shows all CLI commands, all 45 MCP tool names, MCP Resources, and MCP Prompts — the full reference in one place.
+`veto help` shows all CLI commands, all 45 MCP tool names, MCP Resources, and MCP Prompts. `veto help --troubleshoot` shows the full troubleshooting guide.
 
 ### `veto doctor`
 
@@ -483,10 +486,19 @@ Machine B  →  veto_memory_import  →  veto_session_restore
 | 18 — Extension Upgrades (status bar, PR review, Learning Stats panel, secrets trigger) | ✅ Complete | veto-vscode v0.6.0 |
 | 19 — Auto-Learning Hooks (every agent tool auto-records outcomes) | ✅ Complete | v1.2.15 |
 | 20 — Auto-Store Memory (RED verdict + critical scan findings → Memory panel) | ✅ Complete | v1.2.16 |
+| CLI Polish — `veto version`, short help, session transparency, TAGLINE constant | ✅ Complete | v1.2.17 |
 
 ---
 
 ## Changelog
+
+### v1.2.17
+- **fix:** `veto version` (and `veto v`) no longer shows "Unknown command" — now an alias for `veto status`
+- **fix:** Unknown commands show a short 2-line error instead of the full 100-line help wall
+- **fix:** `veto help` is now ~50 lines (commands + tools + resources). Full troubleshooting guide moved to `veto help --troubleshoot`
+- **fix:** Tagline `"50 agents. 45 tools. 3 AIs."` extracted to a single `TAGLINE` constant in `cli.ts` — only one place to update when tool count changes
+- **feat:** Sessions now track `save_type` (`manual` | `auto`) — auto-saves show a dim `[auto]` badge in `veto sessions` output
+- **feat:** `veto sessions --clean` removes auto-saves older than 7 days (keeps all manual saves)
 
 ### v1.2.16
 - **feat:** Auto-store knowledge entries on RED council verdict and critical scan failures — entries appear in the VS Code Memory panel immediately without any manual `veto_memory_store` call. RED verdict stores block reasons + warnings + recommended action. Critical findings from `veto_diff_review`, `veto_ci_gate`, and `veto_pr_review` store the blocking issue list when verdict is `fail`.

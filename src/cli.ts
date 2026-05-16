@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { version: VERSION } = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
+const TAGLINE = '50 agents. 45 tools. 3 AIs. Self-learning. Zero extra cost.';
 const VETO_DIR = join(homedir(), '.veto');
 const HOME = homedir();
 
@@ -33,7 +34,7 @@ function printBanner() {
   console.log(c.bold(c.cyan('   ╚████╔╝ ███████╗   ██║   ╚██████╔╝')));
   console.log(c.bold(c.cyan('    ╚═══╝  ╚══════╝   ╚═╝    ╚═════╝')));
   console.log('');
-  console.log(c.dim(`  50 agents. 45 tools. 3 AIs. Self-learning. Zero extra cost.`));
+  console.log(c.dim(`  ${TAGLINE}`));
   console.log(c.dim(`  v${VERSION}`));
   console.log('');
 }
@@ -455,7 +456,22 @@ async function statusCommand() {
 }
 
 async function sessionsCommand() {
-  const { listSessions } = await import('./memory/local.js');
+  const { listSessions, getDb } = await import('./memory/local.js');
+
+  const flag = process.argv[3];
+
+  if (flag === '--clean') {
+    const db = getDb();
+    const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const result = db.prepare(
+      "DELETE FROM sessions WHERE save_type = 'auto' AND created_at < ?"
+    ).run(cutoff) as { changes: number };
+    console.log('');
+    console.log(c.green(`  ✓ Removed ${result.changes} auto-save${result.changes !== 1 ? 's' : ''} older than 7 days.`));
+    console.log('');
+    return;
+  }
+
   const sessions = listSessions(20);
 
   console.log('');
@@ -467,9 +483,12 @@ async function sessionsCommand() {
   } else {
     for (const s of sessions) {
       const date = new Date(s.started_at).toLocaleString();
-      console.log(`  ${c.cyan(s.id.slice(0, 8))}  ${c.dim(date)}  ${c.bold(s.platform ?? 'claude')}  ${s.summary?.slice(0, 60) ?? ''}`);
+      const badge = s.save_type === 'auto' ? c.dim(' [auto]') : '';
+      console.log(`  ${c.cyan(s.id.slice(0, 8))}  ${c.dim(date)}  ${c.bold(s.platform ?? 'claude')}${badge}  ${s.summary?.slice(0, 60) ?? ''}`);
     }
   }
+  console.log('');
+  console.log(c.dim(`  Tip: veto sessions --clean  removes auto-saves older than 7 days`));
   console.log('');
 }
 
@@ -517,9 +536,9 @@ async function patternsCommand() {
   console.log('');
 }
 
-function helpCommand() {
+function shortHelpCommand() {
   console.log('');
-  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(' — 50 agents. 45 tools. 3 AIs. Self-learning. Zero extra cost.'));
+  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(` — ${TAGLINE}`));
   console.log('');
   console.log(c.bold('  CLI Commands'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
@@ -529,7 +548,9 @@ function helpCommand() {
   console.log(`  ${c.cyan('veto sessions')}                List last 20 saved sessions`);
   console.log(`  ${c.cyan('veto memory')} ${c.dim('[query]')}         Search knowledge base`);
   console.log(`  ${c.cyan('veto patterns')} ${c.dim('[prefix]')}      List learned agent/routing patterns`);
+  console.log(`  ${c.cyan('veto version')}                 Show version (alias for status)`);
   console.log(`  ${c.cyan('veto help')}                    Show this help`);
+  console.log(`  ${c.cyan('veto help --troubleshoot')}     Show troubleshooting guide`);
   console.log('');
   console.log(c.bold('  MCP Tools (45)'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
@@ -562,6 +583,16 @@ function helpCommand() {
   console.log(c.bold('  MCP Prompts'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
   console.log(`  ${c.cyan('code-review')} · ${c.cyan('security-audit')} · ${c.cyan('deploy-checklist')} · ${c.cyan('explain-file')}`);
+  console.log('');
+  console.log(c.bold('  Docs & Support'));
+  console.log(c.dim('  ─────────────────────────────────────────────────────'));
+  console.log(`  ${c.dim('GitHub:')}  https://github.com/jigyasudham/veto`);
+  console.log(`  ${c.dim('Issues:')} https://github.com/jigyasudham/veto/issues`);
+  console.log(`  ${c.dim('npm:')}     https://www.npmjs.com/package/@jigyasudham/veto`);
+  console.log('');
+}
+
+function troubleshootCommand() {
   console.log('');
   console.log(c.bold('  Troubleshooting'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
@@ -629,12 +660,6 @@ function helpCommand() {
   console.log(`  ${c.dim('→')} Each machine needs its own init run to register the MCP server`);
   console.log(`  ${c.dim('→')} Then restart the AI client on that machine`);
   console.log('');
-  console.log(c.bold('  Docs & Support'));
-  console.log(c.dim('  ─────────────────────────────────────────────────────'));
-  console.log(`  ${c.dim('GitHub:')}  https://github.com/jigyasudham/veto`);
-  console.log(`  ${c.dim('Issues:')} https://github.com/jigyasudham/veto/issues`);
-  console.log(`  ${c.dim('npm:')}     https://www.npmjs.com/package/@jigyasudham/veto`);
-  console.log('');
 }
 
 // ─── Router ────────────────────────────────────────────────────────────────────
@@ -684,14 +709,26 @@ switch (command) {
     });
     break;
 
+  case 'version':
+  case 'v':
+    statusCommand().catch((err) => {
+      console.error(c.red(`Error: ${err.message}`));
+      process.exit(1);
+    });
+    break;
+
   case 'help':
   case '--help':
   case '-h':
-    helpCommand();
+    if (process.argv[3] === '--troubleshoot') {
+      troubleshootCommand();
+    } else {
+      shortHelpCommand();
+    }
     break;
 
   default:
     console.error(c.red(`  Unknown command: ${command}`));
-    helpCommand();
+    console.error(c.dim(`  Run ${c.cyan('veto help')} for usage.`));
     process.exit(1);
 }

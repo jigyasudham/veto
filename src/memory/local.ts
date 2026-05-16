@@ -42,7 +42,15 @@ export function getDb(): DatabaseSync {
   migrateCouncilDuration(_db);
   migrateRateUsageTokens(_db);
   migrateUsageLog(_db);
+  migrateSessionSaveType(_db);
   return _db;
+}
+
+// Adds save_type column to sessions if it doesn't exist (v1.2.17 migration)
+function migrateSessionSaveType(db: DatabaseSync): void {
+  const cols = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
+  const names = new Set(cols.map(c => c.name));
+  if (!names.has('save_type')) db.exec("ALTER TABLE sessions ADD COLUMN save_type TEXT NOT NULL DEFAULT 'manual'");
 }
 
 // Adds token_count column to rate_usage if it doesn't exist (v1.2.13 migration)
@@ -117,6 +125,7 @@ export type SaveSessionInput = {
   context?: string;
   task_state?: string;
   token_count?: number;
+  save_type?: 'manual' | 'auto';
 };
 
 export type SessionSaveResult = {
@@ -135,16 +144,19 @@ export function saveSession(input: SaveSessionInput): SessionSaveResult {
   const connection_type = input.connection_type ?? 'subscription';
   const token_count = input.token_count ?? 0;
 
+  const save_type = input.save_type ?? 'manual';
+
   db.prepare(`
-    INSERT INTO sessions (id, started_at, platform, connection_type, project_dir, summary, context, task_state, token_count)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, started_at, platform, connection_type, project_dir, summary, context, task_state, token_count, save_type)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id, now, platform, connection_type,
     input.project_dir ?? null,
     input.summary ?? null,
     input.context ? JSON.stringify(input.context) : null,
     input.task_state ? JSON.stringify(input.task_state) : null,
-    token_count
+    token_count,
+    save_type
   );
 
   // Record usage event

@@ -15,6 +15,7 @@ export const CREATE_TABLES = `
     context          TEXT,
     task_state       TEXT,
     token_count      INTEGER DEFAULT 0,
+    save_type        TEXT NOT NULL DEFAULT 'manual',
     created_at       TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -173,6 +174,7 @@ export type SessionRow = {
   context: string | null;
   task_state: string | null;
   token_count: number;
+  save_type: 'manual' | 'auto';
   created_at: string;
 };
 
