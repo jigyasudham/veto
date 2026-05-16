@@ -10,5 +10,6 @@ veto.db
 # Internal — not for public repo
 VETO_VISION_FINAL.md
 PLAN.md
+BUGS.md
 docs/
 scripts/
