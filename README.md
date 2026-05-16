@@ -1,6 +1,6 @@
 # veto
 
-> **50 agents. 45 tools. 3 AIs. Self-learning. Zero extra cost.**
+> **50 agents. 46 tools. 3 AIs. Self-learning. Zero extra cost.**
 
 An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, and Gemini CLI using your existing subscriptions — giving every AI a council of specialist agents, persistent cross-platform memory, a self-learning router that improves automatically from every tool call, live usage tracking, CI/CD pipeline gates, workspace discovery, live documentation fetching, auto session save, and the ability to say no to bad decisions.
 
@@ -118,13 +118,13 @@ All config files are home-directory relative — they apply globally across all 
 
 ---
 
-## MCP Tools (45)
+## MCP Tools (46)
 
 | Category | Tools |
 |---|---|
 | **Session** | `veto_status` · `veto_session_save` · `veto_session_restore` · `veto_sessions_list` · `veto_autosave_status` |
 | **Router** | `veto_route_task` · `veto_rate_status` |
-| **Council** | `veto_council_debate` |
+| **Council** | `veto_council_debate` · `veto_benchmark` |
 | **Agents** | `veto_agent_plan` · `veto_execute_parallel` · `veto_explain` |
 | **Review** | `veto_code_review` · `veto_security_scan` · `veto_secrets_scan` · `veto_diff_review` |
 | **Pipelines** | `veto_workflow` |
@@ -173,6 +173,9 @@ veto sessions                    # List last 20 saved sessions ([auto] badge on 
 veto sessions --clean            # Remove auto-saves older than 7 days
 veto memory [query]              # Search knowledge base (blank = all entries)
 veto patterns [prefix]           # List learned agent/routing patterns
+veto hook install                 # Install pre-commit secrets scan hook
+veto hook remove                  # Remove the veto pre-commit hook
+veto check                        # Scan staged changes for secrets (used by hook)
 veto help                        # Commands + MCP tools reference
 veto help --troubleshoot         # Full troubleshooting guide (14 scenarios)
 
@@ -487,10 +490,17 @@ Machine B  →  veto_memory_import  →  veto_session_restore
 | 19 — Auto-Learning Hooks (every agent tool auto-records outcomes) | ✅ Complete | v1.2.15 |
 | 20 — Auto-Store Memory (RED verdict + critical scan findings → Memory panel) | ✅ Complete | v1.2.16 |
 | CLI Polish — `veto version`, short help, session transparency, TAGLINE constant | ✅ Complete | v1.2.17 |
+| 21 — Closing the Loop (#42 auto-thresholds, #43 pre-commit hook, #44 veto_benchmark) | ✅ Complete | v1.2.18 |
 
 ---
 
 ## Changelog
+
+### v1.2.18
+- **feat:** Auto-apply learned thresholds — after every 20 `autoRecord()` calls the router thresholds update automatically, no manual `veto_learning_apply` needed
+- **feat:** `veto hook install` / `veto hook remove` — writes a `.git/hooks/pre-commit` that blocks commits containing critical/high secrets
+- **feat:** `veto check` — fast secrets scan on staged changes (used by the hook, also runnable standalone)
+- **feat:** `veto_benchmark` tool (tool #46) — two approaches → two parallel council debates → structured winner with verdict, confidence, warning delta, and per-agent votes
 
 ### v1.2.17
 - **fix:** `veto version` (and `veto v`) no longer shows "Unknown command" — now an alias for `veto status`

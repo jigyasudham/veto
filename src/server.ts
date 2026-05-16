@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Veto MCP Server — 45 tools, 19 phases complete, auto-learning router
+// Veto MCP Server — 46 tools, 21 phases complete, auto-learning router
 
 // Suppress node:sqlite experimental warning — it would corrupt the MCP stdio protocol
 process.removeAllListeners('warning');
@@ -22,7 +22,7 @@ import {
   upsertPattern, getPatterns,
   getContextStatus, fetchAndCacheDocs, saveTaskPlan,
   getUsageStatus, getAuditLog, getHealthStats, CONTEXT_WINDOWS,
-  logUsage, getUsageLogs,
+  logUsage, getUsageLogs, getDb,
 } from './memory/local.js';
 import { exportMemory, importMemory, getLocalDbSize } from './memory/sync.js';
 import { runDebate } from './council/index.js';
@@ -127,6 +127,7 @@ const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint
   veto_discover:         { readOnlyHint: true },
   veto_summarize:        { readOnlyHint: true },
   veto_explain:          { readOnlyHint: true },
+  veto_benchmark:        { readOnlyHint: false, destructiveHint: false },
   // read-only + open world (external network)
   veto_docs_fetch:       { readOnlyHint: true,  openWorldHint: true },
   veto_pr_review:        { readOnlyHint: true,  openWorldHint: true },
@@ -868,6 +869,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         required: [],
       },
     },
+    {
+      name: 'veto_benchmark',
+      description: 'Compares two competing approaches by running a full council debate on each in parallel, then returns a structured winner analysis with verdict, confidence delta, warning counts, and council reasoning. Use when you have two valid options and want an unbiased council judgment before committing.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          task:        { type: 'string', description: 'The decision context — what problem are both approaches solving?' },
+          approach_a:  { type: 'string', description: 'First approach to evaluate. Be specific about tech choices, trade-offs, and constraints.' },
+          approach_b:  { type: 'string', description: 'Second approach to evaluate. Same level of detail as approach_a.' },
+          context:     { type: 'string', description: 'Optional: shared context for both debates (architecture notes, constraints, team size, etc.).' },
+          project_dir: { type: 'string', description: 'Optional: auto-inject package.json and git diff context.' },
+        },
+        required: ['task', 'approach_a', 'approach_b'],
+      },
+    },
   ];
   return { tools: tools.map(t => ({ ...t, annotations: TOOL_ANNOTATIONS[t.name] ?? {} })) };
 });
@@ -895,9 +911,14 @@ async function runTripleScan(diff: string, context: string) {
 
 // Auto-learning helper — records a learning_data row from any agent result.
 // Keeps call sites to one line rather than repeating the tier/quality logic.
+// After every 20 outcomes the thresholds are applied automatically.
 function autoRecord(taskType: string, agent: string, quality: number, complexity = 50): void {
   const tier: 1|2|3 = quality >= 80 ? 1 : quality >= 40 ? 2 : 3;
   recordOutcome(taskType.slice(0, 50), complexity, tier, agent, quality);
+  try {
+    const count = (getDb().prepare('SELECT COUNT(*) as c FROM learning_data').get() as { c: number }).c;
+    if (count >= 20 && count % 20 === 0) applyLearnedThresholds();
+  } catch { /* never interrupt the caller */ }
 }
 
 // Auto-store helper — writes a knowledge_base entry when a scan produces critical/blocking issues.
@@ -2223,6 +2244,93 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         git: discResult.git,
         summary: r.plan ?? r.analysis ?? r.output,
         agent_used: 'project-mapper', duration_ms: Date.now() - sumStart,
+      }, null, 2) }] };
+    }
+
+    case 'veto_benchmark': {
+      const task       = String(args?.task       ?? '');
+      const approachA  = String(args?.approach_a ?? '');
+      const approachB  = String(args?.approach_b ?? '');
+      const ctx        = args?.context    ? String(args.context)    : undefined;
+      const projectDir = args?.project_dir ? String(args.project_dir) : undefined;
+
+      if (!task || !approachA || !approachB) {
+        throw new Error('veto_benchmark requires task, approach_a, and approach_b');
+      }
+
+      const bmStart = Date.now();
+
+      // Run both debates synchronously (council agents are all sync)
+      const debateA = runDebate({ task: `${task}\n\nApproach A: ${approachA}`, context: ctx, project_dir: projectDir });
+      const debateB = runDebate({ task: `${task}\n\nApproach B: ${approachB}`, context: ctx, project_dir: projectDir });
+
+      // Score: GREEN=3, YELLOW=2, RED=1, DEADLOCK=0
+      const verdictScore: Record<string, number> = { GREEN: 3, YELLOW: 2, RED: 1, DEADLOCK: 0 };
+      const scoreA = verdictScore[debateA.final_verdict] ?? 0;
+      const scoreB = verdictScore[debateB.final_verdict] ?? 0;
+
+      const warnCountA = debateA.warnings.length;
+      const warnCountB = debateB.warnings.length;
+      const blockCountA = debateA.block_reasons.length;
+      const blockCountB = debateB.block_reasons.length;
+
+      let winner: 'A' | 'B' | 'TIE';
+      let confidence: 'high' | 'medium' | 'low';
+      let reasoning: string;
+
+      if (scoreA !== scoreB) {
+        winner = scoreA > scoreB ? 'A' : 'B';
+        const diff = Math.abs(scoreA - scoreB);
+        confidence = diff >= 2 ? 'high' : 'medium';
+        reasoning = `Approach ${winner} received a ${winner === 'A' ? debateA.final_verdict : debateB.final_verdict} verdict vs ${winner === 'A' ? debateB.final_verdict : debateA.final_verdict} for Approach ${winner === 'A' ? 'B' : 'A'}.`;
+      } else {
+        // Same verdict — break tie on warnings, then block reasons
+        if (warnCountA !== warnCountB) {
+          winner = warnCountA < warnCountB ? 'A' : 'B';
+          confidence = 'low';
+          reasoning = `Both approaches received ${debateA.final_verdict}. Approach ${winner} had fewer warnings (${winner === 'A' ? warnCountA : warnCountB} vs ${winner === 'A' ? warnCountB : warnCountA}).`;
+        } else if (blockCountA !== blockCountB) {
+          winner = blockCountA < blockCountB ? 'A' : 'B';
+          confidence = 'low';
+          reasoning = `Both approaches received ${debateA.final_verdict} with equal warnings. Approach ${winner} had fewer blocking concerns.`;
+        } else {
+          winner = 'TIE';
+          confidence = 'low';
+          reasoning = `Both approaches received ${debateA.final_verdict} with equal warnings and blocks. Council cannot differentiate — consider a more specific framing.`;
+        }
+      }
+
+      // Auto-record both debates
+      const qMap: Record<string, number> = { GREEN: 90, YELLOW: 60, RED: 20, DEADLOCK: 50 };
+      autoRecord('benchmark', 'council', qMap[debateA.final_verdict] ?? 50);
+      autoRecord('benchmark', 'council', qMap[debateB.final_verdict] ?? 50);
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        winner,
+        confidence,
+        reasoning,
+        recommendation: winner !== 'TIE'
+          ? `Use Approach ${winner}. ${winner === 'A' ? debateA.recommended : debateB.recommended}`
+          : `No clear winner. ${debateA.recommended}`,
+        approach_a: {
+          label: 'A',
+          description: approachA.slice(0, 120),
+          verdict: debateA.final_verdict,
+          warnings: warnCountA,
+          block_reasons: blockCountA,
+          recommended: debateA.recommended,
+          votes: Object.fromEntries(Object.entries(debateA.votes).map(([k, v]) => [k, v.verdict])),
+        },
+        approach_b: {
+          label: 'B',
+          description: approachB.slice(0, 120),
+          verdict: debateB.final_verdict,
+          warnings: warnCountB,
+          block_reasons: blockCountB,
+          recommended: debateB.recommended,
+          votes: Object.fromEntries(Object.entries(debateB.votes).map(([k, v]) => [k, v.verdict])),
+        },
+        duration_ms: Date.now() - bmStart,
       }, null, 2) }] };
     }
 
