@@ -85,7 +85,7 @@ The `-s user` flag registers Veto at user scope so it is available in **every wi
 | **Codex CLI** | `~/.codex/config.toml` |
 | **Cursor** | `~/.cursor/mcp.json` |
 | **Windsurf** | `~/.codeium/windsurf/mcp_config.json` |
-| **Zed** | `~/.config/zed/settings.json` (`context_servers` key) |
+| **Zed** | `~/.config/zed/settings.json` · Windows: `%APPDATA%\Zed\settings.json` (`context_servers` key) |
 
 All config files are home-directory relative — they apply globally across all projects. Restart the AI client after `veto init`.
 

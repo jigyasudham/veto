@@ -68,7 +68,7 @@ function writeVetoConfig(
     existing.mcpServers = servers;
   } else if (format === 'context_servers') {
     const servers = (existing.context_servers as Record<string, unknown>) ?? {};
-    servers['veto'] = { command: { path: npxCmd, args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] } };
+    servers['veto'] = { command: npxCmd, args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
     existing.context_servers = servers;
   } else {
     const servers = (existing.servers as Record<string, unknown>) ?? {};
@@ -122,9 +122,14 @@ const PLATFORMS = [
   },
   {
     name: 'Zed',
-    path: join(HOME, '.config', 'zed', 'settings.json'),
+    // macOS/Linux: ~/.config/zed/settings.json  |  Windows: %APPDATA%\Zed\settings.json
+    path: process.platform === 'win32'
+      ? join(process.env.APPDATA ?? HOME, 'Zed', 'settings.json')
+      : join(HOME, '.config', 'zed', 'settings.json'),
     format: 'context_servers' as const,
-    detectionDir: join(HOME, '.config', 'zed'),
+    detectionDir: process.platform === 'win32'
+      ? join(process.env.APPDATA ?? HOME, 'Zed')
+      : join(HOME, '.config', 'zed'),
   },
 ];
 
