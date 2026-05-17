@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { version: VERSION } = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
-const TAGLINE = '50 agents. 46 tools. 3 AIs. Self-learning. Zero extra cost.';
+const TAGLINE = '50 agents. 49 tools. 4+ AIs. Self-learning. Zero extra cost.';
 const VETO_DIR = join(homedir(), '.veto');
 const HOME = homedir();
 
@@ -565,9 +565,9 @@ function shortHelpCommand() {
   console.log(`  ${c.cyan('veto help')}                    Show this help`);
   console.log(`  ${c.cyan('veto help --troubleshoot')}     Show troubleshooting guide`);
   console.log('');
-  console.log(c.bold('  MCP Tools (46)'));
+  console.log(c.bold('  MCP Tools (49)'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
-  console.log(`  ${c.dim('Session')}       veto_status · veto_session_save · veto_session_restore · veto_sessions_list`);
+  console.log(`  ${c.dim('Session')}       veto_status · veto_autosave_status · veto_session_save · veto_session_restore · veto_sessions_list`);
   console.log(`  ${c.dim('Router')}        veto_route_task · veto_rate_status`);
   console.log(`  ${c.dim('Council')}       veto_council_debate · veto_benchmark`);
   console.log(`  ${c.dim('Agents')}        veto_agent_plan · veto_execute_parallel · veto_explain`);
@@ -581,9 +581,9 @@ function shortHelpCommand() {
   console.log(`  ${c.dim('Learning')}      veto_record_outcome · veto_learning_stats · veto_learning_apply`);
   console.log(`  ${c.dim('Handoff')}       veto_handoff · veto_continue · veto_platform_setup`);
   console.log(`  ${c.dim('Intelligence')}  veto_docs_fetch · veto_context_status · veto_task_parse`);
-  console.log(`  ${c.dim('Observability')} veto_usage_status · veto_audit_log · veto_health`);
+  console.log(`  ${c.dim('Observability')} veto_usage_status · veto_audit_log · veto_health · veto_metrics`);
   console.log(`  ${c.dim('CI/CD')}         veto_ci_gate · veto_pr_review`);
-  console.log(`  ${c.dim('Discover')}      veto_discover · veto_summarize`);
+  console.log(`  ${c.dim('Discover')}      veto_discover · veto_summarize · veto_git_blame · veto_changelog`);
   console.log(`  ${c.dim('Plugins')}       veto_plugins`);
   console.log('');
   console.log(c.bold('  MCP Resources'));
@@ -613,10 +613,10 @@ function troubleshootCommand() {
   console.log(`  ${c.dim('→')} Claude Code: MCP must be registered at user scope, not project scope`);
   console.log(`  ${c.dim('→')} Run: ${c.cyan('claude mcp add veto -s user -- npx -y --package @jigyasudham/veto veto-server')}`);
   console.log(`  ${c.dim('→')} The ${c.cyan('-s user')} flag makes Veto global across ALL windows and projects`);
-  console.log(`  ${c.dim('→')} Gemini / Cursor / Windsurf: run ${c.cyan('veto init')} once — config is written globally`);
+  console.log(`  ${c.dim('→')} Gemini / Cursor / Windsurf / Zed: run ${c.cyan('veto init')} once — config is written globally`);
   console.log('');
   console.log(`  ${c.yellow('MCP disconnected / tools not loading')}`);
-  console.log(`  ${c.dim('→')} Run ${c.cyan('veto init')} again, then fully restart your AI client (Claude / Gemini / Cursor)`);
+  console.log(`  ${c.dim('→')} Run ${c.cyan('veto init')} again, then fully restart your AI client (Claude / Gemini / Cursor / Zed)`);
   console.log(`  ${c.dim('→')} Verify the MCP entry in your AI client config file`);
   console.log(`  ${c.dim('→')} Check Node.js version: ${c.cyan('node --version')}  (need >= 22)`);
   console.log('');
