@@ -1,6 +1,6 @@
 # veto
 
-> **50 agents. 49 tools. 4+ AIs. Self-learning. Zero extra cost.**
+> **50 agents. 49 tools. 3 AIs. Self-learning. Zero extra cost.**
 
 An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, Gemini CLI, Cursor, Windsurf, and Zed using your existing subscriptions — giving every AI a council of specialist agents, persistent cross-platform memory, a self-learning router, CI/CD gates, workspace discovery, live docs, cross-platform handoff, usage metrics, and the ability to say no to bad decisions before any code is written.
 

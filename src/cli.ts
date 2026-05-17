@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { version: VERSION } = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
-const TAGLINE = '50 agents. 49 tools. 4+ AIs. Self-learning. Zero extra cost.';
+const TAGLINE = '50 agents. 49 tools. 3 AIs. Self-learning. Zero extra cost.';
 const VETO_DIR = join(homedir(), '.veto');
 const HOME = homedir();
 
