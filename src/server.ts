@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Veto MCP Server — 46 tools, 21 phases complete, auto-learning router
+// Veto MCP Server — 49 tools, 23 phases complete, LLM council + auto-learning router
 
 // Suppress node:sqlite experimental warning — it would corrupt the MCP stdio protocol
 process.removeAllListeners('warning');
@@ -15,19 +15,21 @@ import {
   GetPromptRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { buildContextString, readProjectContext } from './context/reader.js';
+import { TOOL_DEFINITIONS } from './tools/definitions.js';
 import {
   saveSession, restoreSession, listSessions, closeSession, getDbPath, saveCouncilOutcome,
   storeKnowledge, searchKnowledge, deleteKnowledge,
   updateProjectMap, getProjectMap,
   upsertPattern, getPatterns,
-  getContextStatus, fetchAndCacheDocs, saveTaskPlan,
+  getContextStatus, fetchAndCacheDocs, saveTaskPlan, getTaskPlan,
   getUsageStatus, getAuditLog, getHealthStats, CONTEXT_WINDOWS,
   logUsage, getUsageLogs, getDb,
   storeScanDiagnostics, clearScanDiagnostics,
-  updateSession,
+  updateSession, resolveContextWindow, getMetrics,
 } from './memory/local.js';
 import { exportMemory, importMemory, getLocalDbSize } from './memory/sync.js';
 import { runDebate } from './council/index.js';
+import { runLlmDebate } from './council/llm-council.js';
 import { routeTask, getRateStatus, trackTokens, recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent } from './router/index.js';
 import { getConfig, setConfig } from './memory/config.js';
 import type { AgentType, Platform } from './router/index.js';
@@ -41,7 +43,7 @@ import { loadPlugins, listPlugins } from './plugins/loader.js';
 import { fetchPrDiff } from './github/pr-fetcher.js';
 import { discoverProject } from './discover.js';
 import { readFileSync, statSync } from 'node:fs';
-import { extname, basename, join, dirname } from 'node:path';
+import { extname, basename, join, dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { execSync as execSyncTop } from 'node:child_process';
@@ -67,6 +69,7 @@ interface AutoSaveCache {
   task_state?: string;
   platform: string;
   project_dir?: string;
+  context_window?: number;
 }
 const autoSave = {
   threshold_pct: 70,
@@ -76,9 +79,9 @@ const autoSave = {
   cached: null as AutoSaveCache | null,
 };
 
-function maybeAutoSave(token_count: number, platform: string): { triggered: boolean; session_id?: string; usage_pct?: number } {
+function maybeAutoSave(token_count: number, platform: string, model?: string): { triggered: boolean; session_id?: string; usage_pct?: number } {
   if (!autoSave.cached) return { triggered: false };
-  const window_size = CONTEXT_WINDOWS[platform] ?? 200_000;
+  const window_size = autoSave.cached.context_window ?? resolveContextWindow(platform, model);
   const usage_pct = Math.round((token_count / window_size) * 100);
   if (usage_pct < autoSave.threshold_pct) return { triggered: false };
   if (autoSave.last_save_at) {
@@ -161,739 +164,7 @@ const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint
 // ─── Tool Definitions ─────────────────────────────────────────────────────────
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  const tools = [
-    {
-      name: 'veto_status',
-      description: 'Returns Veto server status, version, and database info. Pass token_count to trigger auto-save if context usage crosses 70%.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          token_count: {
-            type: 'number',
-            description: 'Current session token count. If provided and context usage ≥ 70%, Veto auto-saves the last known session context in the background.',
-          },
-          platform: {
-            type: 'string',
-            description: 'AI platform (claude, gemini, codex). Used to select the correct context window for threshold calculation. Defaults to "claude".',
-            enum: ['claude', 'gemini', 'codex'],
-          },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'veto_autosave_status',
-      description: 'Returns the current auto-save state: whether a context is cached, the threshold, the last auto-save time, and the session ID.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: 'veto_session_save',
-      description:
-        'Saves the current session context to SQLite. Pass session_id to update an existing session instead of creating a new one — use this when refreshing context mid-conversation rather than starting a new snapshot.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          summary: {
-            type: 'string',
-            description: 'A brief summary of what was accomplished this session.',
-          },
-          context: {
-            type: 'string',
-            description: 'Key context to restore (decisions, current task, file list, etc.).',
-          },
-          task_state: {
-            type: 'string',
-            description: 'Current task state — what is done and what is next.',
-          },
-          platform: {
-            type: 'string',
-            description: 'AI platform used (claude, gemini, codex). Defaults to "claude".',
-            enum: ['claude', 'gemini', 'codex'],
-          },
-          project_dir: {
-            type: 'string',
-            description: 'Absolute path to the current project directory.',
-          },
-          connection_type: {
-            type: 'string',
-            description: 'How you are connected to this AI — "subscription" (Claude Pro, Gemini Advanced) or "api" (API key). Used for usage tracking.',
-            enum: ['subscription', 'api'],
-          },
-          token_count: {
-            type: 'number',
-            description: 'Approximate tokens used this session. Veto uses this for context window monitoring.',
-          },
-          session_id: {
-            type: 'string',
-            description: 'Optional. UUID of an existing session to update in-place. When provided, Veto updates that row instead of inserting a new one — prevents session inflation when refreshing mid-conversation.',
-          },
-        },
-        required: ['summary', 'context'],
-      },
-    },
-    {
-      name: 'veto_session_restore',
-      description:
-        'Restores a previously saved session by ID. Use veto_sessions_list to find IDs.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          session_id: {
-            type: 'string',
-            description: 'UUID of the session to restore.',
-          },
-          resuming_as: {
-            type: 'string',
-            description: 'The AI client resuming this session (e.g. "claude", "gemini", "codex"). Recorded as active_client.',
-            enum: ['claude', 'gemini', 'codex'],
-          },
-        },
-        required: ['session_id'],
-      },
-    },
-    {
-      name: 'veto_sessions_list',
-      description: 'Lists the most recent saved sessions (up to 10).',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          limit: {
-            type: 'number',
-            description: 'Number of sessions to return (default 10, max 50).',
-          },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'veto_route_task',
-      description:
-        'Scores a task for complexity (0-100) and returns the optimal tier, model recommendation, and rate status. Use before any substantial task to let the router decide which model to use.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          task: {
-            type: 'string',
-            description: 'The task description to score and route.',
-          },
-          agent_type: {
-            type: 'string',
-            description: 'Optional agent type — some agents are tier-locked regardless of score.',
-            enum: [
-              'lead-developer', 'system-architect', 'security-scanner',
-              'devil-advocate', 'decision-engine', 'risk-assessor',
-              'coder', 'tester', 'reviewer', 'database', 'documentation',
-              'file-manager', 'git-agent', 'search-agent', 'secrets', 'reporter',
-              'dynamic',
-            ],
-          },
-          files_affected: {
-            type: 'number',
-            description: 'Number of files the task will touch (influences complexity score).',
-          },
-          force_council: {
-            type: 'boolean',
-            description: 'Set true to force a Tier 3 / council-required routing.',
-          },
-          context: {
-            type: 'string',
-            description: 'Current context text — router will return a compression plan.',
-          },
-          preferred_platform: {
-            type: 'string',
-            description: 'Preferred AI platform. Router may override if rate-limited.',
-            enum: ['claude', 'gemini', 'codex'],
-          },
-        },
-        required: ['task'],
-      },
-    },
-    {
-      name: 'veto_rate_status',
-      description: 'Returns current request counts and rate limit status for all AI platforms tracked by Veto.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: 'veto_council_debate',
-      description:
-        'Runs the Veto Council — 5 specialist agents (Lead Dev, PM, Architect, UX, Devil\'s Advocate) debate your task in parallel and return a GREEN / YELLOW / RED / DEADLOCK verdict before any code is written. Call this before architecture decisions, security-sensitive work, database migrations, or any task the router scores above 71.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          task: {
-            type: 'string',
-            description: 'The task or decision to debate. Be specific — include approach, tech stack, and constraints.',
-          },
-          context: {
-            type: 'string',
-            description: 'Optional: additional context such as codebase state, prior decisions, or constraints.',
-          },
-          project_dir: {
-            type: 'string',
-            description: 'Optional: absolute path to the project directory. Veto will auto-read package.json, git diff, and stack info to give the council real project context.',
-          },
-          session_id: {
-            type: 'string',
-            description: 'Optional: session ID to associate this council outcome with an active session.',
-          },
-          max_tokens: {
-            type: 'number',
-            description: 'Optional: token budget for this operation. Veto estimates output tokens and warns in the response if the estimate exceeds this limit. Logged to usage_log for tracking.',
-          },
-        },
-        required: ['task'],
-      },
-    },
-    {
-      name: 'veto_agent_plan',
-      description: 'Gets a domain-expert execution plan from a specific worker agent. Returns approach, ordered steps, checklist, patterns, and pitfalls for the task.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          agent: {
-            type: 'string',
-            description: 'The worker agent to consult.',
-            enum: ['coder','reviewer','tester','debugger','refactor','database','api','frontend','backend','devops','performance','migration','security-scanner','auth','privacy','secrets','dependency-audit','penetration','context-manager','decision-logger','project-mapper','pattern-learner','knowledge-base','researcher','tech-advisor','cost-analyzer','competitor-analyzer','risk-assessor','estimator','ethics-bias','code-quality','documentation','accessibility','compatibility','error-handling','task-planner','task-coordinator','file-manager','git-agent','search-agent','reporter','automation'],
-          },
-          task: { type: 'string', description: 'The task for the agent to plan.' },
-          context: { type: 'string', description: 'Optional additional context.' },
-          project_dir: { type: 'string', description: 'Optional: absolute path to the project directory. Auto-injects package.json, git diff, and stack info into the agent context.' },
-        },
-        required: ['agent', 'task'],
-      },
-    },
-    {
-      name: 'veto_code_review',
-      description: 'Runs the Code Reviewer agent on provided code. Returns scored findings (complexity, error handling, magic numbers, nesting, dead code) with severity and fixes. Pass file_path to surface findings as VS Code inline diagnostics (squiggles).',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          code:      { type: 'string', description: 'The code to review.' },
-          context:   { type: 'string', description: 'Optional: file name, module description, or review focus.' },
-          file_path: { type: 'string', description: 'Optional: absolute path to the file being reviewed. When provided, findings are stored as VS Code inline diagnostics.' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'veto_diff_review',
-      description: 'Reviews a git diff — runs code review, security scan, and secrets scan in parallel across all changed files. Returns a structured verdict (pass/warn/fail), per-file findings, and a CI-ready summary. Pass diff directly or let Veto read it from project_dir automatically.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          diff: { type: 'string', description: 'The git diff to review. If omitted, Veto runs git diff HEAD in project_dir.' },
-          project_dir: { type: 'string', description: 'Absolute project path. Used to auto-read git diff if diff is not provided, and to inject codebase context.' },
-          context: { type: 'string', description: 'Optional: PR description, ticket number, or focus area.' },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'veto_security_scan',
-      description: 'Runs the Security Scanner (OWASP Top 10) on provided code. Returns vulnerabilities with severity, CWE/OWASP category, and remediation steps. Pass file_path to surface findings as VS Code inline diagnostics.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          code:      { type: 'string', description: 'The code to scan.' },
-          context:   { type: 'string', description: 'Optional: language, framework, or specific concerns.' },
-          file_path: { type: 'string', description: 'Optional: absolute path to the file being scanned. When provided, findings are stored as VS Code inline diagnostics.' },
-        },
-        required: ['code'],
-      },
-    },
-    {
-      name: 'veto_secrets_scan',
-      description: 'Scans text or code for exposed credentials — API keys, tokens, passwords, connection strings, private keys. Returns findings with masked values and line numbers. Pass file_path to surface findings as VS Code inline diagnostics.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          text:      { type: 'string', description: 'The text or code to scan for secrets.' },
-          file_path: { type: 'string', description: 'Optional: absolute path to the file being scanned. When provided, findings are stored as VS Code inline diagnostics.' },
-        },
-        required: ['text'],
-      },
-    },
-    {
-      name: 'veto_execute_parallel',
-      description: 'Runs multiple worker agents simultaneously via Promise.all. Use to get domain expert input from several agents in one round-trip — e.g. coder + tester + security-scanner all planning the same feature together.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          tasks: {
-            type: 'array',
-            description: 'List of agent tasks to run in parallel.',
-            items: {
-              type: 'object',
-              properties: {
-                id: { type: 'string', description: 'Unique ID for this task (use any string).' },
-                agent: { type: 'string', description: 'Worker agent type.' },
-                task: { type: 'string', description: 'Task description for this agent.' },
-                code: { type: 'string', description: 'Optional code to analyze (triggers analyze() instead of plan()).' },
-                context: { type: 'string', description: 'Optional additional context.' },
-                project_dir: { type: 'string', description: 'Optional: per-task project dir override.' },
-              },
-              required: ['id', 'agent', 'task'],
-            },
-          },
-          project_dir: { type: 'string', description: 'Optional: project directory applied to all tasks (per-task project_dir overrides this). Auto-injects codebase context.' },
-          max_tokens: {
-            type: 'number',
-            description: 'Optional: token budget for this parallel execution. Veto estimates combined output tokens and warns if the estimate exceeds this limit. Logged to usage_log.',
-          },
-        },
-        required: ['tasks'],
-      },
-    },
-    {
-      name: 'veto_memory_store',
-      description: 'Stores a knowledge entry (solution, pattern, error, reference, or decision) in the local knowledge base for retrieval across sessions. Search before storing to avoid duplicates.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          title: { type: 'string', description: 'Precise, searchable title. Bad: "Fixed bug". Good: "Fix: Node sqlite fails on Windows without --experimental-sqlite".' },
-          content: { type: 'string', description: 'Self-contained content: problem → root cause → solution. Future agents must understand it without original context.' },
-          type: {
-            type: 'string',
-            description: 'Entry type.',
-            enum: ['solution', 'pattern', 'context', 'error', 'reference', 'decision'],
-          },
-          tags: { type: 'array', items: { type: 'string' }, description: 'Search tags (3–5 recommended). Examples: ["typescript", "auth", "jwt"].' },
-          project_dir: { type: 'string', description: 'Absolute project path. Include for project-specific knowledge; omit for general programming knowledge.' },
-          session_id: { type: 'string', description: 'Optional: associate this knowledge entry with an active session.' },
-          relevance: { type: 'number', description: 'Initial relevance score 0.0–1.0 (default 1.0).' },
-        },
-        required: ['title', 'content'],
-      },
-    },
-    {
-      name: 'veto_memory_search',
-      description: 'Searches the local knowledge base for entries matching a query. Call at the start of every task to find prior solutions before solving from scratch.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: 'Search terms (full-text search on title and content).' },
-          type: {
-            type: 'string',
-            description: 'Filter by entry type.',
-            enum: ['solution', 'pattern', 'context', 'error', 'reference', 'decision'],
-          },
-          project_dir: { type: 'string', description: 'Filter to a specific project directory.' },
-          limit: { type: 'number', description: 'Max results to return (default 10, max 50).' },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'veto_memory_delete',
-      description: 'Deletes a knowledge entry by ID. Use to remove stale or duplicate entries found via veto_memory_search.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: 'The knowledge entry ID (from veto_memory_search results).' },
-        },
-        required: ['id'],
-      },
-    },
-    {
-      name: 'veto_project_map_update',
-      description: 'Updates the project structure map for a directory. Call after creating, deleting, or moving files. The map enables fast codebase navigation without filesystem scans.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          project_dir: { type: 'string', description: 'Absolute path to the project root.' },
-          structure: { type: 'string', description: 'JSON string representing the directory tree. Example: {"src/":{"agents/":["coder.ts","reviewer.ts"],"router/":["index.ts"]}}' },
-          key_modules: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'The 10–20 most important files with their roles. Example: ["src/server.ts (MCP entry point)", "src/router/index.ts (task router)"].',
-          },
-          tech_stack: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Frameworks and key libraries. Example: ["TypeScript", "Node.js 22", "Express", "SQLite"].',
-          },
-        },
-        required: ['project_dir', 'structure'],
-      },
-    },
-    {
-      name: 'veto_project_map_get',
-      description: 'Returns the stored project structure map for a directory. Use to navigate the codebase without scanning the filesystem.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          project_dir: { type: 'string', description: 'Absolute path to the project root.' },
-        },
-        required: ['project_dir'],
-      },
-    },
-    {
-      name: 'veto_pattern_store',
-      description: 'Stores or updates a coding pattern observed in the codebase. Patterns are keyed by category.pattern-name and confidence increases with repeated observation.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          pattern_key: { type: 'string', description: 'Pattern identifier in category.pattern-name format. Example: "code.async-pattern" or "naming.variable-case".' },
-          pattern_val: { type: 'string', description: 'The observed pattern value. Example: "async/await with try/catch, no raw Promise chains".' },
-          confidence: { type: 'number', description: 'Confidence score 0.0–1.0 (default 1.0). Increases automatically on repeated observation.' },
-        },
-        required: ['pattern_key', 'pattern_val'],
-      },
-    },
-    {
-      name: 'veto_patterns_list',
-      description: 'Returns stored coding patterns. Filter by prefix to get patterns in a specific category (e.g. prefix="naming." for all naming conventions).',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          prefix: { type: 'string', description: 'Optional prefix filter. Example: "code." or "naming." or "testing.".' },
-          limit: { type: 'number', description: 'Max patterns to return (default 20).' },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'veto_memory_export',
-      description: 'Exports all local memory (sessions, knowledge, patterns, decisions, project maps) to a portable JSON file. Copy the file to another machine and run veto_memory_import there to resume work. No external services required.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          output_path: {
-            type: 'string',
-            description: 'Where to write the export file. Defaults to ~/.veto/veto-export.json. Use a path on shared storage (Dropbox, OneDrive, USB) to make transfer easy.',
-          },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'veto_memory_import',
-      description: 'Imports memory from a JSON file exported by veto_memory_export on another machine. Merges into local SQLite using INSERT OR IGNORE — existing local rows are never overwritten. Call veto_sessions_list after import to confirm sessions arrived.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          input_path: {
-            type: 'string',
-            description: 'Path to the export JSON file. Defaults to ~/.veto/veto-export.json.',
-          },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'veto_record_outcome',
-      description: 'Records a task outcome (quality score) to feed the self-learning router. Call after completing any task. After 20+ outcomes, call veto_learning_apply to update tier thresholds.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          task_type: { type: 'string', description: 'Short consistent label for the task category (e.g. "write-unit-tests", "fix-auth-bug"). Use the same label for similar tasks to enable pattern detection.' },
-          complexity: { type: 'number', description: 'The complexity score from veto_route_task (0–100).' },
-          model_tier: { type: 'number', description: 'The tier that was actually used (1, 2, or 3).', enum: [1, 2, 3] },
-          output_quality: { type: 'number', description: 'Output quality score 0–100. 90–100=excellent, 70–89=good, 50–69=acceptable, 30–49=poor, 0–29=failed.' },
-          agent: { type: 'string', description: 'The worker agent type used (optional but useful for agent performance tracking).' },
-          tokens_used: { type: 'number', description: 'Approximate tokens used (optional).' },
-          file_ext: { type: 'string', description: 'File extension of the primary file worked on (e.g. ".ts", ".sql", ".tsx"). Enables predictive agent routing — next time you work on the same extension, veto_route_task will recommend the best agent.' },
-        },
-        required: ['task_type', 'complexity', 'model_tier', 'output_quality'],
-      },
-    },
-    {
-      name: 'veto_learning_stats',
-      description: 'Returns the self-learning router dashboard: tier distribution, per-agent quality stats, suggested threshold adjustments, and council insights. Use to understand how the router is performing and where to improve.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          include_agent_stats: { type: 'boolean', description: 'Include per-agent quality breakdown (default true).' },
-          include_task_types: { type: 'boolean', description: 'Include per-task-type breakdown (default false, verbose).' },
-          include_council_insights: { type: 'boolean', description: 'Include council decision → debugging correlation (default false).' },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'veto_learning_apply',
-      description: 'Applies learned tier thresholds to the router based on recorded task outcomes. Requires at least 20 recorded outcomes. The router immediately uses the new thresholds on the next veto_route_task call.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: 'veto_handoff',
-      description: 'Saves the current session and returns step-by-step instructions to continue on another AI platform (Gemini or Codex). Call this when Claude is approaching its rate limit. The receiving platform calls veto_continue to restore full context instantly.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          summary: { type: 'string', description: 'What was accomplished this session — one or two sentences.' },
-          context: { type: 'string', description: 'Key context the next platform needs: active decisions, file paths, constraints.' },
-          task_state: { type: 'string', description: 'Current task state — what is done, what is in progress, what is next.' },
-          from_platform: { type: 'string', enum: ['claude', 'gemini', 'codex'], description: 'Platform handing off (default: claude).' },
-          to_platform: { type: 'string', enum: ['gemini', 'codex', 'claude'], description: 'Target platform. If omitted, Veto picks the platform with the most headroom.' },
-          project_dir: { type: 'string', description: 'Absolute path to the current project directory.' },
-          token_count: { type: 'number', description: 'Approximate tokens used this session.' },
-        },
-        required: ['summary', 'context'],
-      },
-    },
-    {
-      name: 'veto_continue',
-      description: 'Restores the most recent session on any platform. Call this immediately after switching platforms — Veto returns the full context, summary, and next action. Nothing needs to be re-explained.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          session_id: { type: 'string', description: 'Optional. Session ID from veto_handoff. If omitted, the most recent saved session is restored.' },
-          resuming_as: { type: 'string', description: 'The AI client resuming this session (e.g. "gemini"). Recorded as active_client so you can track which tool is currently working on it.', enum: ['claude', 'gemini', 'codex'] },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'veto_platform_setup',
-      description: 'Returns the exact MCP config and setup steps to connect a specific AI platform to this Veto server.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          platform: { type: 'string', enum: ['claude', 'gemini', 'codex'], description: 'The platform to get setup instructions for.' },
-          veto_server_path: { type: 'string', description: 'Absolute path to the built veto server (dist/server.js).' },
-        },
-        required: ['platform', 'veto_server_path'],
-      },
-    },
-    {
-      name: 'veto_watch',
-      description: 'Starts a file watcher on a project directory. Returns a watch_id. Call veto_watch_poll to collect file-change events with recommended agents. Call veto_watch_stop when done.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          project_dir: { type: 'string', description: 'Absolute path to the project directory to watch.' },
-        },
-        required: ['project_dir'],
-      },
-    },
-    {
-      name: 'veto_watch_poll',
-      description: 'Polls for file-change events from an active watcher. Returns accumulated events since last poll (events are cleared on read). Each event includes the file, recommended agent, and suggested veto tool to call.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          watch_id: { type: 'string', description: 'The watch_id returned by veto_watch.' },
-        },
-        required: ['watch_id'],
-      },
-    },
-    {
-      name: 'veto_watch_stop',
-      description: 'Stops an active file watcher.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          watch_id: { type: 'string', description: 'The watch_id returned by veto_watch.' },
-        },
-        required: ['watch_id'],
-      },
-    },
-    {
-      name: 'veto_workflow',
-      description: 'Runs a sequential agent pipeline with optional pass/fail gates between steps. Each step runs a worker agent; if a gate score is set and the step confidence falls below it, the pipeline stops. Returns per-step results plus an overall verdict (passed/partial/failed).',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          steps: {
-            type: 'array',
-            description: 'Ordered pipeline steps.',
-            items: {
-              type: 'object',
-              properties: {
-                id: { type: 'string', description: 'Step identifier.' },
-                agent: { type: 'string', description: 'Worker agent type.' },
-                task: { type: 'string', description: 'Task description for this step.' },
-                code: { type: 'string', description: 'Optional code to analyze.' },
-                context: { type: 'string', description: 'Optional context.' },
-                gate: { type: 'number', description: 'Optional minimum confidence % (0–100) required to proceed to the next step.' },
-              },
-              required: ['id', 'agent', 'task'],
-            },
-          },
-          project_dir: { type: 'string', description: 'Optional project directory — auto-injects codebase context into all steps.' },
-        },
-        required: ['steps'],
-      },
-    },
-    {
-      name: 'veto_explain',
-      description: 'Reads a file and returns an expert explanation from the most appropriate agent (auto-detected from file extension and name). Pass depth to control detail level.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          file_path: { type: 'string', description: 'Absolute path to the file to explain.' },
-          depth: { type: 'string', enum: ['overview', 'detailed', 'line-by-line'], description: 'Explanation depth. Default: overview.' },
-          context: { type: 'string', description: 'Optional additional context about what you want explained.' },
-        },
-        required: ['file_path'],
-      },
-    },
-    {
-      name: 'veto_plugins',
-      description: 'Lists all custom agents loaded from ~/.veto/agents/. Drop a .js file there that exports plan(task, context?) to register a new agent available in veto_agent_plan and veto_execute_parallel.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
-    },
-    // ── Phase 13: Developer Intelligence ──────────────────────────────────────
-    {
-      name: 'veto_docs_fetch',
-      description: 'Fetches current, version-accurate documentation for any npm, PyPI, or crates.io package and returns it for injection into agent context. Eliminates hallucinated APIs. Results are cached for 24 hours.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          package_name: { type: 'string', description: 'Package name (e.g. "react", "requests", "serde").' },
-          ecosystem:    { type: 'string', enum: ['npm', 'pypi', 'crates'], description: 'Package ecosystem.' },
-          version:      { type: 'string', description: 'Specific version. Defaults to latest.' },
-          max_chars:    { type: 'number', description: 'Max characters to return (default 8000). Higher = more complete docs, more tokens.' },
-        },
-        required: ['package_name', 'ecosystem'],
-      },
-    },
-    {
-      name: 'veto_context_status',
-      description: 'Returns the context window usage for a saved session — tokens used, % of platform limit consumed, and whether to compress or hand off before the window fills.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          session_id: { type: 'string', description: 'Session ID to check.' },
-        },
-        required: ['session_id'],
-      },
-    },
-    {
-      name: 'veto_task_parse',
-      description: 'Parses a plain-English project description or PRD into a structured task DAG with dependencies, complexity scores, priorities, and suggested agent assignments. Feeds directly into veto_workflow.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          description: { type: 'string', description: 'Project description, PRD, or feature brief to parse into tasks.' },
-          project_dir:  { type: 'string', description: 'Optional project directory for codebase context injection.' },
-          max_tasks:    { type: 'number', description: 'Maximum number of tasks to generate (default 20).' },
-        },
-        required: ['description'],
-      },
-    },
-    // ── Phase 14: Observability & Safety ──────────────────────────────────────
-    {
-      name: 'veto_usage_status',
-      description: 'Live AI usage dashboard. Shows tokens consumed today, requests per platform, subscription vs API usage split, 7-day history, and warnings when approaching limits.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
-    },
-    {
-      name: 'veto_audit_log',
-      description: 'Queryable log of every council verdict, decision, and session event. Filter by session, agent, verdict, or date. Essential for tracing what happened and why.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          session_id: { type: 'string', description: 'Filter to a specific session.' },
-          verdict:    { type: 'string', description: 'Filter by council verdict (GREEN, YELLOW, RED).' },
-          since:      { type: 'string', description: 'ISO date — only return events after this time.' },
-          limit:      { type: 'number', description: 'Max events to return (default 20, max 100).' },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'veto_health',
-      description: 'Returns a live health snapshot of the Veto server — DB size, session/memory/pattern counts, uptime, error count, and average council latency.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
-    },
-    // ── Phase 15: CI/CD & Distribution ────────────────────────────────────────
-    {
-      name: 'veto_ci_gate',
-      description: 'CI/CD pipeline gate. Runs code review + security scan + secrets scan on a git diff and returns a structured pass/warn/fail verdict with exit code. Ready for GitHub Actions and GitLab CI.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          project_dir: { type: 'string', description: 'Absolute project path. Veto reads git diff HEAD automatically.' },
-          diff:        { type: 'string', description: 'Optional: pass a diff string directly instead of reading from project_dir.' },
-          context:     { type: 'string', description: 'Optional: PR description or ticket number for context.' },
-          fail_on:     { type: 'string', enum: ['warn', 'fail'], description: 'Whether WARN counts as a failure (exit code 1). Default: "fail" — only FAIL exits non-zero.' },
-        },
-        required: ['project_dir'],
-      },
-    },
-    {
-      name: 'veto_pr_review',
-      description: 'Fetches a GitHub PR diff and runs the full Veto triple-scan (code review + security + secrets). Returns a structured verdict and ready-to-post GitHub review comments. Set GITHUB_TOKEN env var for private repos.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          pr_url:  { type: 'string', description: 'Full GitHub PR URL. e.g. https://github.com/owner/repo/pull/123' },
-          context: { type: 'string', description: 'Optional: PR description or ticket number for extra context.' },
-          fail_on: { type: 'string', enum: ['warn', 'fail'], description: 'Whether WARN counts as a failure. Default: "fail".' },
-        },
-        required: ['pr_url'],
-      },
-    },
-    // ── Phase 16: Workspace Discovery & Summarization ─────────────────────────
-    {
-      name: 'veto_discover',
-      description: 'Scans a project directory and builds a rich context map: git state, tech stack, file structure, dependencies, and key config files. Stores the result in Veto memory so agents always have accurate project context. Call this once per project or after major structural changes.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          project_dir: { type: 'string', description: 'Absolute path to the project directory to scan.' },
-          depth: { type: 'string', enum: ['quick', 'standard', 'full'], description: 'Scan depth. quick: git + package metadata only. standard: + file tree up to 3 levels (default). full: + contents of key config files.' },
-          store: { type: 'boolean', description: 'Whether to store the discovery in Veto memory as a project map. Default: true.' },
-        },
-        required: ['project_dir'],
-      },
-    },
-    {
-      name: 'veto_summarize',
-      description: 'Generates a concise expert briefing of a project, directory, or file. Use at the start of a session to orient yourself on unfamiliar code. Returns bullet-point summary, key components, tech stack, and entry points. Faster and higher-level than veto_explain.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          project_dir: { type: 'string', description: 'Absolute path to a project directory to summarize.' },
-          file_path:   { type: 'string', description: 'Absolute path to a single file to summarize. If both project_dir and file_path are given, file_path takes precedence.' },
-          focus:       { type: 'string', description: 'Optional focus area: e.g. "security", "APIs", "data flow", "architecture". Narrows the summary.' },
-          format:      { type: 'string', enum: ['brief', 'detailed'], description: 'brief: 4–6 bullet points (default). detailed: paragraph-level prose.' },
-        },
-        required: [],
-      },
-    },
-    {
-      name: 'veto_benchmark',
-      description: 'Compares two competing approaches by running a full council debate on each in parallel, then returns a structured winner analysis with verdict, confidence delta, warning counts, and council reasoning. Use when you have two valid options and want an unbiased council judgment before committing.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          task:        { type: 'string', description: 'The decision context — what problem are both approaches solving?' },
-          approach_a:  { type: 'string', description: 'First approach to evaluate. Be specific about tech choices, trade-offs, and constraints.' },
-          approach_b:  { type: 'string', description: 'Second approach to evaluate. Same level of detail as approach_a.' },
-          context:     { type: 'string', description: 'Optional: shared context for both debates (architecture notes, constraints, team size, etc.).' },
-          project_dir: { type: 'string', description: 'Optional: auto-inject package.json and git diff context.' },
-        },
-        required: ['task', 'approach_a', 'approach_b'],
-      },
-    },
-  ];
+  const tools = TOOL_DEFINITIONS as unknown as Array<{ name: string; description: string; inputSchema: object }>;
   return { tools: tools.map(t => ({ ...t, annotations: TOOL_ANNOTATIONS[t.name] ?? {} })) };
 });
 
@@ -966,10 +237,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case 'veto_status': {
       const statusTokenCount = typeof args?.token_count === 'number' ? args.token_count : null;
       const statusPlatform = args?.platform ? String(args.platform) : 'claude';
+      const statusModel = args?.model ? String(args.model) : undefined;
       if (statusTokenCount !== null && statusTokenCount > 0) {
         trackTokens(statusPlatform as Platform, statusTokenCount);
       }
-      const autoSaveResult = statusTokenCount !== null ? maybeAutoSave(statusTokenCount, statusPlatform) : null;
+      const autoSaveResult = statusTokenCount !== null ? maybeAutoSave(statusTokenCount, statusPlatform, statusModel) : null;
       return {
         content: [
           {
@@ -1044,6 +316,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         connection_type: args?.connection_type ? String(args.connection_type) : 'subscription',
         project_dir: sessionProjectDir,
         token_count: typeof args?.token_count === 'number' ? args.token_count : 0,
+        tags: Array.isArray(args?.tags) ? (args.tags as unknown[]).map(String) : undefined,
       };
 
       let result: { session_id: string; saved_at: string; usage_pct: number; context_warning: boolean; continuation_prompt: string | null };
@@ -1061,7 +334,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         result = saveSession(sessionInput);
       }
       // Cache for auto-save: future veto_status calls with high token_count will re-save this context
-      autoSave.cached = { summary: saveSummary, context: saveContext, task_state: saveTaskState, platform: savePlatform, project_dir: sessionProjectDir };
+      const saveModel = args?.model ? String(args.model) : undefined;
+      const resolvedWindow = saveModel ? resolveContextWindow(savePlatform, saveModel) : undefined;
+      autoSave.cached = { summary: saveSummary, context: saveContext, task_state: saveTaskState, platform: savePlatform, project_dir: sessionProjectDir, context_window: resolvedWindow };
       autoSave.last_save_at = result.saved_at;
       autoSave.last_session_id = result.session_id;
 
@@ -1134,7 +409,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case 'veto_sessions_list': {
       const limit = Math.min(typeof args?.limit === 'number' ? args.limit : 10, 50);
-      const sessions = listSessions(limit);
+      const query = args?.query ? String(args.query).trim() : undefined;
+      const sessions = listSessions(limit, query);
 
       return {
         content: [
@@ -1151,6 +427,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   project_dir: s.project_dir,
                   summary: s.summary,
                   token_count: s.token_count,
+                  tags: (s as unknown as { tags?: string }).tags ? JSON.parse((s as unknown as { tags: string }).tags) : [],
                 })),
               },
               null,
@@ -1202,11 +479,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      const strictnessArg = (['fast', 'standard', 'strict'].includes(String(args?.strictness ?? '')))
+        ? String(args!.strictness) as 'fast' | 'standard' | 'strict'
+        : 'standard';
       const debateStart = Date.now();
-      const result = runDebate({
+      const result = await runLlmDebate(server, {
         task,
         context: args?.context ? String(args.context) : undefined,
         project_dir: args?.project_dir ? String(args.project_dir) : undefined,
+        strictness: strictnessArg,
       });
       const debateDuration = Date.now() - debateStart;
 
@@ -1234,19 +515,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // Auto-store RED verdicts so they appear in the Memory panel immediately
-      if (result.final_verdict === 'RED') {
+      if (result.final_verdict === 'RED' || (result.final_verdict === 'YELLOW' && (result.warnings.length >= 2 || result.block_reasons.length > 0))) {
+        const isRed = result.final_verdict === 'RED';
         const lines: string[] = [`Task: ${task}`];
         if (result.block_reasons.length > 0) lines.push(`\nBlocked by:\n${result.block_reasons.map(r => `- ${r}`).join('\n')}`);
         if (result.warnings.length > 0) lines.push(`\nWarnings:\n${result.warnings.map(w => `- ${w}`).join('\n')}`);
+
+        // Include per-agent reasoning so future debates inherit the full context
+        const agentSummary = Object.entries(result.votes)
+          .filter(([, v]) => v.verdict !== 'approve')
+          .map(([name, v]) => `- ${name} [${v.verdict}]: ${v.reason}`)
+          .join('\n');
+        if (agentSummary) lines.push(`\nAgent reasoning:\n${agentSummary}`);
+
         if (result.recommended) lines.push(`\nRecommended: ${result.recommended}`);
         storeKnowledge({
           type: 'decision',
-          title: `RED: ${task.slice(0, 80)}`,
+          title: `${result.final_verdict}: ${task.slice(0, 80)}`,
           content: lines.join(''),
-          tags: ['red-verdict', 'blocked', 'council'],
+          tags: [isRed ? 'red-verdict' : 'yellow-verdict', isRed ? 'blocked' : 'caution', 'council'],
           project_dir: args?.project_dir ? String(args.project_dir) : undefined,
           session_id: sessionId,
-          relevance: 1.0,
+          relevance: isRed ? 1.0 : 0.8,
         });
       }
 
@@ -1258,13 +548,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         recommended: result.recommended,
         debated_at: result.debated_at,
         votes: {
-          lead_dev: result.votes.lead_dev.verdict,
-          pm: result.votes.pm.verdict,
-          architect: result.votes.architect.verdict,
-          ux: result.votes.ux.verdict,
-          devil: result.votes.devil.verdict,
-          legal: result.votes.legal.verdict,
-          security: result.votes.security.verdict,
+          lead_dev:  result.votes.lead_dev,
+          pm:        result.votes.pm,
+          architect: result.votes.architect,
+          ux:        result.votes.ux,
+          devil:     result.votes.devil,
+          legal:     result.votes.legal,
+          security:  result.votes.security,
         },
       } as Record<string, unknown>;
 
@@ -1822,38 +1112,49 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_explain': {
-      const filePath = String(args?.file_path ?? '').trim();
-      if (!filePath) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'file_path is required.' }) }], isError: true };
+      const filePath = args?.file_path ? String(args.file_path).trim() : '';
+      const rawText  = args?.text      ? String(args.text).trim()      : '';
+      const depth    = String(args?.depth ?? 'overview');
+      const userContext = args?.context ? String(args.context) : undefined;
 
-      let fileContent: string;
-      try {
-        fileContent = readFileSync(filePath, 'utf8');
-      } catch {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Cannot read file: ${filePath}` }) }], isError: true };
+      if (!filePath && !rawText) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'Provide file_path or text.' }) }], isError: true };
       }
 
-      const ext = extname(filePath).toLowerCase();
-      const name_ = basename(filePath).toLowerCase();
-      const depth = String(args?.depth ?? 'overview');
+      let fileContent: string;
+      let agent: WorkerAgentType;
+      let taskLabel: string;
 
-      // auto-detect best agent
-      let agent: WorkerAgentType = 'coder';
-      if (['.tsx', '.jsx', '.vue', '.svelte'].includes(ext)) agent = 'frontend';
-      else if (['.sql', '.prisma'].includes(ext) || name_.includes('schema')) agent = 'database';
-      else if (/\.(test|spec)\.(ts|js|tsx|jsx)$/.test(name_)) agent = 'tester';
-      else if (['.yaml', '.yml', '.toml', '.dockerfile'].includes(ext) || name_ === 'dockerfile') agent = 'devops';
-      else if (name_.includes('auth') || name_.includes('login') || name_.includes('jwt') || name_.includes('token')) agent = 'auth';
-      else if (name_.includes('security') || name_.includes('crypt')) agent = 'security-scanner';
-      else if (['.ts', '.js', '.mjs'].includes(ext)) agent = 'coder';
+      if (rawText) {
+        fileContent = rawText;
+        // Auto-detect agent from content: error messages → debugger, stack traces → debugger, code → coder
+        const looksLikeError = /error|exception|traceback|stack trace|at \w+\.|TypeError|SyntaxError|ENOENT/i.test(rawText);
+        agent = looksLikeError ? 'debugger' : 'coder';
+        taskLabel = looksLikeError ? 'raw error/stack trace' : 'raw text input';
+      } else {
+        try {
+          fileContent = readFileSync(filePath, 'utf8');
+        } catch {
+          return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Cannot read file: ${filePath}` }) }], isError: true };
+        }
+        const ext = extname(filePath).toLowerCase();
+        const name_ = basename(filePath).toLowerCase();
+        agent = 'coder';
+        if (['.tsx', '.jsx', '.vue', '.svelte'].includes(ext)) agent = 'frontend';
+        else if (['.sql', '.prisma'].includes(ext) || name_.includes('schema')) agent = 'database';
+        else if (/\.(test|spec)\.(ts|js|tsx|jsx)$/.test(name_)) agent = 'tester';
+        else if (['.yaml', '.yml', '.toml', '.dockerfile'].includes(ext) || name_ === 'dockerfile') agent = 'devops';
+        else if (name_.includes('auth') || name_.includes('login') || name_.includes('jwt') || name_.includes('token')) agent = 'auth';
+        else if (name_.includes('security') || name_.includes('crypt')) agent = 'security-scanner';
+        taskLabel = `${ext} file: ${basename(filePath)}`;
+      }
 
-      const userContext = args?.context ? String(args.context) : undefined;
-      const task = `Explain this ${ext} file at ${depth} depth. File: ${basename(filePath)}${userContext ? `. Focus: ${userContext}` : ''}`;
-
+      const task = `Explain this ${taskLabel} at ${depth} depth.${userContext ? ` Focus: ${userContext}` : ''}`;
       const result = await executeOne({ id: 'explain-1', agent, task, code: fileContent, project_dir: undefined });
-      autoRecord(`explain ${basename(filePath)}`, agent, Math.round(result.output.confidence * 100));
+      autoRecord(`explain ${taskLabel}`, agent, Math.round(result.output.confidence * 100));
       return {
         content: [{ type: 'text', text: JSON.stringify({
-          file: filePath, agent_used: agent, depth,
+          source: filePath || 'raw text', agent_used: agent, depth,
           explanation: result.plan ?? result.analysis,
           output: result.output,
         }, null, 2) }],
@@ -1902,6 +1203,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       if (!description) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'description is required.' }) }], isError: true };
+      }
+
+      const hash = createHash('sha256').update(description).digest('hex').slice(0, 16);
+      const cached = getTaskPlan(hash);
+      if (cached) {
+        const plan = JSON.parse(cached.plan_json);
+        return { content: [{ type: 'text', text: JSON.stringify({ success: true, plan_id: cached.id, cached: true, ...plan }, null, 2) }] };
       }
 
       const ctx = project_dir ? buildContextString(project_dir) : '';
@@ -1973,7 +1281,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
 
       autoRecord(description, 'task-planner', Math.round(planResult.output.confidence * 100));
-      const hash = createHash('sha256').update(description).digest('hex').slice(0, 16);
       const plan_id = saveTaskPlan(JSON.stringify(plan), hash, project_dir);
 
       return { content: [{ type: 'text', text: JSON.stringify({ success: true, plan_id, ...plan }, null, 2) }] };
@@ -2330,9 +1637,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const bmStart = Date.now();
 
-      // Run both debates synchronously (council agents are all sync)
-      const debateA = runDebate({ task: `${task}\n\nApproach A: ${approachA}`, context: ctx, project_dir: projectDir });
-      const debateB = runDebate({ task: `${task}\n\nApproach B: ${approachB}`, context: ctx, project_dir: projectDir });
+      // Run both debates in parallel via LLM council
+      const [debateA, debateB] = await Promise.all([
+        runLlmDebate(server, { task: `${task}\n\nApproach A: ${approachA}`, context: ctx, project_dir: projectDir }),
+        runLlmDebate(server, { task: `${task}\n\nApproach B: ${approachB}`, context: ctx, project_dir: projectDir }),
+      ]);
 
       // Score: GREEN=3, YELLOW=2, RED=1, DEADLOCK=0
       const verdictScore: Record<string, number> = { GREEN: 3, YELLOW: 2, RED: 1, DEADLOCK: 0 };
@@ -2401,6 +1710,107 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           votes: Object.fromEntries(Object.entries(debateB.votes).map(([k, v]) => [k, v.verdict])),
         },
         duration_ms: Date.now() - bmStart,
+      }, null, 2) }] };
+    }
+
+    // ── Part 4: New Features ───────────────────────────────────────────────────
+
+    case 'veto_metrics': {
+      const metrics = getMetrics();
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...metrics }, null, 2) }] };
+    }
+
+    case 'veto_git_blame': {
+      const blameDir  = args?.project_dir ? String(args.project_dir).trim() : '';
+      const blameFile = args?.file_path   ? String(args.file_path).trim()   : '';
+      const blameTarget = blameFile || blameDir;
+
+      if (!blameTarget) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'Provide project_dir or file_path.' }) }], isError: true };
+      }
+
+      const resolvedTarget = resolve(blameTarget);
+      try { statSync(resolvedTarget); } catch {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Path not found: ${resolvedTarget}` }) }], isError: true };
+      }
+
+      function gitExec(cmd: string, cwd: string): string {
+        try { return execSyncTop(cmd, { cwd, timeout: 5000, stdio: ['pipe','pipe','pipe'] }).toString().trim(); }
+        catch { return ''; }
+      }
+
+      const cwd = statSync(resolvedTarget).isDirectory() ? resolvedTarget : dirname(resolvedTarget);
+
+      const shortlog = gitExec(`git shortlog -sn -- "${resolvedTarget}"`, cwd);
+      const contributors = shortlog.split('\n').filter(Boolean).map(line => {
+        const m = line.match(/^\s*(\d+)\s+(.+)$/);
+        return m ? { commits: parseInt(m[1], 10), author: m[2].trim() } : null;
+      }).filter(Boolean);
+
+      const lastModified = gitExec(`git log -1 --format="%ai|%aN|%s" -- "${resolvedTarget}"`, cwd);
+      const [last_modified_at, last_author, last_commit_message] = lastModified.split('|');
+
+      const totalCommits = gitExec(`git rev-list --count HEAD -- "${resolvedTarget}"`, cwd);
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        success: true,
+        path: resolvedTarget,
+        total_commits: parseInt(totalCommits || '0', 10),
+        contributors,
+        last_modified_at: last_modified_at?.trim(),
+        last_author: last_author?.trim(),
+        last_commit_message: last_commit_message?.trim(),
+      }, null, 2) }] };
+    }
+
+    case 'veto_changelog': {
+      const changelogDir = args?.project_dir ? String(args.project_dir).trim() : activeProjectDir ?? process.cwd();
+      const maxEntries   = typeof args?.max_entries === 'number' ? Math.min(args.max_entries, 200) : 50;
+
+      const resolvedDir = resolve(changelogDir);
+      try { statSync(resolvedDir); } catch {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Directory not found: ${resolvedDir}` }) }], isError: true };
+      }
+
+      function gitRun(cmd: string): string {
+        try { return execSyncTop(cmd, { cwd: resolvedDir, timeout: 5000, stdio: ['pipe','pipe','pipe'] }).toString().trim(); }
+        catch { return ''; }
+      }
+
+      const lastTag = gitRun('git describe --tags --abbrev=0 2>/dev/null') || '';
+      const range   = lastTag ? `${lastTag}..HEAD` : 'HEAD';
+      const rawLog  = gitRun(`git log ${range} --format="%s|||%H|||%aN|||%ai" --no-merges -n ${maxEntries}`);
+
+      if (!rawLog) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: true, since_tag: lastTag || 'beginning', entries: [], message: 'No commits found in range.' }) }] };
+      }
+
+      const typeLabels: Record<string, string> = {
+        feat: 'Features', fix: 'Bug Fixes', refactor: 'Refactoring', perf: 'Performance',
+        docs: 'Documentation', test: 'Tests', chore: 'Chores', ci: 'CI/CD',
+        style: 'Style', build: 'Build', revert: 'Reverts',
+      };
+
+      const grouped: Record<string, Array<{ message: string; hash: string; author: string; date: string }>> = {};
+
+      for (const line of rawLog.split('\n').filter(Boolean)) {
+        const [subject, hash, author, date] = line.split('|||');
+        if (!subject) continue;
+        const typeMatch = subject.match(/^(\w+)(\([\w-]+\))?:\s*(.*)/);
+        const type  = typeMatch ? typeMatch[1].toLowerCase() : 'other';
+        const msg   = typeMatch ? typeMatch[3] : subject;
+        const label = typeLabels[type] ?? 'Other';
+        if (!grouped[label]) grouped[label] = [];
+        grouped[label].push({ message: msg.trim(), hash: hash?.trim().slice(0, 8) ?? '', author: author?.trim() ?? '', date: date?.trim().slice(0, 10) ?? '' });
+      }
+
+      const sections = Object.entries(grouped).map(([section, items]) => ({ section, items }));
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        success: true,
+        since_tag: lastTag || '(beginning of history)',
+        total_commits: rawLog.split('\n').filter(Boolean).length,
+        sections,
       }, null, 2) }] };
     }
 

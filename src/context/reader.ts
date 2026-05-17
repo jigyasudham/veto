@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 
@@ -65,6 +65,9 @@ export function readProjectContext(projectDir: string): ProjectContext {
 
   if (!existsSync(dir)) {
     return { summary: '', tech_stack: [], git_diff: '', key_files: [], error: `Directory not found: ${dir}` };
+  }
+  if (!statSync(dir).isDirectory()) {
+    return { summary: '', tech_stack: [], git_diff: '', key_files: [], error: `Not a directory: ${dir}` };
   }
 
   // package.json

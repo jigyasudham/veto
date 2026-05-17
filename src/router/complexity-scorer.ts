@@ -48,8 +48,8 @@ export function scoreComplexity(
   const lower = task.toLowerCase();
   const words = lower.split(/\s+/).filter(Boolean);
 
-  // Factor 1: word count → 0-20 pts (1 pt per 3 words, cap 20)
-  const word_count_score = Math.min(20, Math.floor(words.length / 3));
+  // Factor 1: word count → 0-25 pts (1 pt per 3 words, cap 25; +5 for >60 words)
+  const word_count_score = Math.min(25, Math.floor(words.length / 3) + (words.length > 60 ? 5 : 0));
 
   // Factor 2: technical keywords → 0-30 pts
   let keyword_score = 0;

@@ -20,6 +20,42 @@ export const CONTEXT_WINDOWS: Record<string, number> = {
   codex: 128_000,
 };
 
+// Per-model context windows — resolved at call time when model is provided.
+// Falls back to CONTEXT_WINDOWS[platform] when model is unknown.
+const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  // Claude 4.x — 1M context
+  'claude-sonnet-4-6': 1_000_000,
+  'claude-sonnet-4-7': 1_000_000,
+  'claude-opus-4-7':   1_000_000,
+  'claude-haiku-4-5':  1_000_000,
+  // Claude 3.x — 200K context
+  'claude-3-5-sonnet': 200_000,
+  'claude-3-5-haiku':  200_000,
+  'claude-3-opus':     200_000,
+  // Gemini — all current models are 1M+
+  'gemini-2-5-pro':   1_048_576,
+  'gemini-2-0-flash': 1_048_576,
+  'gemini-1-5-pro':   1_048_576,
+  'gemini-1-5-flash': 1_048_576,
+  // OpenAI / Codex
+  'gpt-4o':      128_000,
+  'gpt-4o-mini': 128_000,
+  'o1':          200_000,
+  'o3':          200_000,
+  'o4-mini':     200_000,
+};
+
+export function resolveContextWindow(platform: string, model?: string): number {
+  if (model) {
+    if (MODEL_CONTEXT_WINDOWS[model]) return MODEL_CONTEXT_WINDOWS[model];
+    // Prefix match handles suffixed model IDs like "claude-sonnet-4-6-20251001"
+    for (const key of Object.keys(MODEL_CONTEXT_WINDOWS)) {
+      if (model.startsWith(key)) return MODEL_CONTEXT_WINDOWS[key];
+    }
+  }
+  return CONTEXT_WINDOWS[platform] ?? 200_000;
+}
+
 const VETO_DIR = join(homedir(), '.veto');
 const DB_PATH = process.env.VETO_TEST_DB ?? join(VETO_DIR, 'veto.db');
 
@@ -44,7 +80,15 @@ export function getDb(): DatabaseSync {
   migrateUsageLog(_db);
   migrateSessionSaveType(_db);
   migrateScanDiagnostics(_db);
+  migrateSessionTags(_db);
   return _db;
+}
+
+// Adds tags column to sessions (v1.3.1 migration)
+function migrateSessionTags(db: DatabaseSync): void {
+  const cols = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
+  const names = new Set(cols.map(c => c.name));
+  if (!names.has('tags')) db.exec('ALTER TABLE sessions ADD COLUMN tags TEXT');
 }
 
 // Creates scan_diagnostics table if it doesn't exist (v1.2.18 migration)
@@ -144,6 +188,7 @@ export type SaveSessionInput = {
   task_state?: string;
   token_count?: number;
   save_type?: 'manual' | 'auto';
+  tags?: string[];
 };
 
 export type SessionSaveResult = {
@@ -165,8 +210,8 @@ export function saveSession(input: SaveSessionInput): SessionSaveResult {
   const save_type = input.save_type ?? 'manual';
 
   db.prepare(`
-    INSERT INTO sessions (id, started_at, platform, connection_type, project_dir, summary, context, task_state, token_count, save_type)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, started_at, platform, connection_type, project_dir, summary, context, task_state, token_count, save_type, tags)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id, now, platform, connection_type,
     input.project_dir ?? null,
@@ -174,7 +219,8 @@ export function saveSession(input: SaveSessionInput): SessionSaveResult {
     input.context ? JSON.stringify(input.context) : null,
     input.task_state ? JSON.stringify(input.task_state) : null,
     token_count,
-    save_type
+    save_type,
+    input.tags ? JSON.stringify(input.tags) : null
   );
 
   // Record usage event
@@ -248,8 +294,15 @@ export function restoreSession(session_id: string, active_client?: string): Rest
   return { found: true, session: row };
 }
 
-export function listSessions(limit = 10): SessionRow[] {
+export function listSessions(limit = 10, query?: string): SessionRow[] {
   const db = getDb();
+  if (query) {
+    const q = `%${query}%`;
+    return db.prepare(
+      `SELECT * FROM sessions WHERE summary LIKE ? OR context LIKE ? OR task_state LIKE ? OR tags LIKE ? OR project_dir LIKE ?
+       ORDER BY created_at DESC LIMIT ?`
+    ).all(q, q, q, q, q, limit) as SessionRow[];
+  }
   return db.prepare(
     'SELECT * FROM sessions ORDER BY created_at DESC LIMIT ?'
   ).all(limit) as SessionRow[];
@@ -557,6 +610,72 @@ export function saveTaskPlan(plan_json: string, description_hash: string, projec
     VALUES (?, ?, ?, ?, datetime('now'))
   `).run(id, description_hash, plan_json, project_dir ?? null);
   return id;
+}
+
+export function getTaskPlan(description_hash: string): { id: string; plan_json: string } | null {
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT id, plan_json FROM task_plans
+    WHERE description_hash = ?
+      AND created_at > datetime('now', '-7 days')
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).get(description_hash) as { id: string; plan_json: string } | undefined;
+  return row ?? null;
+}
+
+// ─── Metrics ──────────────────────────────────────────────────────────────────
+
+export type VetoMetrics = {
+  sessions: { total: number; today: number; this_week: number };
+  council: { total: number; today: number; by_verdict: Record<string, number> };
+  agents: Array<{ agent: string; calls: number; avg_quality: number }>;
+  quality: { overall_avg: number; trend: Array<{ date: string; avg: number; count: number }> };
+  knowledge: { total_entries: number; by_type: Record<string, number> };
+  patterns: { total: number };
+};
+
+export function getMetrics(): VetoMetrics {
+  const db = getDb();
+  const today = new Date().toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.now() - 7 * 86400_000).toISOString().slice(0, 10);
+
+  const sessions = {
+    total:     (db.prepare('SELECT COUNT(*) as n FROM sessions').get() as { n: number }).n,
+    today:     (db.prepare("SELECT COUNT(*) as n FROM sessions WHERE created_at >= ?").get(today + 'T00:00:00') as { n: number }).n,
+    this_week: (db.prepare("SELECT COUNT(*) as n FROM sessions WHERE created_at >= ?").get(weekAgo + 'T00:00:00') as { n: number }).n,
+  };
+
+  const councilTotal = (db.prepare('SELECT COUNT(*) as n FROM council_outcomes').get() as { n: number }).n;
+  const councilToday = (db.prepare("SELECT COUNT(*) as n FROM council_outcomes WHERE debated_at >= ?").get(today + 'T00:00:00') as { n: number }).n;
+  const verdictRows = db.prepare('SELECT verdict, COUNT(*) as n FROM council_outcomes GROUP BY verdict').all() as Array<{ verdict: string; n: number }>;
+  const by_verdict = Object.fromEntries(verdictRows.map(r => [r.verdict, r.n]));
+
+  const agentRows = db.prepare(
+    'SELECT agent, COUNT(*) as calls, AVG(output_quality) as avg_q FROM learning_data WHERE agent IS NOT NULL GROUP BY agent ORDER BY calls DESC LIMIT 10'
+  ).all() as Array<{ agent: string; calls: number; avg_q: number | null }>;
+  const agents = agentRows.map(r => ({ agent: r.agent, calls: r.calls, avg_quality: Math.round(r.avg_q ?? 0) }));
+
+  const overallAvg = (db.prepare('SELECT AVG(output_quality) as avg FROM learning_data WHERE output_quality IS NOT NULL').get() as { avg: number | null }).avg ?? 0;
+  const trendRows = db.prepare(
+    "SELECT substr(recorded_at,1,10) as date, AVG(output_quality) as avg, COUNT(*) as count FROM learning_data WHERE output_quality IS NOT NULL AND recorded_at >= ? GROUP BY date ORDER BY date"
+  ).all(weekAgo + 'T00:00:00') as Array<{ date: string; avg: number; count: number }>;
+  const trend = trendRows.map(r => ({ date: r.date, avg: Math.round(r.avg), count: r.count }));
+
+  const knowledgeTotal = (db.prepare('SELECT COUNT(*) as n FROM knowledge_base').get() as { n: number }).n;
+  const knowledgeTypeRows = db.prepare('SELECT type, COUNT(*) as n FROM knowledge_base GROUP BY type').all() as Array<{ type: string; n: number }>;
+  const by_type = Object.fromEntries(knowledgeTypeRows.map(r => [r.type, r.n]));
+
+  const patternsTotal = (db.prepare('SELECT COUNT(*) as n FROM patterns').get() as { n: number }).n;
+
+  return {
+    sessions,
+    council: { total: councilTotal, today: councilToday, by_verdict },
+    agents,
+    quality: { overall_avg: Math.round(overallAvg), trend },
+    knowledge: { total_entries: knowledgeTotal, by_type },
+    patterns: { total: patternsTotal },
+  };
 }
 
 // ─── Usage Status ─────────────────────────────────────────────────────────────

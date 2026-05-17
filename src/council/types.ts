@@ -8,10 +8,13 @@ export interface AgentVote {
   recommendation?: string;
 }
 
+export type CouncilStrictness = 'fast' | 'standard' | 'strict';
+
 export interface DebateInput {
   task: string;
   context?: string;
   project_dir?: string;
+  strictness?: CouncilStrictness;
 }
 
 export interface DebateResult {

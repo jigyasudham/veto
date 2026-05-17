@@ -44,7 +44,7 @@ function printBanner() {
 // and "servers" format (VS Code).
 function writeVetoConfig(
   configPath: string,
-  format: 'mcpServers' | 'servers'
+  format: 'mcpServers' | 'servers' | 'context_servers'
 ): 'created' | 'updated' | 'skipped' {
   let existing: Record<string, unknown> = {};
 
@@ -66,6 +66,10 @@ function writeVetoConfig(
     const servers = (existing.mcpServers as Record<string, unknown>) ?? {};
     servers['veto'] = { command: npxCmd, args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
     existing.mcpServers = servers;
+  } else if (format === 'context_servers') {
+    const servers = (existing.context_servers as Record<string, unknown>) ?? {};
+    servers['veto'] = { command: { path: npxCmd, args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] } };
+    existing.context_servers = servers;
   } else {
     const servers = (existing.servers as Record<string, unknown>) ?? {};
     servers['veto'] = { type: 'stdio', command: npxCmd, args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
@@ -115,6 +119,12 @@ const PLATFORMS = [
     path: join(HOME, '.codeium', 'windsurf', 'mcp_config.json'),
     format: 'mcpServers' as const,
     detectionDir: join(HOME, '.codeium', 'windsurf'),
+  },
+  {
+    name: 'Zed',
+    path: join(HOME, '.config', 'zed', 'settings.json'),
+    format: 'context_servers' as const,
+    detectionDir: join(HOME, '.config', 'zed'),
   },
 ];
 

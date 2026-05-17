@@ -44,7 +44,7 @@ describe('runDebate', () => {
 
   it('does not throw when task is a long description', async () => {
     const longTask = 'Implement a complete user authentication system with JWT tokens, refresh token rotation, rate limiting, brute force protection, session management, and audit logging for compliance purposes';
-    await expect(runDebate({ task: longTask })).resolves.toBeDefined();
+    expect(runDebate({ task: longTask })).toBeDefined();
   });
 
   it('debated_at is an ISO date string', async () => {

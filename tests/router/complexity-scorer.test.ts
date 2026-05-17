@@ -89,9 +89,11 @@ describe('scoreComplexity', () => {
     expect(council.factors.council_bonus).toBe(10);
   });
 
-  it('word_count_score caps at 20', () => {
+  it('word_count_score caps at 25 with >60 word bonus', () => {
     const long = scoreComplexity(Array(200).fill('word').join(' '));
-    expect(long.factors.word_count_score).toBe(20);
+    expect(long.factors.word_count_score).toBe(25);
+    const short = scoreComplexity(Array(30).fill('word').join(' '));
+    expect(short.factors.word_count_score).toBe(10); // 30/3 = 10, no bonus
   });
 
   it('keyword_score caps at 30', () => {
