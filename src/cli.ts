@@ -40,7 +40,7 @@ function printBanner() {
 }
 
 // Merge veto entry into an existing JSON config file, creating it if needed.
-// Supports both "mcpServers" format (Gemini/Cursor/Windsurf)
+// Supports both "mcpServers" format (Gemini/Cursor/Windsurf) and "context_servers" (Zed)
 // and "servers" format (VS Code).
 function writeVetoConfig(
   configPath: string,
@@ -297,7 +297,7 @@ async function initCommand() {
     console.log('  Next steps:');
     console.log(c.dim('  1.') + ' Fully restart each configured AI client (not just reload)');
     console.log(c.dim('  2.') + ' For Claude Code: config is user-scoped — every window picks it up automatically');
-    console.log(c.dim('  3.') + ' For Gemini / Cursor / Windsurf: config is written globally to your home dir');
+    console.log(c.dim('  3.') + ' For Gemini / Cursor / Windsurf / Zed: config is written globally to your home dir');
     console.log(c.dim('  4.') + ' Verify: call veto_status in your AI client — should return { "status": "running" }');
     console.log('');
     console.log(c.dim('  Tip: run `veto init` again anytime to install newly-added AI tools.'));
@@ -415,6 +415,16 @@ async function doctorCommand() {
     { name: 'Gemini CLI', configPath: join(HOME, '.gemini', 'settings.json'),               detectionDir: join(HOME, '.gemini'),             key: 'mcpServers' },
     { name: 'Cursor',     configPath: join(HOME, '.cursor', 'mcp.json'),                    detectionDir: join(HOME, '.cursor'),             key: 'mcpServers' },
     { name: 'Windsurf',   configPath: join(HOME, '.codeium', 'windsurf', 'mcp_config.json'), detectionDir: join(HOME, '.codeium', 'windsurf'), key: 'mcpServers' },
+    {
+      name: 'Zed',
+      configPath: process.platform === 'win32'
+        ? join(process.env.APPDATA ?? HOME, 'Zed', 'settings.json')
+        : join(HOME, '.config', 'zed', 'settings.json'),
+      detectionDir: process.platform === 'win32'
+        ? join(process.env.APPDATA ?? HOME, 'Zed')
+        : join(HOME, '.config', 'zed'),
+      key: 'context_servers',
+    },
   ];
 
   for (const p of platforms) {
@@ -621,7 +631,7 @@ function troubleshootCommand() {
   console.log(`  ${c.dim('→')} Gemini / Cursor / Windsurf / Zed: run ${c.cyan('veto init')} once — config is written globally`);
   console.log('');
   console.log(`  ${c.yellow('MCP disconnected / tools not loading')}`);
-  console.log(`  ${c.dim('→')} Run ${c.cyan('veto init')} again, then fully restart your AI client (Claude / Gemini / Cursor / Zed)`);
+  console.log(`  ${c.dim('→')} Run ${c.cyan('veto init')} again, then fully restart your AI client (Claude / Gemini / Cursor / Windsurf / Zed)`);
   console.log(`  ${c.dim('→')} Verify the MCP entry in your AI client config file`);
   console.log(`  ${c.dim('→')} Check Node.js version: ${c.cyan('node --version')}  (need >= 22)`);
   console.log('');
