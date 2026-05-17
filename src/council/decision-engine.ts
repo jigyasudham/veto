@@ -45,7 +45,7 @@ export function decide(votes: Votes): {
   } else if (secondaryBlockers.length >= 2 && criticalApprovers.length >= 2) {
     // Business/UX objections vs technical approval — genuine split
     final_verdict = 'DEADLOCK';
-  } else if (secondaryBlockers.length >= 1 || warners.length >= 1) {
+  } else if (secondaryBlockers.length >= 1 || warners.length >= 2) {
     // At least one concern but no hard expert block
     final_verdict = 'YELLOW';
   } else {
