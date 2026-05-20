@@ -29,7 +29,7 @@ import {
 } from './memory/local.js';
 import { exportMemory, importMemory, getLocalDbSize } from './memory/sync.js';
 import { runDebate } from './council/index.js';
-import { runLlmDebate } from './council/llm-council.js';
+import { runLlmDebate, buildAgenticDebatePrompt, parseAgentResponses, runFromAgentResponses } from './council/llm-council.js';
 import { autoSummarizeSession } from './council/session-summarizer.js';
 import { routeTask, getRateStatus, trackTokens, recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent } from './router/index.js';
 import { getConfig, setConfig } from './memory/config.js';
@@ -306,8 +306,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const savePlatform = args?.platform ? String(args.platform) : 'claude';
       const shouldAutoSummarize = args?.auto_summarize === true;
 
-      // Auto-summarize: Veto reads the full conversation via MCP Sampling and generates
-      // structured summary/context/task_state — the calling AI doesn't need to write them.
+      // Auto-summarize: try MCP Sampling first, fall back to agentic prompt for host AI
       let autoSummaryResult: Awaited<ReturnType<typeof autoSummarizeSession>> = null;
       if (shouldAutoSummarize) {
         autoSummaryResult = await autoSummarizeSession(server, {
@@ -315,15 +314,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           context: args?.context ? String(args.context) : undefined,
           task_state: args?.task_state ? String(args.task_state) : undefined,
         });
+        // If agentic prompt returned, short-circuit — return it so the AI can fill it in
+        if (autoSummaryResult && 'mode' in autoSummaryResult && autoSummaryResult.mode === 'agentic') {
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                success: false,
+                auto_summarized: false,
+                ...autoSummaryResult,
+              }, null, 2),
+            }],
+          };
+        }
       }
 
       // Enforce size limits — unbounded strings exhaust SQLite page cache and memory
       const SUMMARY_LIMIT = 2_000;
       const CONTEXT_LIMIT = 50_000;
       const TASK_STATE_LIMIT = 20_000;
-      const RAW_SUMMARY = autoSummaryResult?.summary ?? String(args?.summary ?? '');
-      const RAW_CONTEXT = autoSummaryResult?.context ?? String(args?.context ?? '');
-      const RAW_TASK_STATE = autoSummaryResult?.task_state ?? (args?.task_state ? String(args.task_state) : undefined);
+      const generatedSession = autoSummaryResult && 'auto_summarized' in autoSummaryResult ? autoSummaryResult : null;
+      const RAW_SUMMARY = generatedSession?.summary ?? String(args?.summary ?? '');
+      const RAW_CONTEXT = generatedSession?.context ?? String(args?.context ?? '');
+      const RAW_TASK_STATE = generatedSession?.task_state ?? (args?.task_state ? String(args.task_state) : undefined);
       const saveSummary = RAW_SUMMARY.slice(0, SUMMARY_LIMIT);
       const saveContext = RAW_CONTEXT.slice(0, CONTEXT_LIMIT);
       const saveTaskState = RAW_TASK_STATE ? RAW_TASK_STATE.slice(0, TASK_STATE_LIMIT) : undefined;
@@ -524,13 +537,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const strictnessArg = (['fast', 'standard', 'strict'].includes(String(args?.strictness ?? '')))
         ? String(args!.strictness) as 'fast' | 'standard' | 'strict'
         : 'standard';
-      const debateStart = Date.now();
-      const result = await runLlmDebate(server, {
+      const debateInput = {
         task,
         context: args?.context ? String(args.context) : undefined,
         project_dir: args?.project_dir ? String(args.project_dir) : undefined,
         strictness: strictnessArg,
-      });
+      };
+
+      // Phase 2: agent_responses provided — run verdict engine on LLM-generated votes
+      const rawAgentResponses = args?.agent_responses;
+      if (rawAgentResponses && typeof rawAgentResponses === 'object') {
+        const parsed = parseAgentResponses(JSON.stringify(rawAgentResponses), task);
+        if (parsed) {
+          const debateStart = Date.now();
+          const result = runFromAgentResponses(debateInput, parsed);
+          const debateDuration = Date.now() - debateStart;
+          const sessionId = args?.session_id ? String(args.session_id) : undefined;
+          const outcomeId = saveCouncilOutcome({
+            session_id: sessionId, task, verdict: result.final_verdict,
+            lead_dev: JSON.stringify(result.votes.lead_dev), pm: JSON.stringify(result.votes.pm),
+            architect: JSON.stringify(result.votes.architect), ux: JSON.stringify(result.votes.ux),
+            devil: JSON.stringify(result.votes.devil), legal: JSON.stringify(result.votes.legal),
+            security: JSON.stringify(result.votes.security), recommended: result.recommended,
+            duration_ms: debateDuration,
+          });
+          const payload = { outcome_id: outcomeId, llm_backed: true, final_verdict: result.final_verdict, block_reasons: result.block_reasons, warnings: result.warnings, recommended: result.recommended, debated_at: result.debated_at, votes: result.votes };
+          return { content: [{ type: 'text', text: result.formatted_output + '\n\n' + JSON.stringify(payload, null, 2) }] };
+        }
+      }
+
+      // Phase 1: run deterministic debate + attach llm_upgrade prompt for host AI
+      const debateStart = Date.now();
+      const result = await runLlmDebate(server, debateInput);
       const debateDuration = Date.now() - debateStart;
 
       const sessionId = args?.session_id ? String(args.session_id) : undefined;
@@ -582,8 +620,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
       }
 
+      // Build agentic upgrade prompt so host AI can provide real LLM reasoning on any platform
+      const enrichedCtx = buildContextString(debateInput.project_dir, debateInput.context);
+      const { optionA, optionB, isDecisionTask } = (await import('./council/decision-extractor.js')).extractDecision(task);
+      const decisionCtx = isDecisionTask ? `Option A: "${optionA}" vs Option B: "${optionB}"` : undefined;
+      const agenticPrompt = buildAgenticDebatePrompt(task, enrichedCtx, decisionCtx);
+
       const responsePayload = {
         outcome_id: outcomeId,
+        llm_backed: false,
         final_verdict: result.final_verdict,
         block_reasons: result.block_reasons,
         warnings: result.warnings,
@@ -597,6 +642,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           devil:     result.votes.devil,
           legal:     result.votes.legal,
           security:  result.votes.security,
+        },
+        llm_upgrade: {
+          available: true,
+          instruction: 'The verdict above is deterministic. For LLM-backed analysis: (1) read debate_prompt and reason as all 7 agents, generating the agent_responses JSON; (2) call veto_council_debate again with { task, agent_responses } to get the final LLM-backed verdict. Works on Claude Code, Gemini CLI, and Codex CLI with no API keys.',
+          debate_prompt: agenticPrompt,
         },
       } as Record<string, unknown>;
 

@@ -317,6 +317,69 @@ veto_sessions_list { query: "auth" }
 
 ---
 
+## New in v1.4.3
+
+### Council debate + session save — work on Gemini CLI and Codex CLI
+
+MCP Sampling (`server.createMessage`) is not yet implemented by any of the three CLI hosts. Previously this meant the council always used deterministic fallbacks and `auto_summarize` never ran on any platform.
+
+**v1.4.3 introduces the agentic loop pattern** — no API keys, no sampling dependency, works on all three platforms identically.
+
+#### Council debate — two-phase LLM upgrade
+
+```
+# Phase 1 — always returns an instant deterministic result
+veto_council_debate { task: "migrate auth to JWT" }
+→ {
+    llm_backed: false,
+    final_verdict: "YELLOW",
+    votes: { ... },           ← deterministic agent analysis
+    llm_upgrade: {
+      available: true,
+      instruction: "Read debate_prompt, reason as all 7 agents, call again with agent_responses",
+      debate_prompt: "You are running a Veto Council debate. Analyze the task as each specialist..."
+    }
+  }
+
+# Phase 2 — call again with your agent_responses → get the LLM-backed verdict
+veto_council_debate {
+  task: "migrate auth to JWT",
+  agent_responses: {
+    lead_dev:  { verdict: "warn", reason: "...", concerns: [], recommendation: "..." },
+    pm:        { verdict: "approve", ... },
+    architect: { verdict: "warn", ... },
+    ux:        { verdict: "approve", ... },
+    devil:     { verdict: "warn", ... },
+    legal:     { verdict: "warn", ... },
+    security:  { verdict: "warn", ... }
+  }
+}
+→ { llm_backed: true, final_verdict: "YELLOW", votes: { ... } }
+```
+
+The host AI (Claude, Gemini, or Codex) reads the `debate_prompt`, reasons as all 7 specialists, and passes the structured JSON back. Veto runs the verdict engine on the real LLM output.
+
+#### Session save — agentic fallback
+
+When `auto_summarize: true` and MCP Sampling is unavailable, `veto_session_save` now returns a structured template and instructions for the calling AI to fill in and call again — instead of silently saving nothing:
+
+```
+veto_session_save { auto_summarize: true }
+→ {
+    mode: "agentic",
+    instruction: "Generate the session summary yourself from the conversation above, then call veto_session_save again with the filled-in fields.",
+    summarize_prompt: "Review the conversation above and produce a session checkpoint...",
+    template: {
+      auto_summarize: false,
+      summary: "<one sentence describing what was accomplished>",
+      context: "{ task, decisions[], findings[] with file:line }",
+      task_state: "{ completed[], remaining[], nextAction: 'Edit src/X.ts line N — ...' }"
+    }
+  }
+```
+
+---
+
 ## New in v1.4.2
 
 ### `veto_session_save` — LLM auto-summarization

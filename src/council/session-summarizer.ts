@@ -88,10 +88,54 @@ function parseGeneratedSession(raw: string): { summary: string; context: string;
   }
 }
 
+export interface AgenticSummarizePrompt {
+  mode: 'agentic';
+  instruction: string;
+  summarize_prompt: string;
+  template: {
+    auto_summarize: false;
+    summary: string;
+    context: string;
+    task_state: string;
+  };
+}
+
+const AGENTIC_TEMPLATE = {
+  auto_summarize: false as const,
+  summary: '<one sentence: what was accomplished or is in progress>',
+  context: JSON.stringify({
+    task: '<original task description verbatim>',
+    decisions: [{ decision: '<what was decided>', rationale: '<why>' }],
+    findings: ['<src/file.ts:N — what matters about this file>'],
+  }),
+  task_state: JSON.stringify({
+    completed: ['<finished subtask>'],
+    inProgress: ['<current subtask>'],
+    remaining: ['<subtask still to do>'],
+    blockers: [],
+    nextAction: '<concrete file+line instruction: Edit src/X.ts line N — do Y>',
+  }),
+};
+
+export function buildAgenticSummarizePrompt(): AgenticSummarizePrompt {
+  return {
+    mode: 'agentic',
+    instruction: 'MCP Sampling is unavailable on this platform. Generate the session summary yourself from the conversation above, then call veto_session_save again with the filled-in fields. Use the template below — replace every <placeholder> with real content from the conversation.',
+    summarize_prompt: `Review the conversation above and produce a session checkpoint. Requirements:
+- summary: one sentence describing what was accomplished
+- context.task: the original task verbatim
+- context.decisions: decisions made and why (only non-obvious ones)
+- context.findings: specific file paths with line numbers and what matters there
+- task_state.nextAction: MUST be a concrete file+line instruction — e.g. "Edit src/server.ts line 302 — add zod .max(2000) on summary field". NOT vague like "add validation".
+- Keep total JSON under 1500 tokens`,
+    template: AGENTIC_TEMPLATE,
+  };
+}
+
 export async function autoSummarizeSession(
   server: Server,
   hints: { summary?: string; context?: string; task_state?: string },
-): Promise<GeneratedSession | null> {
+): Promise<GeneratedSession | AgenticSummarizePrompt | null> {
   try {
     const result = await server.createMessage({
       messages: [{ role: 'user', content: { type: 'text', text: buildUserMessage(hints) } }],
@@ -101,14 +145,14 @@ export async function autoSummarizeSession(
     });
 
     const raw = result.content.type === 'text' ? result.content.text : '';
-    if (!raw) return null;
+    if (!raw) return buildAgenticSummarizePrompt();
 
     const parsed = parseGeneratedSession(raw);
-    if (!parsed) return null;
+    if (!parsed) return buildAgenticSummarizePrompt();
 
     return { ...parsed, auto_summarized: true };
   } catch {
-    // MCP Sampling unavailable (Gemini, Codex) or failed — caller falls back
-    return null;
+    // MCP Sampling unavailable — return agentic prompt so the calling AI can do it
+    return buildAgenticSummarizePrompt();
   }
 }
