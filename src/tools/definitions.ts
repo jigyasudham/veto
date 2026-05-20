@@ -57,21 +57,25 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'veto_session_save',
     description:
-      'Saves the current session context to SQLite. Pass session_id to update an existing session instead of creating a new one — use this when refreshing context mid-conversation rather than starting a new snapshot.',
+      'Saves the current session context to SQLite. Set auto_summarize: true to have Veto read the full conversation and generate an accurate structured summary itself — no manual writing needed. Pass session_id to update an existing session in-place.',
     inputSchema: {
       type: 'object',
       properties: {
+        auto_summarize: {
+          type: 'boolean',
+          description: 'When true, Veto reads the full conversation context via MCP Sampling and generates summary, context, and task_state automatically — including specific file paths, decisions, and a concrete nextAction. Recommended: pass true and omit summary/context/task_state. Falls back to provided values if sampling is unavailable.',
+        },
         summary: {
           type: 'string',
-          description: 'A brief summary of what was accomplished this session.',
+          description: 'A brief summary of what was accomplished. Optional when auto_summarize is true.',
         },
         context: {
           type: 'string',
-          description: 'Key context to restore (decisions, current task, file list, etc.).',
+          description: 'Key context to restore (decisions, current task, file list, etc.). Optional when auto_summarize is true.',
         },
         task_state: {
           type: 'string',
-          description: 'Current task state — what is done and what is next.',
+          description: 'Current task state — what is done and what is next. Optional when auto_summarize is true.',
         },
         platform: {
           type: 'string',
@@ -105,7 +109,7 @@ export const TOOL_DEFINITIONS = [
           description: 'Optional labels for this session (e.g. ["auth", "migration", "v1.3"]). Makes sessions searchable via veto_sessions_list query.',
         },
       },
-      required: ['summary', 'context'],
+      required: [],
     },
   },
   {

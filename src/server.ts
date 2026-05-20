@@ -30,6 +30,7 @@ import {
 import { exportMemory, importMemory, getLocalDbSize } from './memory/sync.js';
 import { runDebate } from './council/index.js';
 import { runLlmDebate } from './council/llm-council.js';
+import { autoSummarizeSession } from './council/session-summarizer.js';
 import { routeTask, getRateStatus, trackTokens, recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent } from './router/index.js';
 import { getConfig, setConfig } from './memory/config.js';
 import type { AgentType, Platform } from './router/index.js';
@@ -303,14 +304,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const sessionProjectDir = args?.project_dir ? String(args.project_dir) : undefined;
       if (sessionProjectDir) activeProjectDir = sessionProjectDir;
       const savePlatform = args?.platform ? String(args.platform) : 'claude';
+      const shouldAutoSummarize = args?.auto_summarize === true;
+
+      // Auto-summarize: Veto reads the full conversation via MCP Sampling and generates
+      // structured summary/context/task_state — the calling AI doesn't need to write them.
+      let autoSummaryResult: Awaited<ReturnType<typeof autoSummarizeSession>> = null;
+      if (shouldAutoSummarize) {
+        autoSummaryResult = await autoSummarizeSession(server, {
+          summary: args?.summary ? String(args.summary) : undefined,
+          context: args?.context ? String(args.context) : undefined,
+          task_state: args?.task_state ? String(args.task_state) : undefined,
+        });
+      }
 
       // Enforce size limits — unbounded strings exhaust SQLite page cache and memory
-      const RAW_SUMMARY = String(args?.summary ?? '');
-      const RAW_CONTEXT = String(args?.context ?? '');
-      const RAW_TASK_STATE = args?.task_state ? String(args.task_state) : undefined;
       const SUMMARY_LIMIT = 2_000;
       const CONTEXT_LIMIT = 50_000;
       const TASK_STATE_LIMIT = 20_000;
+      const RAW_SUMMARY = autoSummaryResult?.summary ?? String(args?.summary ?? '');
+      const RAW_CONTEXT = autoSummaryResult?.context ?? String(args?.context ?? '');
+      const RAW_TASK_STATE = autoSummaryResult?.task_state ?? (args?.task_state ? String(args.task_state) : undefined);
       const saveSummary = RAW_SUMMARY.slice(0, SUMMARY_LIMIT);
       const saveContext = RAW_CONTEXT.slice(0, CONTEXT_LIMIT);
       const saveTaskState = RAW_TASK_STATE ? RAW_TASK_STATE.slice(0, TASK_STATE_LIMIT) : undefined;
@@ -353,6 +366,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       autoSave.last_save_at = result.saved_at;
       autoSave.last_session_id = result.session_id;
 
+      const autoSumFailed = shouldAutoSummarize && !autoSummaryResult;
       const responseObj: Record<string, unknown> = {
         success: true,
         message: wasUpdate
@@ -363,6 +377,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         session_id: result.session_id,
         saved_at: result.saved_at,
         updated: wasUpdate,
+        auto_summarized: autoSummaryResult ? true : false,
+        ...(autoSumFailed ? { auto_summarize_warning: 'MCP Sampling unavailable — saved provided values instead. For best results use Claude Code or another host that supports sampling.' } : {}),
         ...(wasUpdate ? {} : { usage_pct: result.usage_pct, context_warning: result.context_warning }),
         ...(truncationWarnings.length > 0 ? { truncation_warnings: truncationWarnings } : {}),
       };

@@ -297,6 +297,13 @@ veto_council_debate {
 Tag sessions when saving to make them findable later:
 
 ```
+# Let Veto generate the summary from conversation context
+veto_session_save {
+  auto_summarize: true,
+  tags: ["auth", "jwt", "middleware"]
+}
+
+# Or write it manually
 veto_session_save {
   summary: "Implemented JWT auth middleware",
   context: "...",
@@ -307,6 +314,43 @@ veto_session_save {
 veto_sessions_list { query: "auth" }
 → sessions matching "auth" in summary, context, tags, or project_dir
 ```
+
+---
+
+## New in v1.4.2
+
+### `veto_session_save` — LLM auto-summarization
+
+Pass `auto_summarize: true` and Veto reads the full conversation via MCP Sampling, then generates an accurate, structured session checkpoint itself — you don't write summary, context, or task_state manually.
+
+```
+# Simplest possible save — Veto does the work
+veto_session_save {
+  auto_summarize: true,
+  project_dir: "/your/project",
+  tags: ["auth", "migration"]
+}
+→ {
+    success: true,
+    auto_summarized: true,
+    session_id: "abc-123",
+    summary: "Implemented JWT auth middleware with refresh token rotation",
+    context: {
+      task: "migrate session auth to JWT",
+      decisions: [{ decision: "store refresh token in httpOnly cookie", rationale: "XSS protection" }],
+      findings: ["src/auth.ts:142 — refreshToken handler, needs rotation logic next"]
+    },
+    task_state: {
+      completed: ["access token generation", "middleware wiring"],
+      remaining: ["refresh token rotation", "logout blocklist"],
+      nextAction: "Edit src/auth.ts line 142 — implement rotation: invalidate old refresh token, issue new one, update DB row"
+    }
+  }
+```
+
+Veto generates `nextAction` as a **concrete, file+line instruction** the next AI can execute without re-reading any source files. On restore, the `resume_instructions` field tells the AI to trust this and start immediately.
+
+Falls back to any manually provided `summary`/`context`/`task_state` values if MCP Sampling is unavailable (Gemini CLI, Codex CLI).
 
 ---
 
