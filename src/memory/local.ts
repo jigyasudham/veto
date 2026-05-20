@@ -81,7 +81,23 @@ export function getDb(): DatabaseSync {
   migrateSessionSaveType(_db);
   migrateScanDiagnostics(_db);
   migrateSessionTags(_db);
+  migrateContextUsage(_db);
   return _db;
+}
+
+// Creates context_usage table for live VS Code extension polling (v1.4.4 migration)
+function migrateContextUsage(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS context_usage (
+      platform       TEXT PRIMARY KEY,
+      model          TEXT,
+      token_count    INTEGER NOT NULL DEFAULT 0,
+      context_window INTEGER NOT NULL DEFAULT 200000,
+      usage_pct      REAL NOT NULL DEFAULT 0,
+      session_id     TEXT,
+      updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
 }
 
 // Adds tags column to sessions (v1.3.1 migration)
@@ -932,4 +948,56 @@ export function getUsageLogs(opts: { limit?: number; tool_name?: string } = {}):
   return db.prepare(
     'SELECT * FROM usage_log ORDER BY created_at DESC LIMIT ?'
   ).all(limit) as UsageLogRow[];
+}
+
+// ── Context Usage — live token count for VS Code extension ───────────────────
+
+export interface ContextUsageRow {
+  platform: string;
+  model: string | null;
+  token_count: number;
+  context_window: number;
+  usage_pct: number;
+  session_id: string | null;
+  updated_at: string;
+}
+
+export function upsertContextUsage(opts: {
+  platform: string;
+  model?: string;
+  token_count: number;
+  context_window: number;
+  session_id?: string;
+}): void {
+  if (opts.token_count <= 0) return;
+  const db = getDb();
+  const usage_pct = Math.round((opts.token_count / opts.context_window) * 100 * 10) / 10;
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO context_usage (platform, model, token_count, context_window, usage_pct, session_id, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(platform) DO UPDATE SET
+      model          = excluded.model,
+      token_count    = excluded.token_count,
+      context_window = excluded.context_window,
+      usage_pct      = excluded.usage_pct,
+      session_id     = excluded.session_id,
+      updated_at     = excluded.updated_at
+  `).run(
+    opts.platform,
+    opts.model ?? null,
+    opts.token_count,
+    opts.context_window,
+    usage_pct,
+    opts.session_id ?? null,
+    now,
+  );
+}
+
+export function getContextUsage(platform?: string): ContextUsageRow[] {
+  const db = getDb();
+  if (platform) {
+    return db.prepare('SELECT * FROM context_usage WHERE platform = ?').all(platform) as unknown as ContextUsageRow[];
+  }
+  return db.prepare('SELECT * FROM context_usage ORDER BY updated_at DESC').all() as unknown as ContextUsageRow[];
 }

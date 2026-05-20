@@ -339,6 +339,41 @@ veto_sessions_list { query: "auth" }
 
 ---
 
+## New in v1.4.4
+
+### Token count now updates from `veto_session_save`
+
+Previously, token count and context window usage only updated when `veto_status { token_count: N }` was called. Saving a session without calling status first left the VS Code extension and autosave status showing stale or zero values.
+
+Now `veto_session_save { token_count: N }` directly:
+- Calls `trackTokens()` to update the daily rate tracker
+- Upserts into the new `context_usage` table with `usage_pct` computed from the model's actual context window
+
+```
+veto_session_save {
+  summary: "...",
+  context: "...",
+  token_count: 45000,          ← now updates live display immediately
+  platform: "claude",
+  model: "claude-sonnet-4-6"   ← resolves exact 1M window for accurate %
+}
+→ { usage_pct: 4.5, auto_summarized: false, ... }
+```
+
+### `context_usage` table — live DB polling for VS Code extension
+
+A new single-row-per-platform table in `~/.veto/veto.db` that always holds the latest known context state. Your VS Code extension can poll or watch this table directly:
+
+```sql
+SELECT platform, model, token_count, context_window, usage_pct, updated_at
+FROM context_usage
+ORDER BY updated_at DESC
+```
+
+Updated by both `veto_session_save` and `veto_status` whenever `token_count > 0` is passed. `veto_autosave_status` now includes `live_context_usage` in its response.
+
+---
+
 ## New in v1.4.3
 
 ### Council debate + session save — work on Gemini CLI and Codex CLI

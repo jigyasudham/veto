@@ -158,6 +158,16 @@ export const CREATE_TABLES = `
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS context_usage (
+    platform       TEXT PRIMARY KEY,
+    model          TEXT,
+    token_count    INTEGER NOT NULL DEFAULT 0,
+    context_window INTEGER NOT NULL DEFAULT 200000,
+    usage_pct      REAL NOT NULL DEFAULT 0,
+    session_id     TEXT,
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_scan_diag_file ON scan_diagnostics(file_path);
 
   CREATE INDEX IF NOT EXISTS idx_sessions_platform    ON sessions(platform);

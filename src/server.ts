@@ -26,6 +26,7 @@ import {
   logUsage, getUsageLogs, getDb,
   storeScanDiagnostics, clearScanDiagnostics,
   updateSession, resolveContextWindow, getMetrics,
+  upsertContextUsage, getContextUsage,
 } from './memory/local.js';
 import { exportMemory, importMemory, getLocalDbSize } from './memory/sync.js';
 import { runDebate } from './council/index.js';
@@ -241,6 +242,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const statusModel = args?.model ? String(args.model) : undefined;
       if (statusTokenCount !== null && statusTokenCount > 0) {
         trackTokens(statusPlatform as Platform, statusTokenCount);
+        upsertContextUsage({
+          platform: statusPlatform,
+          model: statusModel,
+          token_count: statusTokenCount,
+          context_window: resolveContextWindow(statusPlatform, statusModel),
+          session_id: autoSave.last_session_id ?? undefined,
+        });
       }
       const autoSaveResult = statusTokenCount !== null ? maybeAutoSave(statusTokenCount, statusPlatform, statusModel) : null;
       return {
@@ -284,6 +292,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_autosave_status': {
+      const liveUsage = getContextUsage();
       return {
         content: [{
           type: 'text',
@@ -294,7 +303,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             cached_summary: autoSave.cached?.summary ?? null,
             last_save_at: autoSave.last_save_at,
             last_session_id: autoSave.last_session_id,
-            note: 'Auto-save fires when veto_status is called with token_count ≥ threshold_pct% of context window.',
+            live_context_usage: liveUsage,
+            note: 'Pass token_count to veto_session_save or veto_status to update live_context_usage. VS Code extension reads context_usage table directly.',
           }, null, 2),
         }],
       };
@@ -378,6 +388,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       autoSave.cached = { summary: saveSummary, context: saveContext, task_state: saveTaskState, platform: savePlatform, project_dir: sessionProjectDir, context_window: resolvedWindow };
       autoSave.last_save_at = result.saved_at;
       autoSave.last_session_id = result.session_id;
+
+      // Update live token count so VS Code extension and veto_status reflect it immediately
+      const saveTokenCount = typeof args?.token_count === 'number' ? args.token_count : 0;
+      if (saveTokenCount > 0) {
+        trackTokens(savePlatform as Platform, saveTokenCount);
+        upsertContextUsage({
+          platform: savePlatform,
+          model: saveModel,
+          token_count: saveTokenCount,
+          context_window: resolvedWindow ?? resolveContextWindow(savePlatform, saveModel),
+          session_id: result.session_id,
+        });
+      }
 
       const autoSumFailed = shouldAutoSummarize && !autoSummaryResult;
       const responseObj: Record<string, unknown> = {
