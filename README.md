@@ -12,9 +12,9 @@ An MCP server that runs locally on your machine, plugs into Claude Code, Codex C
 
 Veto has two fundamentally different types of agents:
 
-### Council agents — real LLM reasoning (7 agents)
+### Council agents — real LLM reasoning via agentic loop (7 agents)
 
-The 7 council agents call your existing AI subscription via MCP Sampling — they do not use a separate API key or cost anything extra. Each agent gets a tight system prompt, reasons independently, and returns a structured JSON verdict.
+The 7 council agents use the **agentic loop pattern** — no API key, no extra cost, works on Claude Code, Gemini CLI, and Codex CLI identically. The tool returns an instant deterministic result plus a `debate_prompt`. You (the host AI) read it, reason as all 7 specialists, and pass the responses back. Veto runs the verdict engine on your real LLM output.
 
 | Agent | Role |
 |---|---|
@@ -31,7 +31,7 @@ Use `strictness` to control depth:
 - `standard` — all 7 agents, default
 - `strict` — all 7 agents + Devil's Advocate rebuttal round on the most critical blocker
 
-`veto_benchmark` also runs LLM council — two debates in parallel for side-by-side approach comparison.
+`veto_benchmark` also runs council — two debates in parallel for side-by-side approach comparison.
 
 ### Expert modules — deterministic, instant, zero tokens (42+ agents)
 
@@ -41,10 +41,10 @@ Every other agent in Veto — coder, reviewer, tester, debugger, security scanne
 veto_agent_plan  { agent: "coder", task: "..." }    ← deterministic plan, instant
 veto_code_review { code: "..." }                     ← regex + heuristic scanner, instant
 veto_secrets_scan{ text: "..." }                     ← pattern matching, instant
-veto_council_debate { task: "..." }                  ← 7 LLM calls via MCP Sampling
+veto_council_debate { task: "..." }                  ← agentic loop: host AI reasons as 7 specialists
 ```
 
-**Why this split?** LLM reasoning costs tokens and latency — it's only worth it for high-stakes decisions before architecture/security/migration work. Pattern-matching is MORE reliable than LLMs for secrets detection and OWASP scanning (no hallucinations). The deterministic agents are the workhorses; the council is the gatekeeper.
+**Why this split?** LLM reasoning is only worth it for high-stakes architecture/security/migration decisions. Pattern-matching is MORE reliable than LLMs for secrets detection and OWASP scanning (no hallucinations). The deterministic agents are the workhorses; the council is the gatekeeper.
 
 ---
 
@@ -104,7 +104,7 @@ All config files are home-directory relative — they apply globally across all 
 
 ## What Veto Does
 
-**Council** — Before any significant task, 7 specialist agents (LLM-backed via MCP Sampling) debate it in parallel and return a GREEN / YELLOW / RED / DEADLOCK verdict. Bad decisions get blocked before any code is written. Use `strictness: "fast"` for quick checks or `"strict"` for a full rebuttal round.
+**Council** — Before any significant task, 7 specialist agents debate it using the agentic loop and return a GREEN / YELLOW / RED / DEADLOCK verdict. Works on Claude Code, Gemini CLI, and Codex CLI — no API keys needed. Bad decisions get blocked before any code is written.
 
 **Metrics** — `veto_metrics` gives you a live usage dashboard: sessions saved, council verdict breakdown, top agents by call count, 7-day quality trend, and knowledge base stats. Zero cost, pure SQLite.
 
@@ -140,9 +140,9 @@ All config files are home-directory relative — they apply globally across all 
 
 ## The 50 Agents
 
-### Council Layer — LLM-backed via MCP Sampling (8)
+### Council Layer — LLM reasoning via agentic loop (8)
 
-> These agents call your existing AI subscription. Real reasoning, real cost. Used exclusively by `veto_council_debate` and `veto_benchmark`.
+> Real LLM reasoning, zero extra cost, works on all 3 platforms. The host AI reasons as all 7 specialists and passes structured responses back to Veto's verdict engine. Used by `veto_council_debate` and `veto_benchmark`.
 
 `Lead Developer` · `Product Manager` · `System Architect` · `UX Designer` · `Devil's Advocate` · `Legal & Compliance` · `Security` · `Decision Engine`
 
@@ -256,27 +256,49 @@ veto doctor
 
 ## Council Debate
 
+Two-phase flow — works on Claude Code, Gemini CLI, and Codex CLI with no API keys:
+
 ```
+# Phase 1 — call with task, get instant deterministic result + LLM upgrade prompt
 veto_council_debate {
   task: "migrate auth from sessions to JWTs",
   project_dir: "/your/project",
-  strictness: "standard"      ← fast | standard | strict
+  strictness: "standard"
 }
 → {
+    llm_backed: false,
+    final_verdict: "YELLOW",
+    votes: { lead_dev: {...}, architect: {...}, security: {...}, ... },
+    llm_upgrade: {
+      available: true,
+      instruction: "Read debate_prompt, reason as all 7 agents, call again with agent_responses",
+      debate_prompt: "You are running a Veto Council debate. Analyze the task as each specialist..."
+    }
+  }
+
+# Phase 2 — reason as all 7 agents, pass responses back → get LLM-backed verdict
+veto_council_debate {
+  task: "migrate auth from sessions to JWTs",
+  agent_responses: {
+    lead_dev:  { verdict: "warn",    reason: "Stateless JWTs complicate logout — need blocklist", concerns: ["Refresh token rotation must be atomic"], recommendation: "Use short-lived access tokens (15m) + httpOnly refresh tokens" },
+    pm:        { verdict: "approve", reason: "JWT migration unblocks mobile clients", concerns: [], recommendation: "Ship behind a feature flag, roll back if logout issues" },
+    architect: { verdict: "approve", reason: "Good fit for stateless microservice boundary", concerns: ["Clock skew can break expiry across services"], recommendation: "Add NTP sync check; use relative expiry not absolute timestamps" },
+    ux:        { verdict: "approve", reason: "No user-visible change if migration is seamless", concerns: [], recommendation: "Silent migration — no logout required for existing sessions" },
+    devil:     { verdict: "warn",    reason: "What if the refresh token store goes down at 2AM?", concerns: ["Redis outage = all users logged out", "Token replay attack window between rotation and invalidation"], recommendation: "Fallback to session auth if Redis is down; use short rotation window" },
+    legal:     { verdict: "approve", reason: "JWTs are industry standard, no new compliance risk", concerns: [], recommendation: "Document token storage in privacy policy" },
+    security:  { verdict: "warn",    reason: "Refresh token rotation must be atomic — TOCTOU risk", concerns: ["localStorage storage of access token is XSS-vulnerable"], recommendation: "Store access token in memory only; refresh token in httpOnly Secure SameSite=Strict cookie" }
+  }
+}
+→ {
+    llm_backed: true,
     final_verdict: "YELLOW",
     block_reasons: [],
-    warnings: ["JWT revocation requires a token blocklist — plan storage", "Clock skew between services can break expiry checks"],
-    votes: {
-      lead_dev:  { verdict: "warn",    reason: "Stateless JWTs complicate logout flows...", concerns: [...] },
-      architect: { verdict: "approve", reason: "Good fit for microservices...", concerns: [...] },
-      security:  { verdict: "warn",    reason: "Refresh token rotation must be atomic...", concerns: [...] },
-      ...
-    },
-    recommended: "Proceed with JWT migration. Implement a Redis blocklist for logout..."
+    warnings: ["Refresh token rotation must be atomic...", "What if the refresh token store goes down..."],
+    recommended: "Proceed with JWT. Use httpOnly cookies for refresh tokens, memory-only for access tokens..."
   }
 ```
 
-When the task presents a binary choice, agents name the option they prefer:
+When the task presents a binary choice, agents name the option they prefer and the output includes a `🎯 Council leans toward:` line:
 
 ```
 veto_council_debate {
@@ -413,7 +435,7 @@ veto_session_save {
 
 Veto generates `nextAction` as a **concrete, file+line instruction** the next AI can execute without re-reading any source files. On restore, the `resume_instructions` field tells the AI to trust this and start immediately.
 
-Falls back to any manually provided `summary`/`context`/`task_state` values if MCP Sampling is unavailable (Gemini CLI, Codex CLI).
+When MCP Sampling is unavailable (all platforms currently), returns an agentic template asking the host AI to generate the summary from the conversation and call back with filled-in fields — see v1.4.3.
 
 ---
 
@@ -436,7 +458,7 @@ Lead Dev:  [Express-bundled vs external-adapter] reason [WARN]
 🎯 Council leans toward: "external adapter pattern" (4 agents prefer it)
 ```
 
-LLM-backed agents (when MCP Sampling is available) are now explicitly instructed to name the preferred option in their recommendation.
+In the agentic loop (phase 2), the host AI is explicitly instructed to name the preferred option in its recommendation for each agent role.
 
 ### `veto_session_restore` — resume instructions
 
