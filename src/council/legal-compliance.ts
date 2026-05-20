@@ -1,5 +1,6 @@
 // Legal & Compliance — licenses, data privacy, GDPR, ToS, IP, regulatory
 import type { AgentVote } from './types.js';
+import { extractDecision, pickSide, reframeVote } from './decision-extractor.js';
 
 const BLOCK_RULES: Array<{ pattern: RegExp; reason: string; recommendation: string }> = [
   {
@@ -130,24 +131,6 @@ export function analyze(task: string): AgentVote {
     }
   }
 
-  if (blocks.length > 0) {
-    return {
-      verdict: 'block',
-      reason: blocks[0].reason,
-      concerns: blocks.slice(1).map(b => b.reason),
-      recommendation: blocks.map(b => b.recommendation).join(' | '),
-    };
-  }
-
-  if (concerns.length > 0) {
-    return {
-      verdict: 'warn',
-      reason: `${concerns.length} legal or compliance concern${concerns.length > 1 ? 's' : ''} — review before shipping.`,
-      concerns,
-      recommendation: recommendations[0],
-    };
-  }
-
   // Topic-based legal analysis for tasks with no specific pattern matches
   const TOPIC_INSIGHTS: Array<{ pattern: RegExp; concern: string; recommendation: string }> = [
     {
@@ -182,16 +165,50 @@ export function analyze(task: string): AgentVote {
     },
   ];
 
-  const topicMatched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
-  if (topicMatched.length > 0) {
-    const top = topicMatched.slice(0, 2);
-    return {
-      verdict: 'warn',
-      reason: top[0].concern,
-      concerns: top.slice(1).map(t => t.concern),
-      recommendation: top.map(t => t.recommendation).join(' | '),
+  let vote: AgentVote;
+
+  if (blocks.length > 0) {
+    vote = {
+      verdict: 'block',
+      reason: blocks[0].reason,
+      concerns: blocks.slice(1).map(b => b.reason),
+      recommendation: blocks.map(b => b.recommendation).join(' | '),
     };
+  } else if (concerns.length > 0) {
+    vote = {
+      verdict: 'warn',
+      reason: `${concerns.length} legal or compliance concern${concerns.length > 1 ? 's' : ''} — review before shipping.`,
+      concerns,
+      recommendation: recommendations[0],
+    };
+  } else {
+    const topicMatched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
+    if (topicMatched.length > 0) {
+      const top = topicMatched.slice(0, 2);
+      vote = {
+        verdict: 'warn',
+        reason: top[0].concern,
+        concerns: top.slice(1).map(t => t.concern),
+        recommendation: top.map(t => t.recommendation).join(' | '),
+      };
+    } else {
+      vote = { verdict: 'approve', reason: 'No legal or compliance issues detected.', concerns: [] };
+    }
   }
 
-  return { verdict: 'approve', reason: 'No legal or compliance issues detected.', concerns: [] };
+  return applyDecisionStance(vote, task);
+}
+
+// Legal risk: options that expose more data surface, add network endpoints, or create new data flows
+const LEGAL_RISK = /\b(http|rest.?api|network|remote|endpoint|expose|token|oauth|third.?party|integrate)\b/i;
+
+function applyDecisionStance(vote: AgentVote, task: string): AgentVote {
+  const ctx = extractDecision(task);
+  if (!ctx.isDecisionTask) return vote;
+  const { optionA, optionB } = ctx;
+  const side = pickSide(optionA, optionB, LEGAL_RISK);
+  const advice = side
+    ? `"${side.preferred}" has a smaller data surface area and fewer cross-boundary data flows. "${side.avoided}" introduces new data exposure obligations — document retention policies and user consent before shipping.`
+    : `Both options may create data obligations. Confirm: what user data each option stores, for how long, and whether users can delete it.`;
+  return reframeVote(vote, ctx, side?.preferred ?? null, advice);
 }

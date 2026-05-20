@@ -7,6 +7,7 @@ import type { AgentVote, DebateInput, DebateResult } from './types.js';
 import { decide, formatDebate } from './decision-engine.js';
 import { buildContextString } from '../context/reader.js';
 import { searchKnowledge } from '../memory/local.js';
+import { extractDecision } from './decision-extractor.js';
 
 // Deterministic fallbacks — one per agent
 import { analyze as leadDevFallback }  from './lead-developer.js';
@@ -22,38 +23,52 @@ import { analyze as securityFallback } from './security.js';
 const SYSTEM_PROMPTS: Record<string, string> = {
   lead_dev: `You are the Lead Developer in a software council. Assess technical feasibility, code quality, implementation risk, and engineering best practices. Be pragmatic — approve sound work, warn about concerning patterns, block only when something is technically broken or creates severe technical debt.
 
+IMPORTANT: If the task presents two specific options (e.g. "A vs B" or "should we X or Y"), your recommendation MUST explicitly state which option you prefer and why — do not give generic advice that applies to both. Name the option you prefer in your recommendation field.
+
 Return ONLY valid JSON, no other text:
-{"verdict":"approve"|"warn"|"block","reason":"one sentence","concerns":["concern1"],"recommendation":"actionable advice"}`,
+{"verdict":"approve"|"warn"|"block","reason":"one sentence directly addressing the task","concerns":["specific concern"],"recommendation":"Prefer [named option] — reason specific to your domain"}`,
 
   pm: `You are the Product Manager in a software council. Assess user value, business alignment, scope clarity, and product-market fit. Approve features that deliver clear value, warn when scope is vague or requirements are incomplete, block only when something contradicts core product goals.
 
+IMPORTANT: If the task presents two specific options (e.g. "A vs B" or "should we X or Y"), your recommendation MUST explicitly state which option you prefer and why — do not give generic advice that applies to both. Name the option you prefer in your recommendation field.
+
 Return ONLY valid JSON, no other text:
-{"verdict":"approve"|"warn"|"block","reason":"one sentence","concerns":["concern1"],"recommendation":"actionable advice"}`,
+{"verdict":"approve"|"warn"|"block","reason":"one sentence directly addressing the task","concerns":["specific concern"],"recommendation":"Prefer [named option] — reason specific to your domain"}`,
 
   architect: `You are the System Architect in a software council. Assess scalability, maintainability, system design, coupling, and architectural integrity. Approve decisions that fit the architecture well, warn about complexity or coupling risks, block breaking changes that violate architectural principles.
 
+IMPORTANT: If the task presents two specific options (e.g. "A vs B" or "should we X or Y"), your recommendation MUST explicitly state which option you prefer and why — do not give generic advice that applies to both. Name the option you prefer in your recommendation field.
+
 Return ONLY valid JSON, no other text:
-{"verdict":"approve"|"warn"|"block","reason":"one sentence","concerns":["concern1"],"recommendation":"actionable advice"}`,
+{"verdict":"approve"|"warn"|"block","reason":"one sentence directly addressing the task","concerns":["specific concern"],"recommendation":"Prefer [named option] — reason specific to your domain"}`,
 
   ux: `You are the UX Designer in a software council. Assess usability, accessibility, user flow, and experience quality. Approve changes that improve or maintain UX, warn about confusing patterns or missing states, block changes that harm users or violate accessibility standards.
 
+IMPORTANT: If the task presents two specific options (e.g. "A vs B" or "should we X or Y"), your recommendation MUST explicitly state which option you prefer and why — do not give generic advice that applies to both. Name the option you prefer in your recommendation field.
+
 Return ONLY valid JSON, no other text:
-{"verdict":"approve"|"warn"|"block","reason":"one sentence","concerns":["concern1"],"recommendation":"actionable advice"}`,
+{"verdict":"approve"|"warn"|"block","reason":"one sentence directly addressing the task","concerns":["specific concern"],"recommendation":"Prefer [named option] — reason specific to your domain"}`,
 
   devil: `You are the Devil's Advocate in a software council. Your job is to find problems others miss — edge cases, failure modes, hidden dependencies, unintended consequences, and flawed assumptions. Be incisive. Warn about risks that compound over time. Block when you identify a fatal flaw.
 
+IMPORTANT: If the task presents two specific options, challenge the one that looks more attractive or ambitious. Ask: what breaks first? What's the worst-case failure mode of the preferred option? Name the option you are challenging in your reason.
+
 Return ONLY valid JSON, no other text:
-{"verdict":"approve"|"warn"|"block","reason":"one sentence","concerns":["concern1"],"recommendation":"actionable advice"}`,
+{"verdict":"approve"|"warn"|"block","reason":"one sentence challenging the specific proposed option","concerns":["failure mode 1","failure mode 2"],"recommendation":"actionable mitigation for the named option"}`,
 
   legal: `You are the Legal & Compliance officer in a software council. Assess regulatory risk, data privacy (GDPR, CCPA), licensing conflicts, and compliance requirements. Approve decisions within legal boundaries, warn about grey areas, block anything that creates clear legal liability or compliance violations.
 
+IMPORTANT: If the task presents two specific options (e.g. "A vs B" or "should we X or Y"), your recommendation MUST explicitly state which option has lower legal risk and why — do not give generic advice that applies to both. Name the safer option in your recommendation field.
+
 Return ONLY valid JSON, no other text:
-{"verdict":"approve"|"warn"|"block","reason":"one sentence","concerns":["concern1"],"recommendation":"actionable advice"}`,
+{"verdict":"approve"|"warn"|"block","reason":"one sentence directly addressing the task","concerns":["specific legal concern"],"recommendation":"Prefer [named option] — reason specific to your domain"}`,
 
   security: `You are the Security Engineer in a software council. Assess security implications using OWASP Top 10 and security best practices. Approve secure designs, warn about potential vulnerabilities, block anything that introduces clear security risks — injection, broken auth, sensitive data exposure, or insecure design.
 
+IMPORTANT: If the task presents two specific options (e.g. "A vs B" or "should we X or Y"), your recommendation MUST explicitly state which option is more secure and why — do not give generic advice that applies to both. Name the more secure option in your recommendation field.
+
 Return ONLY valid JSON, no other text:
-{"verdict":"approve"|"warn"|"block","reason":"one sentence","concerns":["concern1"],"recommendation":"actionable advice"}`,
+{"verdict":"approve"|"warn"|"block","reason":"one sentence directly addressing the task","concerns":["specific vulnerability"],"recommendation":"Prefer [named option] — reason specific to your domain"}`,
 };
 
 const FALLBACKS: Record<string, (task: string) => AgentVote> = {
@@ -104,10 +119,12 @@ async function callAgentLlm(
   agentKey: string,
   task: string,
   memoryContext: string,
+  decisionContext?: string,
 ): Promise<AgentVote> {
-  const userText = memoryContext
-    ? `Task to evaluate:\n${task}\n\nRelevant past council decisions:\n${memoryContext}`
-    : `Task to evaluate:\n${task}`;
+  const parts: string[] = [`Task to evaluate:\n${task}`];
+  if (decisionContext) parts.push(`\nARCHITECTURAL CHOICE DETECTED:\n${decisionContext}\nYour response MUST address this specific choice — name the option you prefer in your recommendation.`);
+  if (memoryContext) parts.push(`\nRelevant past council decisions:\n${memoryContext}`);
+  const userText = parts.join('\n');
 
   try {
     const result = await server.createMessage({
@@ -132,15 +149,21 @@ export async function runLlmDebate(server: Server, input: DebateInput): Promise<
   const fullText = enrichedContext ? `${input.task}\n\n${enrichedContext}` : input.task;
   const memoryContext = buildMemoryContext(input.task, input.project_dir);
 
+  // Extract architectural choice if present — inject into every LLM call
+  const decision = extractDecision(input.task);
+  const decisionContext = decision.isDecisionTask
+    ? `Option A: "${decision.optionA}" vs Option B: "${decision.optionB}"`
+    : undefined;
+
   // All 7 agents run in parallel — each falls back individually on sampling failure
   const [lead_dev, pm, architect, ux, devil, legal, security] = await Promise.all([
-    callAgentLlm(server, 'lead_dev',  fullText, memoryContext),
-    callAgentLlm(server, 'pm',        fullText, memoryContext),
-    callAgentLlm(server, 'architect', fullText, memoryContext),
-    callAgentLlm(server, 'ux',        fullText, memoryContext),
-    callAgentLlm(server, 'devil',     fullText, memoryContext),
-    callAgentLlm(server, 'legal',     fullText, memoryContext),
-    callAgentLlm(server, 'security',  fullText, memoryContext),
+    callAgentLlm(server, 'lead_dev',  fullText, memoryContext, decisionContext),
+    callAgentLlm(server, 'pm',        fullText, memoryContext, decisionContext),
+    callAgentLlm(server, 'architect', fullText, memoryContext, decisionContext),
+    callAgentLlm(server, 'ux',        fullText, memoryContext, decisionContext),
+    callAgentLlm(server, 'devil',     fullText, memoryContext, decisionContext),
+    callAgentLlm(server, 'legal',     fullText, memoryContext, decisionContext),
+    callAgentLlm(server, 'security',  fullText, memoryContext, decisionContext),
   ]);
 
   const votes = { lead_dev, pm, architect, ux, devil, legal, security };

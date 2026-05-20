@@ -1,5 +1,6 @@
 // Product Manager — ship value fast, cut scope ruthlessly
 import type { AgentVote } from './types.js';
+import { extractDecision, pickSide, reframeVote } from './decision-extractor.js';
 
 const BLOCK_RULES: Array<{ pattern: RegExp; reason: string; recommendation: string }> = [
   {
@@ -118,34 +119,50 @@ export function analyze(task: string): AgentVote {
     }
   }
 
+  let vote: AgentVote;
+
   if (blocks.length > 0) {
-    return {
+    vote = {
       verdict: 'block',
       reason: blocks[0].reason,
       concerns: blocks.slice(1).map(b => b.reason),
       recommendation: blocks.map(b => b.recommendation).join(' | '),
     };
-  }
-
-  if (concerns.length > 0) {
-    return {
+  } else if (concerns.length > 0) {
+    vote = {
       verdict: 'warn',
       reason: `${concerns.length} product risk${concerns.length > 1 ? 's' : ''} — scope or complexity concern.`,
       concerns,
       recommendation: recommendations[0],
     };
+  } else {
+    const matched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
+    if (matched.length > 0) {
+      const top = matched.slice(0, 2);
+      vote = {
+        verdict: 'warn',
+        reason: top[0].concern,
+        concerns: top.slice(1).map(t => t.concern),
+        recommendation: top.map(t => t.recommendation).join(' | '),
+      };
+    } else {
+      vote = { verdict: 'approve', reason: 'Reasonable scope. Ship it.', concerns: [] };
+    }
   }
 
-  const matched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
-  if (matched.length > 0) {
-    const top = matched.slice(0, 2);
-    return {
-      verdict: 'warn',
-      reason: top[0].concern,
-      concerns: top.slice(1).map(t => t.concern),
-      recommendation: top.map(t => t.recommendation).join(' | '),
-    };
-  }
+  return applyDecisionStance(vote, task);
+}
 
-  return { verdict: 'approve', reason: 'Reasonable scope. Ship it.', concerns: [] };
+// PM risk: options that add scope, infrastructure, or delay time-to-value
+const PM_RISK = /\b(http|express|rest.?api|api.?layer|new\s+(server|layer|transport)|oauth|auth.?system|bundl)\b/i;
+
+function applyDecisionStance(vote: AgentVote, task: string): AgentVote {
+  const ctx = extractDecision(task);
+  if (!ctx.isDecisionTask) return vote;
+  const { optionA, optionB } = ctx;
+  const side = pickSide(optionA, optionB, PM_RISK);
+  const advice = side
+    ? `"${side.preferred}" ships faster and has lower scope risk. Defer "${side.avoided}" until users explicitly request it and usage data justifies the investment.`
+    : `Evaluate which option delivers user value sooner. Ship the simpler path; add complexity only once real demand is confirmed.`;
+  return reframeVote(vote, ctx, side?.preferred ?? null, advice);
 }

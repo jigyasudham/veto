@@ -276,6 +276,20 @@ veto_council_debate {
   }
 ```
 
+When the task presents a binary choice, agents name the option they prefer:
+
+```
+veto_council_debate {
+  task: "Should we add an Express HTTP layer or keep Veto pure MCP with an external adapter?"
+}
+→ formatted_output includes:
+    🎯 Council leans toward: "pure MCP with an external adapter" (5 agents prefer it)
+    Lead Dev:  [Express HTTP vs external adapter] ... [WARN]
+               recommendation: Prefer "external adapter" — Express adds new infrastructure...
+    Security:  [Express HTTP vs external adapter] ... [WARN]
+               recommendation: Prefer "external adapter" — keeps the threat model local-only...
+```
+
 ---
 
 ## Session Tagging + Search
@@ -292,6 +306,64 @@ veto_session_save {
 # Find it weeks later:
 veto_sessions_list { query: "auth" }
 → sessions matching "auth" in summary, context, tags, or project_dir
+```
+
+---
+
+## New in v1.4.1
+
+### Council debate — decision-aware verdicts
+
+When your task presents a binary architectural choice ("should we X or Y", "A vs B"), every council agent now identifies which option it prefers and names it explicitly. The output includes a `🎯 Council leans toward:` line counting how many agents favour each option.
+
+Before — agents fired generic keyword-matched concerns unrelated to the choice:
+```
+Lead Dev: "Persistent memory stores grow unbounded..."  ← nothing to do with the question
+```
+
+After — agents address the specific choice:
+```
+Lead Dev:  [Express-bundled vs external-adapter] reason [WARN]
+           recommendation: Prefer "external-adapter" — "Express-bundled" adds new
+           infrastructure to maintain; validate real demand before building.
+🎯 Council leans toward: "external adapter pattern" (4 agents prefer it)
+```
+
+LLM-backed agents (when MCP Sampling is available) are now explicitly instructed to name the preferred option in their recommendation.
+
+### `veto_session_restore` — resume instructions
+
+The restore response now includes a `resume_instructions` field that tells the AI exactly what to do:
+
+```
+veto_session_restore { session_id: "..." }
+→ {
+    resume_instructions: "Context restored. Trust the summary, context, and task_state
+      above. Do NOT re-read source files to orient yourself — only open a file if you
+      are about to EDIT it. Start immediately with: [nextAction from task_state].",
+    session_id: "...",
+    summary: "...",
+    context: { ... },
+    task_state: { nextAction: "Edit src/server.ts line 302, add zod validation..." },
+    ...
+  }
+```
+
+This fixes the core issue where AI sessions were re-reading the entire codebase on restore instead of trusting the saved context.
+
+### `veto_session_save` — input validation
+
+`summary`, `context`, and `task_state` now have enforced size limits. Oversized inputs are truncated with a warning rather than silently stored or crashing.
+
+| Field | Limit |
+|---|---|
+| `summary` | 2,000 chars |
+| `context` | 50,000 chars |
+| `task_state` | 20,000 chars |
+
+```
+veto_session_save { summary: "...(very long)..." }
+→ { success: true, truncation_warnings: ["summary truncated to 2000 chars (was 8432)"] }
 ```
 
 ---

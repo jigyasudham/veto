@@ -1,5 +1,6 @@
 // Devil's Advocate — probes every failure mode, always challenges
 import type { AgentVote } from './types.js';
+import { extractDecision, reframeVote } from './decision-extractor.js';
 
 // Devil always warns — never alone blocks, never approves non-trivial tasks
 const PROBES: Array<{ pattern: RegExp; concern: string; recommendation: string }> = [
@@ -155,10 +156,21 @@ export function analyze(task: string): AgentVote {
 
   const top = matched.slice(0, 3); // cap at 3 concerns to avoid flooding
 
-  return {
+  const vote: AgentVote = {
     verdict: 'warn',
     reason: top[0].concern,
     concerns: top.slice(1).map(m => m.concern),
     recommendation: top.map(m => m.recommendation).join(' | '),
   };
+
+  return applyDecisionStance(vote, task);
+}
+
+function applyDecisionStance(vote: AgentVote, task: string): AgentVote {
+  const ctx = extractDecision(task);
+  if (!ctx.isDecisionTask) return vote;
+  // Devil challenges the first (typically "build new") option — it's the direction being proposed
+  const { optionA } = ctx;
+  const advice = `Before committing to "${optionA}": what is the failure mode at 2AM with no one watching? What breaks first, how do you detect it, and how fast can you roll back?`;
+  return reframeVote(vote, ctx, null, advice);
 }

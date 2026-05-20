@@ -1,5 +1,6 @@
 // Decision Engine — collects all votes, calculates final verdict
 import type { AgentVote, CouncilVerdict, DebateResult } from './types.js';
+import { extractDecision } from './decision-extractor.js';
 
 type Votes = DebateResult['votes'];
 
@@ -154,6 +155,24 @@ export function formatDebate(
     }
     if (extra > 0) lines.push(`   • ...and ${extra} more`);
     lines.push('');
+  }
+
+  // Council position on a binary choice — surface which option most agents prefer
+  const decision = extractDecision(task);
+  if (decision.isDecisionTask) {
+    const allRecs = Object.values(votes)
+      .map(v => v.recommendation ?? '')
+      .filter(Boolean)
+      .join(' ');
+    const prefersA = (allRecs.match(new RegExp(`"${decision.optionA.slice(0, 20).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi')) ?? []).length;
+    const prefersB = (allRecs.match(new RegExp(`"${decision.optionB.slice(0, 20).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi')) ?? []).length;
+    if (prefersA > prefersB) {
+      lines.push(`🎯 Council leans toward: "${decision.optionA}" (${prefersA} agent${prefersA !== 1 ? 's' : ''} prefer it)`);
+    } else if (prefersB > prefersA) {
+      lines.push(`🎯 Council leans toward: "${decision.optionB}" (${prefersB} agent${prefersB !== 1 ? 's' : ''} prefer it)`);
+    } else {
+      lines.push(`🎯 Council is split on: "${decision.optionA}" vs "${decision.optionB}" — see agent recommendations below`);
+    }
   }
 
   lines.push(`✅ Recommended: ${recommended}`);

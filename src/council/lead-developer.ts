@@ -1,5 +1,6 @@
 // Lead Developer — code quality, security, no shortcuts
 import type { AgentVote } from './types.js';
+import { extractDecision, pickSide, reframeVote } from './decision-extractor.js';
 
 const BLOCK_RULES: Array<{ pattern: RegExp; reason: string; recommendation: string }> = [
   {
@@ -150,35 +151,51 @@ export function analyze(task: string): AgentVote {
     }
   }
 
+  let vote: AgentVote;
+
   if (blocks.length > 0) {
-    return {
+    vote = {
       verdict: 'block',
       reason: blocks[0].reason,
       concerns: [...blocks.slice(1).map(b => b.reason), ...concerns],
       recommendation: blocks.map(b => b.recommendation).join(' | '),
     };
-  }
-
-  if (concerns.length > 0) {
-    return {
+  } else if (concerns.length > 0) {
+    vote = {
       verdict: 'warn',
       reason: `${concerns.length} code quality issue${concerns.length > 1 ? 's' : ''} detected.`,
       concerns,
       recommendation: 'Address quality concerns before shipping to production.',
     };
+  } else {
+    // No bad patterns — apply topic-based expert analysis
+    const matched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
+    if (matched.length > 0) {
+      const top = matched.slice(0, 2);
+      vote = {
+        verdict: 'warn',
+        reason: top[0].concern,
+        concerns: top.slice(1).map(t => t.concern),
+        recommendation: top.map(t => t.recommendation).join(' | '),
+      };
+    } else {
+      vote = { verdict: 'approve', reason: 'No security or quality violations detected. Code quality standards appear satisfied.', concerns: [] };
+    }
   }
 
-  // No bad patterns — apply topic-based expert analysis
-  const matched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
-  if (matched.length > 0) {
-    const top = matched.slice(0, 2);
-    return {
-      verdict: 'warn',
-      reason: top[0].concern,
-      concerns: top.slice(1).map(t => t.concern),
-      recommendation: top.map(t => t.recommendation).join(' | '),
-    };
-  }
+  return applyDecisionStance(vote, task);
+}
 
-  return { verdict: 'approve', reason: 'No security or quality violations detected. Code quality standards appear satisfied.', concerns: [] };
+// Risk: traits that increase implementation burden / maintenance surface
+const LEAD_DEV_RISK = /\b(http|express|rest.?api|api.?layer|bundl|embed|integrat\s+into|new\s+(server|layer|endpoint|transport))\b/i;
+
+function applyDecisionStance(vote: AgentVote, task: string): AgentVote {
+  const ctx = extractDecision(task);
+  if (!ctx.isDecisionTask) return vote;
+  const { optionA, optionB } = ctx;
+  const side = pickSide(optionA, optionB, LEAD_DEV_RISK);
+  const advice = side
+    ? `"${side.avoided}" adds new infrastructure to maintain; "${side.preferred}" limits scope and keeps the codebase smaller — validate real demand before building.`
+    : `Evaluate which option requires fewer new abstractions. Prefer the path with the smaller implementation surface until user demand justifies the cost.`;
+  return reframeVote(vote, ctx, side?.preferred ?? null, advice);
 }

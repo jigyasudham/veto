@@ -1,5 +1,6 @@
 // System Architect — scalability, failure modes, structural integrity
 import type { AgentVote } from './types.js';
+import { extractDecision, pickSide, reframeVote } from './decision-extractor.js';
 
 const BLOCK_RULES: Array<{ pattern: RegExp; reason: string; recommendation: string }> = [
   {
@@ -153,34 +154,50 @@ export function analyze(task: string): AgentVote {
     }
   }
 
+  let vote: AgentVote;
+
   if (blocks.length > 0) {
-    return {
+    vote = {
       verdict: 'block',
       reason: blocks[0].reason,
       concerns: blocks.slice(1).map(b => b.reason),
       recommendation: blocks.map(b => b.recommendation).join(' | '),
     };
-  }
-
-  if (concerns.length > 0) {
-    return {
+  } else if (concerns.length > 0) {
+    vote = {
       verdict: 'warn',
       reason: `${concerns.length} structural concern${concerns.length > 1 ? 's' : ''} — review before building.`,
       concerns,
       recommendation: recommendations[0],
     };
+  } else {
+    const matched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
+    if (matched.length > 0) {
+      const top = matched.slice(0, 2);
+      vote = {
+        verdict: 'warn',
+        reason: top[0].concern,
+        concerns: top.slice(1).map(t => t.concern),
+        recommendation: top.map(t => t.recommendation).join(' | '),
+      };
+    } else {
+      vote = { verdict: 'approve', reason: 'Architecture looks sound. No structural concerns identified.', concerns: [] };
+    }
   }
 
-  const matched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
-  if (matched.length > 0) {
-    const top = matched.slice(0, 2);
-    return {
-      verdict: 'warn',
-      reason: top[0].concern,
-      concerns: top.slice(1).map(t => t.concern),
-      recommendation: top.map(t => t.recommendation).join(' | '),
-    };
-  }
+  return applyDecisionStance(vote, task);
+}
 
-  return { verdict: 'approve', reason: 'Architecture looks sound. No structural concerns identified.', concerns: [] };
+// Architect risk: options that tighten coupling or introduce new architectural layers
+const ARCH_RISK = /\b(bundl|integrat\s+into|embed|inline|http|express|new\s+(server|layer|transport|protocol)|microservice)\b/i;
+
+function applyDecisionStance(vote: AgentVote, task: string): AgentVote {
+  const ctx = extractDecision(task);
+  if (!ctx.isDecisionTask) return vote;
+  const { optionA, optionB } = ctx;
+  const side = pickSide(optionA, optionB, ARCH_RISK);
+  const advice = side
+    ? `"${side.preferred}" preserves separation of concerns and keeps the boundary clean. "${side.avoided}" creates coupling that is difficult to undo later — the caller now depends on implementation details.`
+    : `Evaluate which option maintains the cleaner boundary. Prefer the path that adds no new coupling between existing components.`;
+  return reframeVote(vote, ctx, side?.preferred ?? null, advice);
 }

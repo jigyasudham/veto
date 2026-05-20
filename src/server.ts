@@ -303,9 +303,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const sessionProjectDir = args?.project_dir ? String(args.project_dir) : undefined;
       if (sessionProjectDir) activeProjectDir = sessionProjectDir;
       const savePlatform = args?.platform ? String(args.platform) : 'claude';
-      const saveSummary = String(args?.summary ?? '');
-      const saveContext = String(args?.context ?? '');
-      const saveTaskState = args?.task_state ? String(args.task_state) : undefined;
+
+      // Enforce size limits — unbounded strings exhaust SQLite page cache and memory
+      const RAW_SUMMARY = String(args?.summary ?? '');
+      const RAW_CONTEXT = String(args?.context ?? '');
+      const RAW_TASK_STATE = args?.task_state ? String(args.task_state) : undefined;
+      const SUMMARY_LIMIT = 2_000;
+      const CONTEXT_LIMIT = 50_000;
+      const TASK_STATE_LIMIT = 20_000;
+      const saveSummary = RAW_SUMMARY.slice(0, SUMMARY_LIMIT);
+      const saveContext = RAW_CONTEXT.slice(0, CONTEXT_LIMIT);
+      const saveTaskState = RAW_TASK_STATE ? RAW_TASK_STATE.slice(0, TASK_STATE_LIMIT) : undefined;
+      const truncationWarnings: string[] = [];
+      if (RAW_SUMMARY.length > SUMMARY_LIMIT) truncationWarnings.push(`summary truncated to ${SUMMARY_LIMIT} chars (was ${RAW_SUMMARY.length})`);
+      if (RAW_CONTEXT.length > CONTEXT_LIMIT) truncationWarnings.push(`context truncated to ${CONTEXT_LIMIT} chars (was ${RAW_CONTEXT.length})`);
+      if (RAW_TASK_STATE && RAW_TASK_STATE.length > TASK_STATE_LIMIT) truncationWarnings.push(`task_state truncated to ${TASK_STATE_LIMIT} chars (was ${RAW_TASK_STATE.length})`);
+
       const existingId = args?.session_id ? String(args.session_id) : undefined;
 
       const sessionInput = {
@@ -351,6 +364,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         saved_at: result.saved_at,
         updated: wasUpdate,
         ...(wasUpdate ? {} : { usage_pct: result.usage_pct, context_warning: result.context_warning }),
+        ...(truncationWarnings.length > 0 ? { truncation_warnings: truncationWarnings } : {}),
       };
       if (result.continuation_prompt) responseObj.continuation_prompt = result.continuation_prompt;
 
@@ -380,6 +394,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const s = result.session!;
       if (s.project_dir) activeProjectDir = s.project_dir;
+
+      const parsedTaskState = s.task_state ? (() => { try { return JSON.parse(s.task_state!); } catch { return s.task_state; } })() : null;
+      const nextAction = (typeof parsedTaskState === 'object' && parsedTaskState !== null)
+        ? (parsedTaskState.nextAction ?? parsedTaskState.next_action ?? null)
+        : null;
+
+      const resumeInstructions = [
+        'Context restored from previous session. Trust the summary, context, and task_state above — they were written by the AI that last worked on this.',
+        'Do NOT re-read source files to orient yourself. That defeats the purpose of session restore and wastes tokens.',
+        'Only open a file if you are about to EDIT it — not to "verify" or "familiarize yourself" with it.',
+        nextAction ? `Start immediately with: ${nextAction}` : 'Read task_state.nextAction (or context) for where to start.',
+        'If context seems stale (e.g. you find a file has changed), read only that file, update the context, and continue.',
+      ].join(' ');
+
       return {
         content: [
           {
@@ -387,16 +415,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             text: JSON.stringify(
               {
                 success: true,
+                resume_instructions: resumeInstructions,
                 session_id: s.id,
                 created_by: s.platform,
-                active_client: s.active_client ?? s.platform,
-                last_resumed_at: s.last_resumed_at,
-                started_at: s.started_at,
-                ended_at: s.ended_at,
+                saved_at: s.started_at,
                 project_dir: s.project_dir,
                 summary: s.summary,
-                context: s.context ? JSON.parse(s.context) : null,
-                task_state: s.task_state ? JSON.parse(s.task_state) : null,
+                context: s.context ? (() => { try { return JSON.parse(s.context!); } catch { return s.context; } })() : null,
+                task_state: parsedTaskState,
                 token_count: s.token_count,
               },
               null,

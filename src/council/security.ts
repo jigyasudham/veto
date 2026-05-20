@@ -1,5 +1,6 @@
 // Security — threat modeling, attack surface analysis, auth weaknesses, CVE patterns
 import type { AgentVote } from './types.js';
+import { extractDecision, pickSide, reframeVote } from './decision-extractor.js';
 
 const BLOCK_RULES: Array<{ pattern: RegExp; reason: string; recommendation: string }> = [
   {
@@ -150,24 +151,6 @@ export function analyze(task: string): AgentVote {
     }
   }
 
-  if (blocks.length > 0) {
-    return {
-      verdict: 'block',
-      reason: blocks[0].reason,
-      concerns: blocks.slice(1).map(b => b.reason),
-      recommendation: blocks.map(b => b.recommendation).join(' | '),
-    };
-  }
-
-  if (concerns.length > 0) {
-    return {
-      verdict: 'warn',
-      reason: `${concerns.length} security concern${concerns.length > 1 ? 's' : ''} — threat model flagged issues.`,
-      concerns,
-      recommendation: recommendations[0],
-    };
-  }
-
   // Topic-based security analysis for tasks with no specific pattern matches
   const TOPIC_INSIGHTS: Array<{ pattern: RegExp; concern: string; recommendation: string }> = [
     {
@@ -207,16 +190,50 @@ export function analyze(task: string): AgentVote {
     },
   ];
 
-  const topicMatched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
-  if (topicMatched.length > 0) {
-    const top = topicMatched.slice(0, 2);
-    return {
-      verdict: 'warn',
-      reason: top[0].concern,
-      concerns: top.slice(1).map(t => t.concern),
-      recommendation: top.map(t => t.recommendation).join(' | '),
+  let vote: AgentVote;
+
+  if (blocks.length > 0) {
+    vote = {
+      verdict: 'block',
+      reason: blocks[0].reason,
+      concerns: blocks.slice(1).map(b => b.reason),
+      recommendation: blocks.map(b => b.recommendation).join(' | '),
     };
+  } else if (concerns.length > 0) {
+    vote = {
+      verdict: 'warn',
+      reason: `${concerns.length} security concern${concerns.length > 1 ? 's' : ''} — threat model flagged issues.`,
+      concerns,
+      recommendation: recommendations[0],
+    };
+  } else {
+    const topicMatched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
+    if (topicMatched.length > 0) {
+      const top = topicMatched.slice(0, 2);
+      vote = {
+        verdict: 'warn',
+        reason: top[0].concern,
+        concerns: top.slice(1).map(t => t.concern),
+        recommendation: top.map(t => t.recommendation).join(' | '),
+      };
+    } else {
+      vote = { verdict: 'approve', reason: 'No security threats identified in threat model.', concerns: [] };
+    }
   }
 
-  return { verdict: 'approve', reason: 'No security threats identified in threat model.', concerns: [] };
+  return applyDecisionStance(vote, task);
+}
+
+// Security risk: options that expose the server to the network or add new untrusted input paths
+const SEC_RISK = /\b(http|rest.?api|express|network|port|remote|transport|oauth|token.?endpoint|api.?key)\b/i;
+
+function applyDecisionStance(vote: AgentVote, task: string): AgentVote {
+  const ctx = extractDecision(task);
+  if (!ctx.isDecisionTask) return vote;
+  const { optionA, optionB } = ctx;
+  const side = pickSide(optionA, optionB, SEC_RISK);
+  const advice = side
+    ? `"${side.preferred}" keeps the threat model local-only. "${side.avoided}" changes Veto from a local tool to a network service — auth, TLS, rate-limiting, and input validation become mandatory from day one.`
+    : `Both options carry network exposure risk. Confirm: can this be done without opening a network port? If not, auth and TLS are non-negotiable.`;
+  return reframeVote(vote, ctx, side?.preferred ?? null, advice);
 }

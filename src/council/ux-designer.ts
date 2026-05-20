@@ -1,5 +1,6 @@
 // UX Designer — user flows, simplicity, real-user experience
 import type { AgentVote } from './types.js';
+import { extractDecision, pickSide, reframeVote } from './decision-extractor.js';
 
 // Backend-only tasks: UX approves without friction
 const BACKEND_ONLY = /\b(api|backend|server|database|db|query|schema|migration|auth.*middleware|jwt|oauth|cron|cli|script|worker|queue|cache|redis|sql|index|trigger|webhook)\b/i;
@@ -73,14 +74,15 @@ export function analyze(task: string): AgentVote {
     return { verdict: 'approve', reason: 'Trivial change — no UX concerns.', concerns: [] };
   }
 
-  // Pure backend tasks get a light pass
+  // Pure backend tasks get a light pass — but still apply decision stance
   const isBackend = BACKEND_ONLY.test(task) && !FRONTEND_SIGNALS.test(task);
   if (isBackend) {
-    return {
+    const backendVote: AgentVote = {
       verdict: 'approve',
       reason: 'Backend task — no direct UX concerns. Ensure API errors surface clearly to users.',
       concerns: [],
     };
+    return applyDecisionStance(backendVote, task);
   }
 
   const blocks: Array<{ reason: string; recommendation: string }> = [];
@@ -97,24 +99,6 @@ export function analyze(task: string): AgentVote {
       concerns.push(rule.concern);
       recommendations.push(rule.recommendation);
     }
-  }
-
-  if (blocks.length > 0) {
-    return {
-      verdict: 'block',
-      reason: blocks[0].reason,
-      concerns: blocks.slice(1).map(b => b.reason),
-      recommendation: blocks.map(b => b.recommendation).join(' | '),
-    };
-  }
-
-  if (concerns.length > 0) {
-    return {
-      verdict: 'warn',
-      reason: `${concerns.length} UX concern${concerns.length > 1 ? 's' : ''} — real users will notice this.`,
-      concerns,
-      recommendation: recommendations[0],
-    };
   }
 
   // Topic-based UX analysis for tasks with no direct frontend signals
@@ -151,16 +135,50 @@ export function analyze(task: string): AgentVote {
     },
   ];
 
-  const topicMatched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
-  if (topicMatched.length > 0) {
-    const top = topicMatched.slice(0, 2);
-    return {
-      verdict: 'warn',
-      reason: top[0].concern,
-      concerns: top.slice(1).map(t => t.concern),
-      recommendation: top.map(t => t.recommendation).join(' | '),
+  let vote: AgentVote;
+
+  if (blocks.length > 0) {
+    vote = {
+      verdict: 'block',
+      reason: blocks[0].reason,
+      concerns: blocks.slice(1).map(b => b.reason),
+      recommendation: blocks.map(b => b.recommendation).join(' | '),
     };
+  } else if (concerns.length > 0) {
+    vote = {
+      verdict: 'warn',
+      reason: `${concerns.length} UX concern${concerns.length > 1 ? 's' : ''} — real users will notice this.`,
+      concerns,
+      recommendation: recommendations[0],
+    };
+  } else {
+    const topicMatched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
+    if (topicMatched.length > 0) {
+      const top = topicMatched.slice(0, 2);
+      vote = {
+        verdict: 'warn',
+        reason: top[0].concern,
+        concerns: top.slice(1).map(t => t.concern),
+        recommendation: top.map(t => t.recommendation).join(' | '),
+      };
+    } else {
+      vote = { verdict: 'approve', reason: 'UX looks solid. No user experience concerns identified.', concerns: [] };
+    }
   }
 
-  return { verdict: 'approve', reason: 'UX looks solid. No user experience concerns identified.', concerns: [] };
+  return applyDecisionStance(vote, task);
+}
+
+// UX risk: options that add setup friction, credentials, or configuration overhead
+const UX_RISK = /\b(http|api.?key|auth|oauth|port|server\s+config|credentials|token|setup.{0,15}required|install.{0,15}extra)\b/i;
+
+function applyDecisionStance(vote: AgentVote, task: string): AgentVote {
+  const ctx = extractDecision(task);
+  if (!ctx.isDecisionTask) return vote;
+  const { optionA, optionB } = ctx;
+  const side = pickSide(optionA, optionB, UX_RISK);
+  const advice = side
+    ? `"${side.preferred}" keeps the developer experience simpler — no extra setup or credentials. "${side.avoided}" adds friction that will silently reduce adoption.`
+    : `Evaluate which option requires fewer steps for a first-time user. The shorter happy path wins on developer experience.`;
+  return reframeVote(vote, ctx, side?.preferred ?? null, advice);
 }
