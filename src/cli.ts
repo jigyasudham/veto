@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { version: VERSION } = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
-const TAGLINE = '50 agents. 62 tools. 3 AIs. Self-learning. Zero extra cost.';
+const TAGLINE = '62 agentic tools. 50+ specialists. 3 AIs. Zero cost.';
 const VETO_DIR = join(homedir(), '.veto');
 const HOME = homedir();
 
@@ -780,7 +780,7 @@ async function patternsCommand() {
 
 function shortHelpCommand() {
   console.log('');
-  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(` — ${TAGLINE}`));
+  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(` — 62 agentic tools. 50+ specialists. Zero cost.`));
   console.log('');
   console.log(c.bold('  CLI Commands'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
@@ -789,37 +789,26 @@ function shortHelpCommand() {
   console.log(`  ${c.cyan('veto status')}                  Version, DB path, memory/session counts`);
   console.log(`  ${c.cyan('veto sessions')}                List last 20 saved sessions`);
   console.log(`  ${c.cyan('veto memory')} ${c.dim('[query]')}         Search knowledge base`);
-  console.log(`  ${c.cyan('veto patterns')} ${c.dim('[prefix]')}      List learned agent/routing patterns`);
-  console.log(`  ${c.cyan('veto routing')} ${c.dim('[status|enable|disable|reset|log]')}`);
-  console.log(`                         Routing feedback loop (opt-in signal storage)`);
-  console.log(`  ${c.cyan('veto version')}                 Show version (alias for status)`);
-  console.log(`  ${c.cyan('veto hook install')}            Install pre-commit secrets scan hook`);
-  console.log(`  ${c.cyan('veto hook remove')}             Remove the veto pre-commit hook`);
-  console.log(`  ${c.cyan('veto check')}                   Scan staged changes for secrets (used by hook)`);
+  console.log(`  ${c.cyan('veto patterns')} ${c.dim('[prefix]')}      List learned patterns`);
+  console.log(`  ${c.cyan('veto routing')} ${c.dim('[status|reset]')}  Routing feedback loop`);
+  console.log(`  ${c.cyan('veto hook install')}            Install pre-commit secrets hook`);
+  console.log(`  ${c.cyan('veto check')}                   Scan staged changes for secrets`);
   console.log(`  ${c.cyan('veto help')}                    Show this help`);
-  console.log(`  ${c.cyan('veto help --troubleshoot')}     Show troubleshooting guide`);
   console.log('');
-  console.log(c.bold('  MCP Tools (62)'));
+  console.log(c.bold('  MCP Tools (62 Agentic Tools)'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
-  console.log(`  ${c.dim('Session')}       veto_status · veto_autosave_status · veto_session_save · veto_session_restore · veto_sessions_list · veto_session_replay`);
-  console.log(`  ${c.dim('Router')}        veto_route_task · veto_rate_status`);
+  console.log(`  ${c.dim('Session')}       veto_status · veto_session_save · veto_session_restore · veto_sessions_list · veto_session_replay · veto_autosave_status`);
   console.log(`  ${c.dim('Council')}       veto_council_debate · veto_benchmark · veto_adr`);
-  console.log(`  ${c.dim('Agents')}        veto_agent_plan · veto_execute_parallel · veto_explain · veto_compose_agents · veto_delegate`);
-  console.log(`  ${c.dim('Review')}        veto_code_review · veto_security_scan · veto_secrets_scan · veto_diff_review`);
-  console.log(`  ${c.dim('Pipelines')}     veto_full_review · veto_pre_commit · veto_new_feature`);
-  console.log(`  ${c.dim('Workflow')}      veto_workflow · veto_task_parse · veto_docs_fetch · veto_context_status`);
-  console.log(`  ${c.dim('Watch')}         veto_watch · veto_watch_poll · veto_watch_stop · veto_local_llm · veto_semantic_search · veto_sdd_agent · veto_playwright · veto_notify_ide`);
-  console.log(`  ${c.dim('Memory')}        veto_memory_store · veto_memory_search · veto_memory_delete · veto_memory_export · veto_memory_import`);
-  console.log(`                veto_project_map_update · veto_project_map_get`);
-  console.log(`                veto_pattern_store · veto_patterns_list`);
-  console.log(`                veto_memory_export · veto_memory_import`);
-  console.log(`  ${c.dim('Learning')}      veto_record_outcome · veto_learning_stats · veto_learning_apply`);
-  console.log(`  ${c.dim('Handoff')}       veto_handoff · veto_continue · veto_platform_setup`);
-  console.log(`  ${c.dim('Intelligence')}  veto_docs_fetch · veto_context_status · veto_task_parse`);
-  console.log(`  ${c.dim('Observability')} veto_usage_status · veto_audit_log · veto_health · veto_metrics · veto_record_outcome · veto_learning_stats · veto_learning_apply`);
-  console.log(`  ${c.dim('CI/CD')}         veto_ci_gate · veto_pr_review`);
-  console.log(`  ${c.dim('Discover')}      veto_discover · veto_summarize · veto_git_blame · veto_changelog · veto_onboard · veto_debt_register`);
-  console.log(`  ${c.dim('Plugins')}       veto_plugins · veto_openapi_gen · veto_flag_auditor · veto_env_setup · veto_commit_message · veto_pr_description · veto_pr_post · veto_prompt_optimizer · veto_sre_advisor · veto_diagram · veto_rca · veto_translate · veto_merge_conflict`);
+  console.log(`  ${c.dim('Intelligence')}  veto_agent_plan · veto_execute_parallel · veto_explain · veto_delegate · veto_compose_agents`);
+  console.log(`  ${c.dim('Scanning')}      veto_code_review · veto_security_scan · veto_secrets_scan · veto_diff_review · veto_full_review · veto_pr_review`);
+  console.log(`  ${c.dim('Pipelines')}     veto_workflow · veto_task_parse · veto_new_feature · veto_pre_commit · veto_ci_gate`);
+  console.log(`  ${c.dim('Watching')}      veto_watch · veto_watch_poll · veto_watch_stop`);
+  console.log(`  ${c.dim('Advanced')}      veto_local_llm · veto_semantic_search · veto_sdd_agent · veto_playwright · veto_notify_ide · veto_translate · veto_a11y_advisor`);
+  console.log(`  ${c.dim('Quality')}       veto_type_coverage · veto_test_gaps · veto_clone_detector · veto_lint_rules · veto_api_contract`);
+  console.log(`  ${c.dim('Discovery')}     veto_discover · veto_summarize · veto_git_blame · veto_changelog · veto_onboard · veto_debt_register`);
+  console.log(`  ${c.dim('DevTools')}      veto_docs_fetch · veto_context_status · veto_openapi_gen · veto_flag_auditor · veto_env_setup · veto_diagram · veto_rca`);
+  console.log(`                veto_commit_message · veto_pr_description · veto_pr_post · veto_prompt_optimizer · veto_sre_advisor · veto_merge_conflict`);
+  console.log(`  ${c.dim('System')}        veto_route_task · veto_rate_status · veto_audit_log · veto_health · veto_metrics · veto_learning_stats · veto_learning_apply · veto_handoff · veto_continue · veto_platform_setup · veto_plugins`);
   console.log('');
   console.log(c.bold('  MCP Resources'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
@@ -852,277 +841,10 @@ function troubleshootCommand() {
   console.log(`  ${c.dim('→')} Gemini / Cursor / Windsurf / Zed: run ${c.cyan('veto init')} once — config is written globally`);
   console.log('');
   console.log(`  ${c.yellow('MCP disconnected / tools not loading')}`);
-  console.log(`  ${c.dim('→')} Run ${c.cyan('veto init')} again, then fully restart your AI client (Claude / Gemini / Cursor / Windsurf / Zed)`);
-  console.log(`  ${c.dim('→')} Verify the MCP entry in your AI client config file`);
-  console.log(`  ${c.dim('→')} Check Node.js version: ${c.cyan('node --version')}  (need >= 22)`);
-  console.log('');
-  console.log(`  ${c.yellow('veto command not found after install')}`);
-  console.log(`  ${c.dim('→')} Global install: ${c.cyan('npm install -g @jigyasudham/veto')}`);
-  console.log(`  ${c.dim('→')} From source:    ${c.cyan('npm run build && npm link')}`);
-  console.log(`  ${c.dim('→')} Windows: restart terminal after install so PATH refreshes`);
-  console.log('');
-  console.log(`  ${c.yellow('Tools missing in Claude / Gemini after install')}`);
-  console.log(`  ${c.dim('→')} Run ${c.cyan('veto init')} to write / regenerate the MCP config`);
-  console.log(`  ${c.dim('→')} Fully quit and reopen the AI client (not just reload)`);
-  console.log(`  ${c.dim('→')} Claude Desktop config: ${c.dim('~/.config/claude/claude_desktop_config.json')}`);
-  console.log(`  ${c.dim('→')} Gemini / other: check the platform docs for MCP config location`);
-  console.log('');
-  console.log(`  ${c.yellow('Old version still showing after update')}`);
-  console.log(`  ${c.dim('→')} ${c.cyan('npm install -g @jigyasudham/veto@latest')}`);
-  console.log(`  ${c.dim('→')} From source: ${c.cyan('npm run build && npm link')}`);
-  console.log(`  ${c.dim('→')} Confirm active binary: ${c.cyan('which veto')} / ${c.cyan('where veto')}`);
-  console.log('');
-  console.log(`  ${c.yellow('Database / SQLite errors on startup')}`);
-  console.log(`  ${c.dim('→')} Requires Node.js >= 22 (uses built-in node:sqlite)`);
-  console.log(`  ${c.dim('→')} Check ${c.dim('~/.veto')} directory exists and is writable`);
-  console.log(`  ${c.dim('→')} Run ${c.cyan('veto status')} to see the active DB path`);
-  console.log('');
-  console.log(`  ${c.yellow('Memory or sessions not persisting between chats')}`);
-  console.log(`  ${c.dim('→')} Run ${c.cyan('veto status')} — verify DB path and memory count`);
-  console.log(`  ${c.dim('→')} Ensure ${c.dim('~/.veto')} is not on a read-only or temp volume`);
-  console.log('');
-  console.log(`  ${c.yellow('Permission denied on Windows (PowerShell)')}`);
-  console.log(`  ${c.dim('→')} ${c.cyan('Set-ExecutionPolicy -Scope CurrentUser RemoteSigned')}`);
-  console.log(`  ${c.dim('→')} Or run terminal as Administrator and retry`);
-  console.log('');
-  console.log(`  ${c.yellow('Rate limit / too many requests errors')}`);
-  console.log(`  ${c.dim('→')} Use ${c.cyan('veto_rate_status')} tool to check current usage`);
-  console.log(`  ${c.dim('→')} Wait a moment, then retry — limits reset per minute`);
-  console.log('');
-  console.log(`  ${c.yellow('veto init fails / API key not found')}`);
-  console.log(`  ${c.dim('→')} Set key in your shell: ${c.cyan('export ANTHROPIC_API_KEY=sk-...')}`);
-  console.log(`  ${c.dim('→')} Windows: ${c.cyan('$env:ANTHROPIC_API_KEY="sk-..."')}`);
-  console.log(`  ${c.dim('→')} Re-run ${c.cyan('veto init')} after setting the key`);
-  console.log('');
-  console.log(`  ${c.yellow('veto_health shows degraded / components failing')}`);
-  console.log(`  ${c.dim('→')} Run ${c.cyan('veto status')} for a summary of all components`);
-  console.log(`  ${c.dim('→')} Check ${c.cyan('veto_audit_log')} for recent error events`);
-  console.log(`  ${c.dim('→')} Re-run ${c.cyan('veto init')} to repair config and rescan project`);
-  console.log('');
-  console.log(`  ${c.yellow('Installed via npx but MCP disconnects after restart')}`);
-  console.log(`  ${c.dim('→')} npx runs temporarily — it does NOT add veto-server to PATH permanently`);
-  console.log(`  ${c.dim('→')} Fix: run ${c.cyan('npx veto init')} again so the config is rewritten with the correct npx command`);
-  console.log(`  ${c.dim('→')} Or install globally for a stable binary: ${c.cyan('npm install -g @jigyasudham/veto')}`);
-  console.log('');
-  console.log(`  ${c.yellow('Installed on a new machine but MCP not working')}`);
-  console.log(`  ${c.dim('→')} Run ${c.cyan('npx @jigyasudham/veto init')} on the new machine — config is not transferred`);
-  console.log(`  ${c.dim('→')} Each machine needs its own init run to register the MCP server`);
-  console.log(`  ${c.dim('→')} Then restart the AI client on that machine`);
+  console.log(`  ${c.dim('→')} Run ${c.cyan('veto init')} again, then fully restart your AI client`);
+  console.log(`  ${c.dim('→')} Check Node.js version: ${c.cyan('node --version')} (need >= 22)`);
   console.log('');
 }
-
-// ─── Routing Command ────────────────────────────────────────────────────────────
-
-async function routingCommand() {
-  const { getRoutingFeedbackStats, resetRoutingFeedback, listRoutingFeedback, isFeedbackEnabled, setFeedbackEnabled } = await import('./router/learning-updater.js');
-  const sub = process.argv[3];
-
-  if (sub === 'enable') {
-    setFeedbackEnabled(true);
-    console.log('');
-    console.log(c.green('  ✓ Routing feedback enabled.'));
-    console.log(c.dim('  Every veto_route_task call now records a routing signal (30-day TTL).'));
-    console.log(c.dim('  Disable with: veto routing disable  |  Clear with: veto routing reset'));
-    console.log('');
-    return;
-  }
-
-  if (sub === 'disable') {
-    setFeedbackEnabled(false);
-    console.log('');
-    console.log(c.yellow('  ✓ Routing feedback disabled.'));
-    console.log(c.dim('  No new signals will be recorded. Existing data is retained.'));
-    console.log(c.dim('  Re-enable with: veto routing enable'));
-    console.log('');
-    return;
-  }
-
-  if (sub === 'reset') {
-    const result = resetRoutingFeedback();
-    console.log('');
-    console.log(c.green('  ✓ Routing feedback reset.'));
-    console.log(`  ${c.dim('Deleted:')} ${c.cyan(String(result.deleted_feedback))} feedback signal${result.deleted_feedback !== 1 ? 's' : ''}`);
-    if (result.reset_thresholds) {
-      console.log(`  ${c.dim('Thresholds:')} reset to defaults (30/70)`);
-    }
-    console.log('');
-    return;
-  }
-
-  if (sub === 'log') {
-    const limit = parseInt(process.argv[4] ?? '20', 10);
-    const entries = listRoutingFeedback(isNaN(limit) ? 20 : limit);
-    console.log('');
-    console.log(c.bold('  Routing Feedback Log') + c.dim(` (${entries.length})`));
-    console.log(c.dim('  ─────────────────────────────────────────────────────────────'));
-    if (entries.length === 0) {
-      console.log(c.dim('  No feedback signals yet. Enable feedback: veto routing enable'));
-    } else {
-      for (const e of entries) {
-        const outcomeColor = e.outcome === 'accepted' ? c.green : e.outcome === 'overridden' ? c.yellow : c.dim;
-        const exp = new Date(e.expires_at).toLocaleDateString();
-        console.log(`  ${c.dim(e.recorded_at.slice(0, 10))}  T${e.model_tier}  ${outcomeColor(e.outcome.padEnd(10))}  ${c.dim(`q:${e.quality ?? '-'}`)}  ${e.task_snippet.slice(0, 55)}`);
-        console.log(`  ${c.dim(`  expires: ${exp}  agent: ${e.agent ?? 'dynamic'}`)}`);
-        console.log('');
-      }
-    }
-    return;
-  }
-
-  // Default: status
-  const stats = getRoutingFeedbackStats();
-  const enabled = isFeedbackEnabled();
-  const statusStr = enabled ? c.green('enabled') : c.dim('disabled');
-
-  console.log('');
-  console.log(c.bold('  Routing Feedback') + c.dim(' — loop status'));
-  console.log(c.dim('  ─────────────────────────────────────────────────────'));
-  console.log(`  Status      ${statusStr}`);
-  console.log(`  TTL         ${c.cyan(String(stats.ttl_days))} days`);
-  console.log(`  Signals     ${c.cyan(String(stats.active))} active · ${c.dim(String(stats.expired))} expired · ${String(stats.total)} total`);
-  if (Object.keys(stats.by_outcome).length > 0) {
-    const parts = Object.entries(stats.by_outcome).map(([k, v]) => `${k}: ${v}`).join(' · ');
-    console.log(`  Outcomes    ${c.dim(parts)}`);
-  }
-  if (Object.keys(stats.by_tier).length > 0) {
-    const parts = Object.entries(stats.by_tier).map(([tier, s]) => `T${tier}: ${s.count} (q${s.avg_quality ?? '-'})`).join(' · ');
-    console.log(`  By tier     ${c.dim(parts)}`);
-  }
-  if (stats.next_expiry) {
-    console.log(`  Next expiry ${c.dim(new Date(stats.next_expiry).toLocaleDateString())}`);
-  }
-  console.log('');
-  console.log(c.dim(`  Commands: veto routing enable · veto routing disable · veto routing reset · veto routing log`));
-  console.log('');
-}
-
-// ─── Hook installer ────────────────────────────────────────────────────────────
-
-async function hookCommand() {
-  const sub = process.argv[3];
-  if (sub !== 'install' && sub !== 'remove') {
-    console.error(c.red(`  Usage: veto hook install  |  veto hook remove`));
-    process.exit(1);
-  }
-
-  // Walk up to find .git directory
-  let gitDir: string | null = null;
-  let dir = resolve(process.cwd());
-  for (let i = 0; i < 10; i++) {
-    if (existsSync(join(dir, '.git'))) { gitDir = join(dir, '.git'); break; }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  if (!gitDir) {
-    console.error(c.red('  Not a git repository (or any parent up to 10 levels).'));
-    process.exit(1);
-  }
-
-  const hookPath = join(gitDir, 'hooks', 'pre-commit');
-
-  if (sub === 'remove') {
-    if (!existsSync(hookPath)) {
-      console.log(c.dim('  No pre-commit hook found.'));
-      return;
-    }
-    const content = readFileSync(hookPath, 'utf8');
-    if (!content.includes('veto check')) {
-      console.log(c.yellow('  ⚠ Hook exists but was not created by veto. Not removed.'));
-      console.log(c.dim(`    Path: ${hookPath}`));
-      return;
-    }
-    unlinkSync(hookPath);
-    console.log(c.green('  ✓ Veto pre-commit hook removed.'));
-    return;
-  }
-
-  // install
-  mkdirSync(join(gitDir, 'hooks'), { recursive: true });
-  if (existsSync(hookPath)) {
-    const content = readFileSync(hookPath, 'utf8');
-    if (!content.includes('veto check')) {
-      console.log(c.yellow('  ⚠ A pre-commit hook already exists and was not created by veto.'));
-      console.log(c.dim(`    Inspect it before overwriting: ${hookPath}`));
-      process.exit(1);
-    }
-    console.log(c.green('  ✓ Veto pre-commit hook already installed.'));
-    return;
-  }
-
-  const script = [
-    '#!/bin/sh',
-    '# Veto pre-commit hook — secrets scan on staged changes',
-    '# Generated by: veto hook install  |  Remove with: veto hook remove',
-    'if command -v veto >/dev/null 2>&1; then',
-    '  exec veto check',
-    'else',
-    '  exec npx -y @jigyasudham/veto check',
-    'fi',
-  ].join('\n') + '\n';
-
-  writeFileSync(hookPath, script, { mode: 0o755 });
-  console.log('');
-  console.log(c.green('  ✓') + ` Pre-commit hook installed at ${c.dim(hookPath)}`);
-  console.log(c.dim('  Scans staged changes for secrets before every commit.'));
-  console.log(c.dim('  Remove with: veto hook remove'));
-  console.log('');
-}
-
-// ─── Secrets check (for pre-commit hook) ───────────────────────────────────────
-
-async function checkCommand() {
-  const { scan } = await import('./agents/security/secrets.js');
-
-  let diff = '';
-  try {
-    diff = execSync('git diff --cached', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
-  } catch { /* not a git repo or git not available */ }
-
-  if (!diff.trim()) {
-    console.log(c.green('  ✓ Veto: no staged changes to scan.'));
-    process.exit(0);
-  }
-
-  // Only scan added lines; skip diff headers
-  const added = diff.split('\n')
-    .filter(l => l.startsWith('+') && !l.startsWith('+++'))
-    .map(l => l.slice(1))
-    .join('\n');
-
-  const findings = scan(added);
-  const blocking = findings.filter(f => f.severity === 'critical' || f.severity === 'high');
-
-  if (findings.length === 0) {
-    console.log(c.green('  ✓ Veto secrets scan: clean'));
-    process.exit(0);
-  }
-
-  console.log('');
-  console.log(c.bold('  Veto Secrets Scan'));
-  console.log(c.dim('  ─────────────────────────────────────────────────────'));
-  for (const f of findings) {
-    const sev = f.severity === 'critical' ? c.red(f.severity)
-              : f.severity === 'high'     ? c.yellow(f.severity)
-              : c.dim(f.severity);
-    console.log(`  ${sev}  ${c.bold(f.type)}  ${c.dim(`line ${f.line}`)}  ${c.dim(f.value)}`);
-    console.log(`         ${c.dim(f.fix)}`);
-    console.log('');
-  }
-
-  if (blocking.length > 0) {
-    console.log(c.red(`  ✗ Blocked: ${blocking.length} critical/high secret${blocking.length !== 1 ? 's' : ''} in staged changes.`));
-    console.log(c.dim('  Fix the issues above, re-stage, and commit again.'));
-    console.log('');
-    process.exit(1);
-  }
-
-  console.log(c.yellow(`  ⚠ ${findings.length} medium/low finding${findings.length !== 1 ? 's' : ''} — commit allowed. Review above.`));
-  console.log('');
-  process.exit(0);
-}
-
-// ─── Router ────────────────────────────────────────────────────────────────────
 
 const command = process.argv[2] ?? 'init';
 

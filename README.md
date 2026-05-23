@@ -1,6 +1,6 @@
 # veto
 
-> **50 agents. 62 tools. 3 AIs. Self-learning. Zero extra cost.**
+> **62 agentic tools. 50+ specialists. 3 AIs. Self-learning. Zero cost.**
 
 An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, Gemini CLI, Cursor, Windsurf, Zed, Copilot, and JetBrains using your existing subscriptions — giving every AI a council of specialist agents, local LLM support, SDD agents, playwright automation, persistent cross-platform memory, a self-learning router, CI/CD gates, workspace discovery, and bidirectional IDE communication.
 
@@ -8,145 +8,26 @@ An MCP server that runs locally on your machine, plugs into Claude Code, Codex C
 
 ## How the Agents Actually Work
 
-**This is the most important thing to understand about Veto.**
+**Veto v2.0 is now 100% Agentic.**
 
-Veto has two fundamentally different types of agents:
+Every tool in Veto uses a **2-phase agentic loop pattern** — no API keys required, zero extra cost, working identically across Claude Code, Gemini CLI, and Codex CLI.
 
-### Council agents — real LLM reasoning via agentic loop (7 agents)
+### The 2-Phase Agentic Loop
+1.  **Phase 1 (Sampling):** The tool first attempts real LLM reasoning via **MCP Sampling** (the host AI's native ability to "create a message"). If supported by your client (like Claude Code or Gemini CLI), the agent performs deep reasoning and returns a structured plan or analysis instantly.
+2.  **Phase 2 (Upgrade Prompt):** If Sampling is unavailable or fails, Veto returns an `llm_upgrade` prompt. You (the host AI) read the specialist's role and task, perform the reasoning yourself, and pass the JSON response back to complete the operation.
 
-The 7 council agents use the **agentic loop pattern** — no API key, no extra cost, works on Claude Code, Gemini CLI, and Codex CLI identically. The tool returns an instant deterministic result plus a `debate_prompt`. You (the host AI) read it, reason as all 7 specialists, and pass the responses back. Veto runs the verdict engine on your real LLM output.
+### Specialist Roles
+Veto provides a council of 7 senior governance agents plus 55+ domain-specific worker agents.
 
-| Agent | Role |
+| Agent Group | Specialist Roles |
 |---|---|
-| Lead Developer | Code quality, maintainability, implementation risk |
-| Product Manager | Scope, timeline, business value |
-| System Architect | Architecture fit, scalability, coupling |
-| UX Designer | User impact, accessibility, friction |
-| Devil's Advocate | Challenges assumptions, stress-tests the plan |
-| Legal & Compliance | License risks, data handling, regulatory exposure |
-| Security | OWASP, auth, injection, data leakage |
+| **Council** | Lead Dev · PM · Architect · UX · Devil's Advocate · Legal · Security |
+| **Development** | Coder · Reviewer · Tester · Debugger · Refactor · Database · API · Frontend · Backend · DevOps · Performance · Migration |
+| **Advanced** | Local LLM (Ollama) · Semantic Search · SDD Agent · Playwright · i18n Translate · a11y Advisor |
+| **Intelligence** | Task Planner · Researcher · Tech Advisor · Risk Assessor · Cost Analyzer · Ethics/Bias |
+| **Workflow** | File Manager · Git Agent · Search Agent · Reporter · Automation |
 
-Use `strictness` to control depth:
-- `fast` — 3 agents (Lead Dev + Architect + Security), instant
-- `standard` — all 7 agents, default
-- `strict` — all 7 agents + Devil's Advocate rebuttal round on the most critical blocker
-
-`veto_benchmark` also runs council — two debates in parallel for side-by-side approach comparison.
-
-### Expert modules — deterministic, instant, zero tokens (42+ agents)
-
-Every other agent in Veto — coder, reviewer, tester, debugger, security scanner, secrets scanner, database, frontend, devops, and all 30+ others — is a **deterministic expert module**: structured templates, OWASP regex patterns, and domain heuristics compiled into code. They run offline, produce zero token cost, and return results in milliseconds.
-
-```
-veto_agent_plan  { agent: "coder", task: "..." }    ← deterministic plan, instant
-veto_code_review { code: "..." }                     ← regex + heuristic scanner, instant
-veto_secrets_scan{ text: "..." }                     ← pattern matching, instant
-veto_council_debate { task: "..." }                  ← agentic loop: host AI reasons as 7 specialists
-```
-
-**Why this split?** LLM reasoning is only worth it for high-stakes architecture/security/migration decisions. Pattern-matching is MORE reliable than LLMs for secrets detection and OWASP scanning (no hallucinations). The deterministic agents are the workhorses; the council is the gatekeeper.
-
----
-
-## Prerequisites
-
-| Requirement | Version | Notes |
-|---|---|---|
-| **Node.js** | 22.5.0 or higher | Required — uses built-in `node:sqlite` (no native compilation). Download at [nodejs.org](https://nodejs.org). |
-| **At least one AI CLI** | Latest | Claude Code, Gemini CLI, or Codex CLI — whichever you use. Veto works with all. |
-
-```bash
-node --version   # must be v22.5.0 or higher
-```
-
----
-
-## Quick Start
-
-```bash
-npx @jigyasudham/veto@latest init
-```
-
-`init` auto-detects every AI tool installed on your machine, configures them all in one shot, and builds a project map from your current directory — no manual steps.
-
-### Claude Code (global — works in every window and project)
-
-```bash
-claude mcp add veto -s user -- npx -y --package @jigyasudham/veto veto-server
-```
-
-The `-s user` flag registers Veto at user scope so it is available in **every window and project** automatically.
-
-### Other platforms
-
-| Platform | Config file written by `veto init` |
-|---|---|
-| **Gemini CLI** | `~/.gemini/settings.json` |
-| **Codex CLI** | `~/.codex/config.toml` |
-| **Cursor** | `~/.cursor/mcp.json` |
-| **Windsurf** | `~/.codeium/windsurf/mcp_config.json` |
-| **Zed** | `~/.config/zed/settings.json` · Windows: `%APPDATA%\Zed\settings.json` (`context_servers` key) |
-
-All config files are home-directory relative — they apply globally across all projects. Restart the AI client after `veto init`.
-
-```json
-{
-  "mcpServers": {
-    "veto": {
-      "command": "npx",
-      "args": ["-y", "--package", "@jigyasudham/veto", "veto-server"]
-    }
-  }
-}
-```
-
----
-
-## What Veto Does
-
-**Council** — Before any significant task, 7 specialist agents debate it using the agentic loop and return a GREEN / YELLOW / RED / DEADLOCK verdict. Works on Claude Code, Gemini CLI, and Codex CLI — no API keys needed. Bad decisions get blocked before any code is written.
-
-**Metrics** — `veto_metrics` gives you a live usage dashboard: sessions saved, council verdict breakdown, top agents by call count, 7-day quality trend, and knowledge base stats. Zero cost, pure SQLite.
-
-**Changelog** — `veto_changelog` reads your git history since the last tag, groups commits by conventional type (feat, fix, refactor...), and returns a structured changelog ready to publish.
-
-**Git blame** — `veto_git_blame` returns contribution history for any file or directory — total commits, contributor list with counts, and last-modified metadata. Instant, local, no network.
-
-**Codebase-aware agents** — Pass `project_dir` to any tool and Veto auto-reads `package.json`, detects your tech stack, and injects recent `git diff` context. Every agent responds to your actual project.
-
-**Structured output** — Every agent result carries `confidence`, `severity`, `recommendation`, `affected_files`, and `line_refs` — composable and actionable.
-
-**Router** — Every task is scored locally (zero tokens) and sent to the right model tier. Rate limits are tracked across all platforms. The router self-adjusts from recorded outcomes and learns which agents perform best per file type.
-
-**Memory** — Sessions, decisions, knowledge, and coding patterns persist across every conversation and platform. Sessions are searchable by summary, context, tags, or project path. Tag sessions with `tags: ["auth", "migration"]` and find them later with `query: "auth"`.
-
-**Workspace discovery** — `veto_discover` scans a project once and builds a rich context map: git state, tech stack, file tree, dependencies, and key config files.
-
-**Project summarization** — `veto_summarize` generates a concise expert briefing of a project, directory, or file.
-
-**Explain anything** — `veto_explain` accepts a file path or raw text (error messages, stack traces, compiler output). Auto-routes to the right expert — file extension detection for source files, debugger agent for error-like content.
-
-**Diff review** — `veto_diff_review` runs code review, security scan, and secrets scan in parallel across a git diff. Returns a pass/warn/fail verdict ready for CI and pre-commit hooks.
-
-**File watching** — `veto_watch` monitors your project and tells you which agent to call when files change.
-
-**Sequential pipelines** — `veto_workflow` runs a chain of agents with pass/fail gates end to end.
-
-**Cross-platform handoff** — Claude hitting its rate limit? `veto_handoff` → open Gemini → `veto_continue`. Full context restored in seconds.
-
-**Plugin system** — Drop a `.js` file in `~/.veto/agents/` and it registers as a custom agent available in every tool.
-
----
-
-## The 50 Agents
-
-### Council Layer — LLM reasoning via agentic loop (8)
-
-> Real LLM reasoning, zero extra cost, works on all 3 platforms. The host AI reasons as all 7 specialists and passes structured responses back to Veto's verdict engine. Used by `veto_council_debate` and `veto_benchmark`.
-
-`Lead Developer` · `Product Manager` · `System Architect` · `UX Designer` · `Devil's Advocate` · `Legal & Compliance` · `Security` · `Decision Engine`
-
-### Expert Modules — deterministic, instant, zero tokens (55)
+### All 62 Tools are now 100% Agentic
 
 > Pattern matching, domain heuristics, and structured templates compiled into code. Offline capable. No LLM calls.
 
