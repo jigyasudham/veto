@@ -121,6 +121,7 @@ async function callAgentLlm(
   task: string,
   memoryContext: string,
   decisionContext?: string,
+  model?: string,
 ): Promise<AgentVote> {
   const parts: string[] = [`Task to evaluate:\n${task}`];
   if (decisionContext) parts.push(`\nARCHITECTURAL CHOICE DETECTED:\n${decisionContext}\nYour response MUST address this specific choice — name the option you prefer in your recommendation.`);
@@ -129,6 +130,7 @@ async function callAgentLlm(
 
   try {
     const result = await server.createMessage({
+      model: model,
       messages: [{ role: 'user', content: { type: 'text', text: userText } }],
       systemPrompt: SYSTEM_PROMPTS[agentKey],
       maxTokens: 300,
@@ -246,14 +248,15 @@ export async function runLlmDebate(server: Server, input: DebateInput): Promise<
     : undefined;
 
   // All 7 agents run in parallel — each falls back individually on sampling failure
+  const model = input.architect_model;
   const [lead_dev, pm, architect, ux, devil, legal, security] = await Promise.all([
-    callAgentLlm(server, 'lead_dev',  fullText, memoryContext, decisionContext),
-    callAgentLlm(server, 'pm',        fullText, memoryContext, decisionContext),
-    callAgentLlm(server, 'architect', fullText, memoryContext, decisionContext),
-    callAgentLlm(server, 'ux',        fullText, memoryContext, decisionContext),
-    callAgentLlm(server, 'devil',     fullText, memoryContext, decisionContext),
-    callAgentLlm(server, 'legal',     fullText, memoryContext, decisionContext),
-    callAgentLlm(server, 'security',  fullText, memoryContext, decisionContext),
+    callAgentLlm(server, 'lead_dev',  fullText, memoryContext, decisionContext, model),
+    callAgentLlm(server, 'pm',        fullText, memoryContext, decisionContext, model),
+    callAgentLlm(server, 'architect', fullText, memoryContext, decisionContext, model),
+    callAgentLlm(server, 'ux',        fullText, memoryContext, decisionContext, model),
+    callAgentLlm(server, 'devil',     fullText, memoryContext, decisionContext, model),
+    callAgentLlm(server, 'legal',     fullText, memoryContext, decisionContext, model),
+    callAgentLlm(server, 'security',  fullText, memoryContext, decisionContext, model),
   ]);
 
   const votes = { lead_dev, pm, architect, ux, devil, legal, security };

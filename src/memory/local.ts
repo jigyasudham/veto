@@ -11,7 +11,7 @@ import { mkdirSync } from 'node:fs';
 // node:sqlite is a Node 22.5+ built-in — use createRequire so bundlers (Vite/esbuild) skip it
 const _require = createRequire(import.meta.url);
 const DbSync = (_require('node:sqlite') as typeof import('node:sqlite')).DatabaseSync;
-import { CREATE_TABLES, type SessionRow, type KnowledgeRow, type KnowledgeType, type ProjectMapRow, type DocsCacheRow } from './schema.js';
+import { CREATE_TABLES, type SessionRow, type KnowledgeRow, type KnowledgeType, type ProjectMapRow, type DocsCacheRow, type ToolCallTraceLogRow } from './schema.js';
 
 // Context window sizes per platform (tokens)
 export const CONTEXT_WINDOWS: Record<string, number> = {
@@ -83,7 +83,61 @@ export function getDb(): DatabaseSync {
   migrateSessionTags(_db);
   migrateContextUsage(_db);
   migrateRoutingFeedback(_db);
+  migrateToolTraceLog(_db);
   return _db;
+}
+
+// Creates tool_call_trace_log table for auditing and session replay (v1.8.0 migration)
+function migrateToolTraceLog(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tool_call_trace_log (
+      id            TEXT PRIMARY KEY,
+      session_id    TEXT,
+      tool_name     TEXT NOT NULL,
+      args_json     TEXT,
+      result_status TEXT NOT NULL DEFAULT 'success',
+      error_message TEXT,
+      duration_ms   INTEGER NOT NULL,
+      tokens_used   INTEGER,
+      recorded_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_tool_trace_session ON tool_call_trace_log(session_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_tool_trace_name    ON tool_call_trace_log(tool_name)`);
+}
+
+export function getSessionReplay(sessionId: string): ToolCallTraceLogRow[] {
+  const db = getDb();
+  return db.prepare('SELECT * FROM tool_call_trace_log WHERE session_id = ? ORDER BY recorded_at ASC').all(sessionId) as unknown as ToolCallTraceLogRow[];
+}
+
+// ... existing migration functions ...
+
+export function recordToolCall(opts: {
+  session_id?: string;
+  tool_name: string;
+  args?: Record<string, unknown>;
+  result_status: 'success' | 'error';
+  error_message?: string;
+  duration_ms: number;
+  tokens_used?: number;
+}): string {
+  const db = getDb();
+  const id = randomUUID();
+  db.prepare(`
+    INSERT INTO tool_call_trace_log (id, session_id, tool_name, args_json, result_status, error_message, duration_ms, tokens_used)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    opts.session_id ?? null,
+    opts.tool_name,
+    opts.args ? JSON.stringify(opts.args) : null,
+    opts.result_status,
+    opts.error_message ?? null,
+    opts.duration_ms,
+    opts.tokens_used ?? null
+  );
+  return id;
 }
 
 // Creates routing_feedback table for opt-in routing signal storage (v1.4.8 migration)

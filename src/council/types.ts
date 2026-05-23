@@ -15,6 +15,8 @@ export interface DebateInput {
   context?: string;
   project_dir?: string;
   strictness?: CouncilStrictness;
+  architect_model?: string;
+  editor_model?: string;
 }
 
 export interface DebateResult {

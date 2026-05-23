@@ -155,6 +155,7 @@ export async function runAgentLlm(
 
   try {
     const result = await server.createMessage({
+      model: task.model,
       messages: [{ role: 'user', content: { type: 'text', text: userText } }],
       systemPrompt,
       maxTokens: isAnalysis ? 1000 : 800,

@@ -21,6 +21,8 @@ export type RouteOptions = {
   relevantFiles?: string[];
   preferredPlatform?: import('./rate-monitor.js').Platform;
   sessionId?: string;
+  architectModel?: string;
+  editorModel?: string;
 };
 
 export type RouteResult = {
@@ -37,7 +39,10 @@ export type RouteResult = {
 export function routeTask(task: string, options: RouteOptions = {}): RouteResult {
   const learned = getLearnedThresholds();
   const complexity = scoreComplexity(task, options.filesAffected, options.forceCouncil, learned.source === 'learned' ? learned : undefined);
-  const model = selectModel(complexity.score, options.agentType ?? 'dynamic');
+  const model = selectModel(complexity.score, options.agentType ?? 'dynamic', {
+    architect_model: options.architectModel,
+    editor_model: options.editorModel,
+  });
 
   const preferred = options.preferredPlatform ?? 'claude';
   // Only shift Tier 1/2 away from Claude on warning; Tier 3 always stays on best model

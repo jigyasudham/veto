@@ -70,6 +70,7 @@ export interface AgentTask {
   context?: string;
   project_dir?: string;
   llm_backed?: boolean;
+  model?: string;
 }
 
 export interface AgentResult {

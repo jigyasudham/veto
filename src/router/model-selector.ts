@@ -42,42 +42,34 @@ const TIER_MODELS: Record<Tier, { claude: string; gemini: string; codex: string 
 
 export function selectModel(
   complexityScore: number,
-  agentType: AgentType = 'dynamic'
+  agentType: AgentType = 'dynamic',
+  overrides: { architect_model?: string; editor_model?: string } = {}
 ): ModelRecommendation {
+  let tier: Tier;
+  let agent_locked = true;
+
   if (TIER3_LOCKED.has(agentType)) {
-    return {
-      tier: 3,
-      models: TIER_MODELS[3],
-      reason: `${agentType} is always Tier 3 — stakes too high for cheaper models`,
-      agent_locked: true,
-    };
+    tier = 3;
+  } else if (TIER2_LOCKED.has(agentType)) {
+    tier = 2;
+  } else if (TIER1_LOCKED.has(agentType)) {
+    tier = 1;
+  } else {
+    tier = complexityScore <= 30 ? 1 : complexityScore <= 70 ? 2 : 3;
+    agent_locked = false;
   }
 
-  if (TIER2_LOCKED.has(agentType)) {
-    return {
-      tier: 2,
-      models: TIER_MODELS[2],
-      reason: `${agentType} is always Tier 2 — balanced complexity`,
-      agent_locked: true,
-    };
+  const models = { ...TIER_MODELS[tier] };
+  const reason = agent_locked
+    ? `${agentType} is locked to Tier ${tier}`
+    : `Complexity score ${complexityScore}/100 assigned to Tier ${tier}`;
+
+  // Apply Phase 7.6 Overrides
+  if (tier === 3 && overrides.architect_model) {
+    models.claude = overrides.architect_model;
+  } else if (tier >= 2 && overrides.editor_model) {
+    models.claude = overrides.editor_model;
   }
 
-  if (TIER1_LOCKED.has(agentType)) {
-    return {
-      tier: 1,
-      models: TIER_MODELS[1],
-      reason: `${agentType} is always Tier 1 — simple structured operations`,
-      agent_locked: true,
-    };
-  }
-
-  const tier: Tier = complexityScore <= 30 ? 1 : complexityScore <= 70 ? 2 : 3;
-  const reason =
-    tier === 1
-      ? `Score ${complexityScore}/100 — simple task, use fastest/cheapest model`
-      : tier === 2
-        ? `Score ${complexityScore}/100 — mid-range task, use balanced model`
-        : `Score ${complexityScore}/100 — complex task, use best available model`;
-
-  return { tier, models: TIER_MODELS[tier], reason, agent_locked: false };
+  return { tier, models, reason, agent_locked };
 }
