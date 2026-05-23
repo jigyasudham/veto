@@ -192,6 +192,7 @@ const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint
   veto_full_review:       { readOnlyHint: true },
   veto_pre_commit:        { readOnlyHint: true },
   veto_new_feature:       { readOnlyHint: false, destructiveHint: false },
+  veto_delegate:          { readOnlyHint: true },
   veto_workflow:          { readOnlyHint: false, destructiveHint: false },
   veto_ci_gate:           { readOnlyHint: false, destructiveHint: false },
   veto_usage_status:      { readOnlyHint: false, destructiveHint: false },
@@ -1362,8 +1363,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         code: s.code ? String(s.code) : undefined,
         context: s.context ? String(s.context) : undefined,
         gate: typeof s.gate === 'number' ? s.gate : undefined,
+        retry_on_fail: s.retry_on_fail === true,
+        max_retries: typeof s.max_retries === 'number' ? Math.min(s.max_retries, 5) : undefined,
+        condition: s.condition ? String(s.condition) : undefined,
+        dependencies: Array.isArray(s.dependencies) ? s.dependencies.map(String) : undefined,
       }));
-      const result = await runPipeline(steps, args?.project_dir ? String(args.project_dir) : undefined);
+      const mode = String(args?.mode ?? 'linear') === 'dag' ? 'dag' : 'linear';
+      const result = await runPipeline(steps, args?.project_dir ? String(args.project_dir) : undefined, mode);
 
       // #39: auto-record learning outcome per executed workflow step
       for (const step of result.results) {
@@ -2175,6 +2181,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           `Recommended agent: ${planAgent}`,
           `Tasks: ${taskPlan.total_tasks} (est. ${taskPlan.duration_estimate})`,
         ].filter(Boolean).join('\n'),
+      }, null, 2) }] };
+    }
+
+    case 'veto_delegate': {
+      const agentId = String(args?.agent_id ?? '').trim() as WorkerAgentType;
+      const task    = String(args?.task ?? '').trim();
+      const context = args?.context     ? String(args.context)     : undefined;
+      const projectDir = args?.project_dir ? String(args.project_dir) : undefined;
+      const maxLen  = typeof args?.max_summary_tokens === 'number' ? Math.min(args.max_summary_tokens, 2000) : 500;
+
+      if (!agentId || !task) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'agent_id and task are required.' }) }], isError: true };
+      }
+
+      const enrichedCtx = buildContextString(projectDir, context);
+      const result = await executeOne({ id: 'delegate-1', agent: agentId, task, context: enrichedCtx || undefined, project_dir: projectDir });
+
+      autoRecord(task, agentId, Math.round(result.output.confidence * 100));
+
+      // Return compact summary only — no verbose findings/steps to avoid context pollution
+      const summary = [
+        result.output.recommendation,
+        result.plan?.approach,
+        result.analysis?.verdict ? `Verdict: ${result.analysis.verdict}` : null,
+        result.analysis?.score   ? `Score: ${result.analysis.score}/100`  : null,
+      ].filter(Boolean).join('\n').slice(0, maxLen);
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        agent: agentId,
+        task: task.slice(0, 100),
+        summary,
+        confidence: Math.round(result.output.confidence * 100),
+        severity: result.output.severity ?? null,
+        duration_ms: result.duration_ms,
+        truncated: summary.length >= maxLen,
       }, null, 2) }] };
     }
 

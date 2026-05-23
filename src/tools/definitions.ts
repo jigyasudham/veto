@@ -658,6 +658,25 @@ export const TOOL_DEFINITIONS = [
       required: ['description'],
     },
   },
+  {
+    name: 'veto_delegate',
+    description: 'Delegates a subtask to a specialist agent and returns only a compact summary — not the full output. Use when orchestrating multi-step work and you need an agent\'s conclusion without polluting your context with verbose output. Mirrors the "boomerang" delegation pattern.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent_id: {
+          type: 'string',
+          description: 'The specialist agent to delegate to.',
+          enum: ['coder','tester','reviewer','debugger','refactor','database','api','frontend','backend','devops','performance','auth','security-scanner','documentation','task-planner','researcher','estimator','risk-assessor'],
+        },
+        task:        { type: 'string',  description: 'The subtask to delegate.' },
+        context:     { type: 'string',  description: 'Optional context for the agent.' },
+        project_dir: { type: 'string',  description: 'Optional: project directory for context injection.' },
+        max_summary_tokens: { type: 'number', description: 'Max characters in the returned summary (default 500, max 2000).' },
+      },
+      required: ['agent_id', 'task'],
+    },
+  },
   // ── Workflow & CI ─────────────────────────────────────────────────────────────
   {
     name: 'veto_workflow',
@@ -677,11 +696,16 @@ export const TOOL_DEFINITIONS = [
               code: { type: 'string', description: 'Optional code to analyze.' },
               context: { type: 'string', description: 'Optional context.' },
               gate: { type: 'number', description: 'Optional minimum confidence % (0–100) required to proceed to the next step.' },
+              retry_on_fail: { type: 'boolean', description: 'If true and this step fails its gate, re-run up to max_retries times with prior failure output injected as context.' },
+              max_retries: { type: 'number', description: 'Max retry attempts when retry_on_fail is true. Default 3, max 5.' },
+              condition: { type: 'string', description: "Optional expression evaluated against prior step outputs. If false, this step is skipped. Example: \"security_scan.severity == 'critical'\" or \"code_review.confidence >= 70\". Supported operators: ==, !=, >=, <=, >, <, &&, ||, !" },
+              dependencies: { type: 'array', description: 'Step IDs that must complete before this step runs (dag mode only).', items: { type: 'string' } },
             },
             required: ['id', 'agent', 'task'],
           },
         },
         project_dir: { type: 'string', description: 'Optional project directory — auto-injects codebase context into all steps.' },
+        mode: { type: 'string', enum: ['linear', 'dag'], description: 'Execution mode. "linear" (default) runs steps sequentially. "dag" reads dependencies, runs independent steps in parallel, gates dependent steps.' },
       },
       required: ['steps'],
     },
