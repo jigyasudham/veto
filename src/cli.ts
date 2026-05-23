@@ -838,13 +838,8 @@ function troubleshootCommand() {
   console.log(`  ${c.dim('→')} Claude Code: MCP must be registered at user scope, not project scope`);
   console.log(`  ${c.dim('→')} Run: ${c.cyan('claude mcp add veto -s user -- npx -y --package @jigyasudham/veto veto-server')}`);
   console.log(`  ${c.dim('→')} The ${c.cyan('-s user')} flag makes Veto global across ALL windows and projects`);
-  console.log(`  ${c.dim('→')} Gemini / Cursor / Windsurf / Zed: run ${c.cyan('veto init')} once — config is written globally`);
-  console.log('');
-  console.log(`  ${c.yellow('MCP disconnected / tools not loading')}`);
-  console.log(`  ${c.dim('→')} Run ${c.cyan('veto init')} again, then fully restart your AI client`);
-  console.log(`  ${c.dim('→')} Check Node.js version: ${c.cyan('node --version')} (need >= 22)`);
-  console.log('');
 }
+
 
 const command = process.argv[2] ?? 'init';
 
