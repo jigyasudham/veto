@@ -3438,6 +3438,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { session_id } = args;
       return { content: [{ type: 'text', text: `veto_session_replay: Successfully replayed event stream for session ${session_id}. (Stub implementation)` }] };
     }
+    case 'veto_compose_agents': {
+      const { name, agents } = args;
+      return { content: [{ type: 'text', text: `veto_compose_agents: Created custom agent ${name} composed of [${agents?.join(',')}]. (Stub implementation)` }] };
+    }
 
     default:
       throw new Error(`Unknown tool: ${name}`);
