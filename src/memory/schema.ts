@@ -232,4 +232,47 @@ export type SessionRow = {
   created_at: string;
 };
 
+export type KnowledgeType = 'solution' | 'pattern' | 'context' | 'error' | 'reference' | 'decision';
+
+export type KnowledgeRow = {
+  id: string;
+  type: KnowledgeType;
+  title: string;
+  content: string;
+  tags: string | null;
+  project_dir: string | null;
+  session_id: string | null;
+  relevance: number;
+  accessed_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectMapRow = {
+  id: string;
+  project_dir: string;
+  structure: string;
+  key_modules: string | null;
+  tech_stack: string | null;
+  updated_at: string;
+};
+
+export type DocsCacheRow = {
+  id: string;
+  package_name: string;
+  ecosystem: string;
+  version: string;
+  content: string;
+  fetched_at: string;
+};
+
+export type PatternRow = {
+  id: string;
+  pattern_key: string;
+  pattern_val: string;
+  confidence: number;
+  seen_count: number;
+  updated_at: string;
+};
+
 export type ToolCallTraceLogRow = { id: string; session_id: string | null; tool_name: string; args_json: string | null; result_status: string; error_message: string | null; duration_ms: number; tokens_used: number | null; recorded_at: string; };

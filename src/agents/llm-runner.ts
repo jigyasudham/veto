@@ -4,7 +4,7 @@
 
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { getManifestEntry } from './manifest.js';
-import type { AgentTask, AgentResult, AgentPlan, AgentAnalysis, WorkerAgentType } from './types.js';
+import type { AgentTask, AgentResult, AgentPlan, AgentAnalysis, WorkerAgentType, AgentOutput } from './types.js';
 import { validateAgentPlan, validateAgentAnalysis } from './validate.js';
 
 // ─── System prompt builders ───────────────────────────────────────────────────
@@ -76,7 +76,7 @@ Rules:
 
 // ─── Response parsers ─────────────────────────────────────────────────────────
 
-function parsePlanResponse(raw: string, agent: WorkerAgentType, task: string): AgentPlan | null {
+export function parsePlanResponse(raw: string, agent: WorkerAgentType, task: string): AgentPlan | null {
   try {
     const match = raw.match(/\{[\s\S]*\}/);
     if (!match) return null;
@@ -100,7 +100,7 @@ function parsePlanResponse(raw: string, agent: WorkerAgentType, task: string): A
   }
 }
 
-function parseAnalysisResponse(raw: string, agent: WorkerAgentType): AgentAnalysis | null {
+export function parseAnalysisResponse(raw: string, agent: WorkerAgentType): AgentAnalysis | null {
   try {
     const match = raw.match(/\{[\s\S]*\}/);
     if (!match) return null;
@@ -159,8 +159,7 @@ export async function runAgentLlm(
       messages: [{ role: 'user', content: { type: 'text', text: userText } }],
       systemPrompt,
       maxTokens: isAnalysis ? 1000 : 800,
-      includeContext: 'none',
-    });
+    } as any);
 
     const responseText = result.content.type === 'text' ? result.content.text : '';
     if (!responseText) return null;
@@ -179,15 +178,7 @@ export async function runAgentLlm(
 
 // ─── Agentic loop prompt ──────────────────────────────────────────────────────
 
-export interface AgenticAgentPrompt {
-  mode: 'agentic';
-  agent: WorkerAgentType;
-  instruction: string;
-  output_prompt: string;
-  schema: string;
-}
-
-export function buildAgenticAgentPrompt(task: AgentTask): AgenticAgentPrompt | null {
+export function buildAgenticAgentPrompt(task: AgentTask): import('./types.js').AgenticAgentPrompt | null {
   const entry = getManifestEntry(task.agent);
   if (!entry) return null;
 
@@ -199,7 +190,7 @@ export function buildAgenticAgentPrompt(task: AgentTask): AgenticAgentPrompt | n
   return {
     mode: 'agentic',
     agent: task.agent,
-    instruction: `MCP Sampling is unavailable. Reason as the ${task.agent} specialist and produce the output yourself, then return it in the veto_execute_parallel result.`,
+    instruction: `MCP Sampling is unavailable. Reason as the ${task.agent} specialist and produce the output yourself, then return it in the result.`,
     output_prompt: isAnalysis
       ? `Analyze the following code as the ${task.agent} specialist:\n\n${task.code ?? ''}\n\n${task.context ? `Context: ${task.context}` : ''}`
       : `Plan the following task as the ${task.agent} specialist:\n\n${task.task}\n\n${task.context ? `Context: ${task.context}` : ''}`,

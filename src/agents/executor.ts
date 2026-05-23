@@ -3,7 +3,7 @@ import { validateAgentPlan, validateAgentAnalysis } from './validate.js';
 import { buildContextString } from '../context/reader.js';
 import { getPlugin, isPlugin } from '../plugins/loader.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { runAgentLlm } from './llm-runner.js';
+import { runAgentLlm, buildAgenticAgentPrompt } from './llm-runner.js';
 
 // Set once at server startup — enables LLM-backed execution for all agents.
 // When null, all agents run deterministically (always available, zero tokens).
@@ -189,6 +189,23 @@ export async function executeOne(task: AgentTask): Promise<AgentResult> {
           duration_ms: Date.now() - start,
           llm_backed: true,
         };
+      } else {
+        // Phase 2: Return agentic upgrade prompt if sampling fails
+        const prompt = buildAgenticAgentPrompt(enrichedTask);
+        if (prompt) {
+          return {
+            id: task.id,
+            agent: task.agent,
+            output: { confidence: 0, severity: 'info', recommendation: 'Upgrade to LLM reasoning needed.', affected_files: [], line_refs: [] },
+            duration_ms: Date.now() - start,
+            llm_backed: false,
+            llm_upgrade: {
+              available: true,
+              instruction: `Reason as the ${task.agent} specialist and return the JSON response in the agent_response field.`,
+              prompt,
+            }
+          };
+        }
       }
     }
 

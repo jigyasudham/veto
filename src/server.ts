@@ -37,8 +37,8 @@ import { routeTask, getRateStatus, trackTokens, recordOutcome, getLearningStats,
 import { getConfig, setConfig } from './memory/config.js';
 import type { AgentType, Platform } from './router/index.js';
 import { executeParallel, executeOne, initLlmRunner } from './agents/executor.js';
-import { buildAgenticAgentPrompt } from './agents/llm-runner.js';
-import type { AgentTask, WorkerAgentType } from './agents/types.js';
+import { buildAgenticAgentPrompt, parseAgenticAgentResponses } from './agents/llm-runner.js';
+import type { AgentPlan, AgentResult, AgentTask, WorkerAgentType, AgenticAgentPrompt } from './agents/types.js';
 import { handoff, continueSession, getPlatformSetup } from './adapters/index.js';
 import type { SetupPlatform } from './adapters/index.js';
 import { startWatch, pollWatch, stopWatch, listWatches } from './watcher/index.js';
@@ -56,18 +56,11 @@ import { execSync as execSyncTop } from 'node:child_process';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { version: VERSION } = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
 
-// Tracks the project_dir of the most recently active session in this process.
-// Used as a fallback when memory_store/memory_search are called without an explicit project_dir,
-// so memories are automatically scoped to the current project.
 let activeProjectDir: string | null = null;
-
-// Server health tracking
 const SERVER_START_TIME = Date.now();
 let serverErrorCount = 0;
 let lastServerError: string | null = null;
 
-// Auto-save: cached context from the last explicit session save. Populated by
-// veto_session_save and veto_handoff. Cleared on server restart (in-memory only).
 interface AutoSaveCache {
   summary: string;
   context: string;
@@ -78,7 +71,7 @@ interface AutoSaveCache {
 }
 const autoSave = {
   threshold_pct: 70,
-  cooldown_ms: 5 * 60 * 1000, // 5 min between auto-saves
+  cooldown_ms: 5 * 60 * 1000,
   last_save_at: null as string | null,
   last_session_id: null as string | null,
   cached: null as AutoSaveCache | null,
@@ -99,55 +92,9 @@ function maybeAutoSave(token_count: number, platform: string, model?: string): {
   return { triggered: true, session_id: result.session_id, usage_pct };
 }
 
-const server = new Server(
-  { name: 'veto', version: VERSION },
-  {
-    capabilities: {
-      tools: {},
-      resources: {},
-      prompts: {},
-    },
-    instructions: `Veto is a 49-tool MCP server for AI-assisted software engineering. Tools fall into five categories:
-
-SESSION & CONTEXT — veto_status, veto_session_save, veto_session_restore, veto_sessions_list, veto_continue, veto_handoff, veto_autosave_status. Persist work across context windows and switch AI platforms without losing progress. Call veto_session_save at 60–70% context capacity; veto_status triggers auto-save automatically above 70%.
-
-CODE INTELLIGENCE — veto_code_review, veto_diff_review, veto_security_scan, veto_secrets_scan, veto_ci_gate, veto_pr_review. Pass code or a git diff; each tool returns scored findings with severity (critical/high/medium/low). veto_diff_review and veto_ci_gate run code review + security + secrets scans in parallel — use these before any merge or deploy.
-
-NAMED PIPELINES — veto_full_review, veto_pre_commit, veto_new_feature. Curated multi-tool compositions: veto_full_review runs code+security+secrets+quality in parallel (pre-ship); veto_pre_commit runs secrets+review on staged changes (pre-commit); veto_new_feature runs council+plan+tasks in sequence (new features). Each collapses 3–5 manual calls into 1.
-
-COUNCIL & ROUTING — veto_council_debate, veto_route_task, veto_agent_plan, veto_execute_parallel, veto_workflow, veto_benchmark. The council runs 7 specialist agents (Lead Dev, PM, Architect, UX, Devil's Advocate, Legal, Security) and returns a verdict.
-
-Two-phase council flow (LLM-backed, no API keys needed):
-  Phase 1 — call veto_council_debate with { task }. The response includes llm_upgrade.debate_prompt.
-  Phase 2 — reason as all 7 agents using that prompt, produce agent_responses JSON, then call veto_council_debate again with { task, agent_responses } to get the final LLM-backed verdict.
-
-Council verdict colors:
-  GREEN   — approved, proceed with confidence
-  YELLOW  — approved with warnings, review warnings before shipping
-  RED     — blocked, do not proceed without addressing block_reasons
-  DEADLOCK — council split evenly, human decision required
-
-MEMORY & DISCOVERY — veto_memory_store, veto_memory_search, veto_memory_delete, veto_project_map_update, veto_project_map_get, veto_pattern_store, veto_patterns_list, veto_discover, veto_summarize, veto_explain. Use veto_discover to map an unknown repo in seconds, veto_summarize for a plain-English briefing, and veto_memory_store to persist key findings across sessions.
-
-OBSERVABILITY — veto_usage_status, veto_audit_log, veto_health, veto_metrics, veto_rate_status, veto_learning_stats, veto_learning_apply. Monitor token budgets, council decision history, and auto-router performance. Call veto_learning_apply after 20+ outcomes to tune routing thresholds from real data.
-
-MCP PROMPTS (8) — slash-command-style workflow templates: code-review, security-audit, deploy-checklist, explain-file, full-review, new-feature, debug-incident, onboard. Select a prompt from the Prompts panel to launch a pre-built workflow.
-
-Recommended start sequence:
-  1. veto_status — confirm server is running and check token usage
-  2. veto_discover or veto_summarize — orient to the codebase before touching files
-  3. veto_route_task — pick the right agent before heavy analysis
-  4. veto_full_review or veto_diff_review — validate before shipping
-  5. veto_session_save — checkpoint before context fills`,
-  }
-);
-
-// ─── Tool Risk Annotations (#21) ─────────────────────────────────────────────
-// readOnlyHint: tool makes no writes. destructiveHint: writes are irreversible.
-// openWorldHint: tool reaches outside the local DB (network, filesystem, processes).
+const server = new Server({ name: 'veto', version: VERSION }, { capabilities: { tools: {}, resources: {}, prompts: {} } });
 
 const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint?: boolean; openWorldHint?: boolean }> = {
-  // read-only — query/inspect only
   veto_status:           { readOnlyHint: true },
   veto_autosave_status:  { readOnlyHint: true },
   veto_sessions_list:    { readOnlyHint: true },
@@ -170,10 +117,8 @@ const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint
   veto_summarize:        { readOnlyHint: true },
   veto_explain:          { readOnlyHint: true },
   veto_benchmark:        { readOnlyHint: false, destructiveHint: false },
-  // read-only + open world (external network)
   veto_docs_fetch:       { readOnlyHint: true,  openWorldHint: true },
   veto_pr_review:        { readOnlyHint: true,  openWorldHint: true },
-  // reversible writes (local DB — can be deleted/reset)
   veto_council_debate:    { readOnlyHint: false, destructiveHint: false },
   veto_execute_parallel:  { readOnlyHint: false, destructiveHint: false },
   veto_session_save:      { readOnlyHint: false, destructiveHint: false },
@@ -208,25 +153,20 @@ const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint
   veto_workflow:          { readOnlyHint: false, destructiveHint: false },
   veto_ci_gate:           { readOnlyHint: false, destructiveHint: false },
   veto_usage_status:      { readOnlyHint: false, destructiveHint: false },
-  // destructive — permanent deletes or config overwrites
   veto_memory_delete:     { readOnlyHint: false, destructiveHint: true },
   veto_memory_import:     { readOnlyHint: false, destructiveHint: true },
   veto_platform_setup:    { readOnlyHint: false, destructiveHint: true,  openWorldHint: true },
-  // documentation & quality
   veto_doc_gen:           { readOnlyHint: true },
   veto_type_coverage:     { readOnlyHint: true },
   veto_test_gaps:         { readOnlyHint: true },
   veto_onboard:           { readOnlyHint: true },
-  // code intelligence — dep / query / bundle / dead-code
   veto_dep_advisor:       { readOnlyHint: true, openWorldHint: true },
   veto_query_advisor:     { readOnlyHint: true },
   veto_bundle_advisor:    { readOnlyHint: true },
   veto_dead_code:         { readOnlyHint: true },
-  // hitl / openapi / flag auditor
   veto_hitl_checkpoint:   { readOnlyHint: true },
   veto_openapi_gen:       { readOnlyHint: false, destructiveHint: false },
   veto_flag_auditor:      { readOnlyHint: true },
-  // Phase 7: Intelligence & Advanced
   veto_local_llm:         { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   veto_clone_detector:    { readOnlyHint: true },
   veto_lint_rules:        { readOnlyHint: false, destructiveHint: false },
@@ -236,134 +176,104 @@ const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint
   veto_a11y_advisor:      { readOnlyHint: true },
   veto_session_replay:    { readOnlyHint: true },
   veto_compose_agents:    { readOnlyHint: false, destructiveHint: false },
-  // Phase 8: Long-Horizon
   veto_semantic_search:   { readOnlyHint: true },
   veto_sdd_agent:         { readOnlyHint: false, destructiveHint: false },
   veto_notify_ide:        { readOnlyHint: true },
 };
-
-// ─── Tool Definitions ─────────────────────────────────────────────────────────
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   const tools = TOOL_DEFINITIONS as unknown as Array<{ name: string; description: string; inputSchema: object }>;
   return { tools: tools.map(t => ({ ...t, annotations: TOOL_ANNOTATIONS[t.name] ?? {} })) };
 });
 
-// ─── Shared Scan Utility ──────────────────────────────────────────────────────
-
-async function runTripleScan(diff: string, context: string) {
-  const [reviewResult, secResult, secretsResult] = await Promise.all([
-    executeOne({ id: 'scan-review',  agent: 'reviewer',         task: 'Review this git diff for code quality issues', code: diff, context }),
-    executeOne({ id: 'scan-sec',     agent: 'security-scanner', task: 'Scan this git diff for security vulnerabilities', code: diff, context }),
-    executeOne({ id: 'scan-secrets', agent: 'secrets',          task: 'Scan this git diff for exposed secrets or credentials', code: diff }),
-  ]);
-  const hasBlocking = (reviewResult.analysis?.critical_count ?? 0) > 0
-    || (secResult.analysis?.critical_count ?? 0) > 0
-    || (secretsResult.analysis?.critical_count ?? 0) > 0;
-  const hasWarnings = (reviewResult.analysis?.high_count ?? 0) > 0
-    || (secResult.analysis?.high_count ?? 0) > 0;
-  const verdict = hasBlocking ? 'fail' : hasWarnings ? 'warn' : 'pass';
-  // auto-record per agent so learning accumulates from every scan (diff_review, ci_gate, pr_review)
-  autoRecord('scan', 'reviewer',         reviewResult.analysis?.score ?? Math.round(reviewResult.output.confidence * 100));
-  autoRecord('scan', 'security-scanner', secResult.analysis?.score    ?? Math.round(secResult.output.confidence    * 100));
-  autoRecord('scan', 'secrets', (secretsResult.analysis?.findings?.length ?? 0) === 0 ? 100 : secretsResult.analysis?.score ?? Math.round(secretsResult.output.confidence * 100));
-  return { reviewResult, secResult, secretsResult, verdict };
+function parsePrdIntoTasks(prd: string, plan: AgentPlan, maxTasks: number) {
+  const lines = plan.steps;
+  const tasks = lines.slice(0, maxTasks).map((line, i) => ({
+    id: `task-${i + 1}`,
+    agent: 'coder' as const,
+    task: line,
+    dependencies: i > 0 ? [`task-${i}`] : [],
+  }));
+  return { description: prd, tasks };
 }
 
-function parseLineFromLocation(location?: string): number {
-  if (!location) return 1;
-  const m = location.match(/(?:^|line\s+)(\d+)/i);
-  return m ? parseInt(m[1], 10) : 1;
-}
 
-function mapSeverityToVscode(severity?: string): string {
-  if (severity === 'critical' || severity === 'high') return 'error';
-  if (severity === 'medium') return 'warning';
-  return 'information';
-}
-
-// Auto-learning helper — records a learning_data row from any agent result.
-// Keeps call sites to one line rather than repeating the tier/quality logic.
-// After every 20 outcomes the thresholds are applied automatically.
-function autoRecord(taskType: string, agent: string, quality: number, complexity = 50): void {
-  const tier: 1|2|3 = quality >= 80 ? 1 : quality >= 40 ? 2 : 3;
-  recordOutcome(taskType.slice(0, 50), complexity, tier, agent, quality);
-  try {
-    const count = (getDb().prepare('SELECT COUNT(*) as c FROM learning_data').get() as { c: number }).c;
-    if (count >= 20 && count % 20 === 0) applyLearnedThresholds();
-  } catch { /* never interrupt the caller */ }
-}
-
-// Auto-store helper — writes a knowledge_base entry when a scan produces critical/blocking issues.
-// This is what populates the Memory panel in the VS Code extension automatically.
-function autoStoreCritical(title: string, blockingIssues: string[], projectDir?: string, extraTags: string[] = [], sessionId?: string): void {
-  if (blockingIssues.length === 0) return;
+function autoStoreCritical(title: string, issues: string[], projectDir?: string, tags: string[] = []) {
   storeKnowledge({
-    type: 'decision',
-    title: title.slice(0, 100),
-    content: `Blocking issues:\n${blockingIssues.map(i => `- ${i}`).join('\n')}`,
-    tags: ['critical', 'blocked', ...extraTags],
+    type: 'error',
+    title,
+    content: issues.join('\n'),
+    tags: ['critical', 'failure', ...tags],
     project_dir: projectDir,
-    session_id: sessionId,
     relevance: 1.0,
   });
 }
 
-// ─── Shared Helpers ──────────────────────────────────────────────────────────
 
-// Task-parse helper reused by veto_task_parse and veto_new_feature.
-// Returns the structured plan + plan_id without the MCP response wrapper.
-async function buildTaskPlan(description: string, project_dir?: string, max_tasks = 20): Promise<{
-  plan_id: string;
-  cached: boolean;
-  summary: string;
-  total_tasks: number;
-  total_complexity: number;
-  critical_path: string[];
-  parallelisable_groups: string[][];
-  duration_estimate: string;
-  tasks: Array<{ id: string; title: string; complexity: number; priority: string; depends_on: string[]; suggested_agent: string; estimated_hours: number }>;
-}> {
-  const hash = createHash('sha256').update(description).digest('hex').slice(0, 16);
-  const cached = getTaskPlan(hash);
-  if (cached) return { plan_id: cached.id, cached: true, ...JSON.parse(cached.plan_json) };
-
-  const ctx = project_dir ? buildContextString(project_dir) : '';
-  const planResult = await executeOne({ id: 'task-parse-1', agent: 'task-planner', task: `Parse this project description into a structured task breakdown with dependencies and complexity scores (max ${max_tasks} tasks):\n\n${description}`, context: ctx || undefined, project_dir });
-
-  const agentKeywords: Array<{ keywords: RegExp; agent: string }> = [
-    { keywords: /test|spec|coverage|assert|unit|integration/i,            agent: 'tester' },
-    { keywords: /secur|auth|jwt|oauth|permission|role|encrypt|hash/i,     agent: 'auth' },
-    { keywords: /database|schema|migrat|sql|query|index|table/i,          agent: 'database' },
-    { keywords: /api|endpoint|rest|graphql|route|openapi/i,               agent: 'api' },
-    { keywords: /ui|component|frontend|react|vue|svelte|html|css|style/i, agent: 'frontend' },
-    { keywords: /docker|deploy|ci|cd|pipeline|container|k8s|infra/i,      agent: 'devops' },
-    { keywords: /refactor|clean|restructure|rename|extract/i,             agent: 'refactor' },
-    { keywords: /review|audit|quality|lint|check/i,                       agent: 'reviewer' },
-    { keywords: /debug|fix|bug|error|crash|trace|diagnos/i,               agent: 'debugger' },
-    { keywords: /document|readme|comment|jsdoc|wiki/i,                    agent: 'documentation' },
-    { keywords: /perform|optim|speed|cache|profil|latency/i,              agent: 'performance' },
-    { keywords: /migrat|upgrade|version|port|convert/i,                   agent: 'migration' },
-  ];
-  const pickAgent = (step: string) => { for (const { keywords, agent } of agentKeywords) if (keywords.test(step)) return agent; return 'coder'; };
-  const scoreStep = (step: string) => { const words = step.split(/\s+/).length; const hasComplex = /integrat|architect|design|implement|optim|migrat|refactor/i.test(step); return Math.min(10, Math.min(7, Math.max(2, Math.round(words / 3))) + (hasComplex ? 2 : 0)); };
-  const inferDeps = (step: string, idx: number) => { const lower = step.toLowerCase(); if (/^(deploy|test|release|publish|document)/i.test(step.trim()) && idx > 0) return [`task-${idx}`]; if (/after.{0,30}(setup|init|instal|creat|build)/i.test(lower) && idx > 0) return [`task-${idx}`]; return idx > 0 && /integrat|connect|wire|link/i.test(lower) ? [`task-${idx}`] : []; };
-
-  const steps: string[] = planResult.plan?.steps ?? [];
-  const tasks = steps.slice(0, max_tasks).map((step, i) => {
-    const complexity = scoreStep(step);
-    const agent = pickAgent(step);
-    const priority = i === 0 ? 'critical' : complexity >= 7 ? 'high' : complexity >= 5 ? 'medium' : 'low';
-    return { id: `task-${i + 1}`, title: step, complexity, priority, depends_on: inferDeps(step, i), suggested_agent: agent, estimated_hours: complexity <= 3 ? 1 : complexity <= 6 ? 2 : complexity <= 8 ? 4 : 8 };
+async function buildTaskPlan(description: string, project_dir?: string, max_tasks = 10) {
+  const result = await executeOne({
+    id: 'planner-1',
+    agent: 'task-planner',
+    task: description,
+    project_dir,
   });
-
-  const plan = { summary: description.slice(0, 100), total_tasks: tasks.length, total_complexity: tasks.reduce((s, t) => s + t.complexity, 0), critical_path: tasks.map(t => t.id), parallelisable_groups: tasks.length > 2 ? [tasks.slice(1, Math.ceil(tasks.length / 2)).map(t => t.id)] : [], tasks, duration_estimate: planResult.plan?.duration_estimate ?? 'unknown' };
-  autoRecord(description, 'task-planner', Math.round(planResult.output.confidence * 100));
-  const plan_id = saveTaskPlan(JSON.stringify(plan), hash, project_dir);
-  return { plan_id, cached: false, ...plan };
+  return parsePrdIntoTasks(description, result.plan!, max_tasks);
 }
 
-// ─── Tool Handlers ────────────────────────────────────────────────────────────
+// ─── Shared Scan Utility ──────────────────────────────────────────────────────
+
+async function runTripleScan(diff: string, context: string, llm_backed = true, agent_outputs?: Record<string, unknown>) {
+  const tasks: AgentTask[] = [
+    { id: 'scan-review',  agent: 'reviewer',         task: 'Review this git diff for code quality issues', code: diff, context, llm_backed },
+    { id: 'scan-sec',     agent: 'security-scanner', task: 'Scan this git diff for security vulnerabilities', code: diff, context, llm_backed },
+    { id: 'scan-secrets', agent: 'secrets',          task: 'Scan this git diff for exposed secrets or credentials', code: diff, llm_backed },
+  ];
+
+  if (llm_backed && !agent_outputs) {
+    const results = await Promise.all(tasks.map(t => executeOne(t)));
+    const allLlm = results.every(r => r.llm_backed && !r.error);
+    if (allLlm) return finalizeTripleScan(results[0], results[1], results[2]);
+    const prompts = tasks.map(t => buildAgenticAgentPrompt(t)).filter((p): p is AgenticAgentPrompt => p !== null);
+    return {
+      mode: 'agentic_loop' as const,
+      instruction: 'Reason as each agent below using their provided roles and schemas. Return a JSON object mapping task IDs to agent responses.',
+      prompts,
+    };
+  }
+  const results = (llm_backed && agent_outputs) ? parseAgenticAgentResponses(tasks, agent_outputs) : await Promise.all(tasks.map(t => executeOne(t)));
+  return finalizeTripleScan(results[0], results[1], results[2]);
+}
+
+function finalizeTripleScan(reviewResult: AgentResult, secResult: AgentResult, secretsResult: AgentResult) {
+  const hasBlocking = (reviewResult.analysis?.critical_count ?? 0) > 0 || (secResult.analysis?.critical_count ?? 0) > 0 || (secretsResult.analysis?.critical_count ?? 0) > 0;
+  const hasWarnings = (reviewResult.analysis?.high_count ?? 0) > 0 || (secResult.analysis?.high_count ?? 0) > 0;
+  const verdict = hasBlocking ? 'fail' : hasWarnings ? 'warn' : 'pass';
+  recordOutcome('scan', 50, 2, 'reviewer', reviewResult.analysis?.score ?? Math.round(reviewResult.output.confidence * 100));
+  recordOutcome('scan', 50, 2, 'security-scanner', secResult.analysis?.score ?? Math.round(secResult.output.confidence * 100));
+  recordOutcome('scan', 50, 2, 'secrets', (secretsResult.analysis?.findings?.length ?? 0) === 0 ? 100 : secretsResult.analysis?.score ?? Math.round(secretsResult.output.confidence * 100));
+  return { reviewResult, secResult, secretsResult, verdict };
+}
+
+/** Helper to handle 2-phase agentic loop for worker agents */
+async function handleAgenticWorker(name: string, args: any, agentType: WorkerAgentType, defaultTask: string) {
+  const llmResponse = args?.agent_response;
+  const projectDir = args?.project_dir ? String(args.project_dir) : undefined;
+  const task: AgentTask = { id: name + '-1', agent: agentType, task: args?.task ? String(args.task) : defaultTask, code: args?.code ? String(args.code) : undefined, context: args?.context ? String(args.context) : undefined, project_dir: projectDir, llm_backed: true };
+
+  if (llmResponse && typeof llmResponse === 'object') {
+    const results = parseAgenticAgentResponses([task], { [task.id]: llmResponse });
+    const r = results[0];
+    return { content: [{ type: 'text', text: JSON.stringify(r.analysis || r.plan || r.output, null, 2) }] };
+  }
+  try {
+    const result = await executeOne(task);
+    if (result.llm_backed && !result.error) return { content: [{ type: 'text', text: JSON.stringify(result.analysis || result.plan || result.output, null, 2) }] };
+  } catch { /* fallback */ }
+
+  const prompt = buildAgenticAgentPrompt(task);
+  return { content: [{ type: 'text', text: JSON.stringify({ llm_backed: false, llm_upgrade: { available: true, instruction: `Reason as the ${agentType} specialist and return the JSON response in the agent_response field.`, prompt } }, null, 2) }] };
+}
+
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
@@ -375,6 +285,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const response = await (async () => {
       switch (name) {
     case 'veto_status': {
+      const args = (request.params.arguments || {}) as any;
       const statusTokenCount = typeof args?.token_count === 'number' ? args.token_count : null;
       const statusPlatform = args?.platform ? String(args.platform) : 'claude';
       const statusModel = args?.model ? String(args.model) : undefined;
@@ -430,6 +341,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_autosave_status': {
+      const args = (request.params.arguments || {}) as any;
       const liveUsage = getContextUsage();
       return {
         content: [{
@@ -449,6 +361,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_session_save': {
+      const args = (request.params.arguments || {}) as any;
       const sessionProjectDir = args?.project_dir ? String(args.project_dir) : undefined;
       if (sessionProjectDir) activeProjectDir = sessionProjectDir;
       const savePlatform = args?.platform ? String(args.platform) : 'claude';
@@ -563,6 +476,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_session_restore': {
+      const args = (request.params.arguments || {}) as any;
       const session_id = String(args?.session_id ?? '');
       const resuming_as = args?.resuming_as ? String(args.resuming_as) : undefined;
       const result = restoreSession(session_id, resuming_as);
@@ -625,6 +539,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_sessions_list': {
+      const args = (request.params.arguments || {}) as any;
       const limit = Math.min(typeof args?.limit === 'number' ? args.limit : 10, 50);
       const query = args?.query ? String(args.query).trim() : undefined;
       const sessions = listSessions(limit, query);
@@ -656,6 +571,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_route_task': {
+      const args = (request.params.arguments || {}) as any;
       const routeTaskStr = String(args?.task ?? '');
       const fileExt = args?.file_ext ? String(args.file_ext) : undefined;
       const result = routeTask(routeTaskStr, {
@@ -679,6 +595,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_rate_status': {
+      const args = (request.params.arguments || {}) as any;
       return {
         content: [
           {
@@ -690,6 +607,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_council_debate': {
+      const args = (request.params.arguments || {}) as any;
       const task = String(args?.task ?? '').trim();
       if (!task) {
         return {
@@ -836,50 +754,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_agent_plan': {
-      const agentType = String(args?.agent ?? '') as WorkerAgentType;
+      const args = (request.params.arguments || {}) as any;
+      const agentType = String(args?.agent ?? '') as any;
       const task = String(args?.task ?? '').trim();
-      if (!task) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'task is required.' }) }], isError: true };
-      }
-      const result = await executeOne({
-        id: 'plan-1',
-        agent: agentType,
-        task,
-        context: args?.context ? String(args.context) : undefined,
-        project_dir: args?.project_dir ? String(args.project_dir) : undefined,
-        llm_backed: args?.llm_backed === true,
-      });
-      if (result.error) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
-      }
-      autoRecord(task, agentType, Math.round(result.output.confidence * 100));
-      return { content: [{ type: 'text', text: JSON.stringify({ ...(result.plan ?? result.analysis), output: result.output }, null, 2) }] };
+      return await handleAgenticWorker('veto_agent_plan', args, agentType, task);
     }
 
     case 'veto_code_review': {
-      const code = String(args?.code ?? '').trim();
-      if (!code) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'code is required.' }) }], isError: true };
-      }
-      const reviewFilePath = args?.file_path ? String(args.file_path) : undefined;
-      const result = await executeOne({ id: 'review-1', agent: 'reviewer', task: 'review this code', code, context: args?.context ? String(args.context) : undefined });
-      if (result.error) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
-      }
-      autoRecord('code review', 'reviewer', result.analysis?.score ?? Math.round(result.output.confidence * 100));
-      if (reviewFilePath && result.analysis?.findings) {
-        storeScanDiagnostics(reviewFilePath, result.analysis.findings.map((f: { location?: string; description?: string; severity?: string }) => ({
-          line: parseLineFromLocation(f.location),
-          message: f.description ?? '',
-          severity: mapSeverityToVscode(f.severity),
-        })), 'code-review');
-      } else if (reviewFilePath) {
-        clearScanDiagnostics(reviewFilePath);
-      }
-      return { content: [{ type: 'text', text: JSON.stringify(result.analysis, null, 2) }] };
+      const args = (request.params.arguments || {}) as any;
+      return await handleAgenticWorker('veto_code_review', args, 'reviewer', 'Review the following code.');
     }
 
     case 'veto_diff_review': {
+      const args = (request.params.arguments || {}) as any;
       const projectDir = args?.project_dir ? String(args.project_dir) : undefined;
       const userContext = args?.context ? String(args.context) : undefined;
 
@@ -907,7 +794,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const diffChunks = diff.split(/^diff --git /m).filter(Boolean);
 
       const context = buildContextString(projectDir, userContext);
-      const { reviewResult, secResult, secretsResult, verdict } = await runTripleScan(diff, context);
+      const scanResult = await runTripleScan(diff, context, true, args?.agent_outputs as any);
+      if ('mode' in scanResult && scanResult.mode === 'agentic_loop') return { content: [{ type: 'text', text: JSON.stringify(scanResult, null, 2) }] };
+      if ('mode' in scanResult) return { content: [{ type: 'text', text: JSON.stringify(scanResult) }] };
+      const { reviewResult, secResult, secretsResult, verdict } = scanResult as any;
       const verdictEmoji = verdict === 'pass' ? '✅ PASS' : verdict === 'warn' ? '⚠️  WARN' : '❌ FAIL';
 
       // Per-file finding counts (approximate from line refs)
@@ -965,54 +855,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_security_scan': {
-      const code = String(args?.code ?? '').trim();
-      if (!code) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'code is required.' }) }], isError: true };
-      }
-      const secFilePath = args?.file_path ? String(args.file_path) : undefined;
-      const result = await executeOne({ id: 'scan-1', agent: 'security-scanner', task: 'scan this code for security issues', code, context: args?.context ? String(args.context) : undefined });
-      if (result.error) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
-      }
-      autoRecord('security scan', 'security-scanner', result.analysis?.score ?? Math.round(result.output.confidence * 100));
-      if (secFilePath && result.analysis?.findings) {
-        storeScanDiagnostics(secFilePath, result.analysis.findings.map((f: { location?: string; description?: string; severity?: string }) => ({
-          line: parseLineFromLocation(f.location),
-          message: f.description ?? '',
-          severity: mapSeverityToVscode(f.severity),
-        })), 'security');
-      } else if (secFilePath) {
-        clearScanDiagnostics(secFilePath);
-      }
-      return { content: [{ type: 'text', text: JSON.stringify(result.analysis, null, 2) }] };
+      const args = (request.params.arguments || {}) as any;
+      return await handleAgenticWorker('veto_security_scan', args, 'security-scanner', 'Scan the following code for vulnerabilities.');
     }
 
     case 'veto_secrets_scan': {
-      const text = String(args?.text ?? '').trim();
-      if (!text) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'text is required.' }) }], isError: true };
-      }
-      const secretsFilePath = args?.file_path ? String(args.file_path) : undefined;
-      const result = await executeOne({ id: 'secrets-1', agent: 'secrets', task: 'scan for exposed credentials', code: text });
-      if (result.error) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
-      }
-      autoRecord('secrets scan', 'secrets', (result.analysis?.findings?.length ?? 0) === 0 ? 100 : result.analysis?.score ?? Math.round(result.output.confidence * 100));
-      if (secretsFilePath && result.analysis?.findings) {
-        storeScanDiagnostics(secretsFilePath, result.analysis.findings.map((f: { location?: string; description?: string; severity?: string }) => ({
-          line: parseLineFromLocation(f.location),
-          message: f.description ?? '',
-          severity: mapSeverityToVscode(f.severity),
-        })), 'secrets');
-      } else if (secretsFilePath) {
-        clearScanDiagnostics(secretsFilePath);
-      }
-      return { content: [{ type: 'text', text: JSON.stringify(result.analysis, null, 2) }] };
+      const args = (request.params.arguments || {}) as any;
+      return await handleAgenticWorker('veto_secrets_scan', args, 'secrets', 'Scan for exposed secrets.');
     }
 
     case 'veto_execute_parallel': {
+      const args = (request.params.arguments || {}) as any;
       const rawTasks = Array.isArray(args?.tasks) ? args.tasks : [];
-      const llmBacked = args?.llm_backed === true;
+      const llmBacked = args?.llm_backed !== false;
       const agentOutputs = args?.agent_outputs as Record<string, unknown> | undefined;
 
       if (rawTasks.length === 0) {
@@ -1105,6 +960,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_memory_store': {
+      const args = (request.params.arguments || {}) as any;
       const title = String(args?.title ?? '').trim();
       const content = String(args?.content ?? '').trim();
       if (!title || !content) {
@@ -1123,6 +979,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_memory_search': {
+      const args = (request.params.arguments || {}) as any;
       const results = searchKnowledge({
         query: args?.query ? String(args.query) : undefined,
         type: args?.type ? String(args.type) as import('./memory/schema.js').KnowledgeType : undefined,
@@ -1151,6 +1008,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_memory_delete': {
+      const args = (request.params.arguments || {}) as any;
       const id = String(args?.id ?? '').trim();
       if (!id) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'id is required.' }) }], isError: true };
@@ -1160,6 +1018,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_project_map_update': {
+      const args = (request.params.arguments || {}) as any;
       const project_dir = String(args?.project_dir ?? '').trim();
       if (!project_dir) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
@@ -1203,6 +1062,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_project_map_get': {
+      const args = (request.params.arguments || {}) as any;
       const project_dir = String(args?.project_dir ?? '').trim();
       if (!project_dir) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
@@ -1227,6 +1087,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_pattern_store': {
+      const args = (request.params.arguments || {}) as any;
       const pattern_key = String(args?.pattern_key ?? '').trim();
       const pattern_val = String(args?.pattern_val ?? '').trim();
       if (!pattern_key || !pattern_val) {
@@ -1241,6 +1102,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_patterns_list': {
+      const args = (request.params.arguments || {}) as any;
       const prefix = args?.prefix ? String(args.prefix) : undefined;
       const limit = typeof args?.limit === 'number' ? args.limit : 20;
       const patterns = getPatterns(prefix, limit);
@@ -1262,6 +1124,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_handoff': {
+      const args = (request.params.arguments || {}) as any;
       const summary = String(args?.summary ?? '').trim();
       const context = String(args?.context ?? '').trim();
       if (!summary || !context) {
@@ -1292,6 +1155,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_continue': {
+      const args = (request.params.arguments || {}) as any;
       const resuming_as = args?.resuming_as ? String(args.resuming_as) : undefined;
       const result = continueSession(args?.session_id ? String(args.session_id) : undefined, resuming_as);
       if (!result.found) {
@@ -1318,6 +1182,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_platform_setup': {
+      const args = (request.params.arguments || {}) as any;
       const platform = String(args?.platform ?? '').trim() as SetupPlatform;
       const vetoServerPath = String(args?.veto_server_path ?? '').trim();
       if (!platform || !vetoServerPath) {
@@ -1328,6 +1193,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_record_outcome': {
+      const args = (request.params.arguments || {}) as any;
       const task_type = String(args?.task_type ?? '').trim();
       const complexity = typeof args?.complexity === 'number' ? args.complexity : 50;
       const model_tier = (typeof args?.model_tier === 'number' ? args.model_tier : 2) as 1 | 2 | 3;
@@ -1341,6 +1207,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_learning_stats': {
+      const args = (request.params.arguments || {}) as any;
       const includeAgentStats = args?.include_agent_stats !== false;
       const includeTaskTypes = args?.include_task_types === true;
       const includeCouncil = args?.include_council_insights === true;
@@ -1377,11 +1244,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_learning_apply': {
+      const args = (request.params.arguments || {}) as any;
       const result = applyLearnedThresholds();
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
 
     case 'veto_memory_export': {
+      const args = (request.params.arguments || {}) as any;
       const format = args?.format === 'markdown' ? 'markdown' : 'json';
       if (format === 'markdown') {
         const projectDir = args?.project_dir ? String(args.project_dir) : undefined;
@@ -1394,6 +1263,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_memory_import': {
+      const args = (request.params.arguments || {}) as any;
       const format = args?.format === 'markdown' ? 'markdown' : 'json';
       if (format === 'markdown') {
         const inputPath = String(args?.input_path ?? '').trim();
@@ -1406,6 +1276,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_watch': {
+      const args = (request.params.arguments || {}) as any;
       const dir = String(args?.project_dir ?? '').trim();
       if (!dir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
       const watch_id = startWatch(dir);
@@ -1413,6 +1284,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_watch_poll': {
+      const args = (request.params.arguments || {}) as any;
       const watch_id = String(args?.watch_id ?? '').trim();
       if (!watch_id) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'watch_id is required.' }) }], isError: true };
       const result = pollWatch(watch_id);
@@ -1421,6 +1293,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_watch_stop': {
+      const args = (request.params.arguments || {}) as any;
       const watch_id = String(args?.watch_id ?? '').trim();
       if (!watch_id) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'watch_id is required.' }) }], isError: true };
       const stopped = stopWatch(watch_id);
@@ -1428,6 +1301,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_workflow': {
+      const args = (request.params.arguments || {}) as any;
       const rawSteps = Array.isArray(args?.steps) ? args.steps : [];
       if (rawSteps.length === 0) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'steps array is required and must not be empty.' }) }], isError: true };
       const steps: PipelineStep[] = rawSteps.map((s: Record<string, unknown>) => ({
@@ -1449,9 +1323,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         mode,
         async (question: string) => {
           try {
-            const resp = await server.createMessage({
-              messages: [{ role: 'user', content: { type: 'text', text: question } }]
-            });
+            const resp = await server.createMessage({ messages: [{ role: 'user', content: { type: 'text', text: question } }], maxTokens: 200 } as any);
             return resp.content.type === 'text' ? resp.content.text : '';
           } catch {
             return ''; // sampling not supported by client
@@ -1472,62 +1344,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_explain': {
-      const filePath = args?.file_path ? String(args.file_path).trim() : '';
-      const rawText  = args?.text      ? String(args.text).trim()      : '';
-      const depth    = String(args?.depth ?? 'overview');
-      const userContext = args?.context ? String(args.context) : undefined;
-
-      if (!filePath && !rawText) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'Provide file_path or text.' }) }], isError: true };
-      }
-
-      let fileContent: string;
-      let agent: WorkerAgentType;
-      let taskLabel: string;
-
-      if (rawText) {
-        fileContent = rawText;
-        // Auto-detect agent from content: error messages → debugger, stack traces → debugger, code → coder
-        const looksLikeError = /error|exception|traceback|stack trace|at \w+\.|TypeError|SyntaxError|ENOENT/i.test(rawText);
-        agent = looksLikeError ? 'debugger' : 'coder';
-        taskLabel = looksLikeError ? 'raw error/stack trace' : 'raw text input';
-      } else {
-        try {
-          fileContent = readFileSync(filePath, 'utf8');
-        } catch {
-          return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Cannot read file: ${filePath}` }) }], isError: true };
-        }
-        const ext = extname(filePath).toLowerCase();
-        const name_ = basename(filePath).toLowerCase();
-        agent = 'coder';
-        if (['.tsx', '.jsx', '.vue', '.svelte'].includes(ext)) agent = 'frontend';
-        else if (['.sql', '.prisma'].includes(ext) || name_.includes('schema')) agent = 'database';
-        else if (/\.(test|spec)\.(ts|js|tsx|jsx)$/.test(name_)) agent = 'tester';
-        else if (['.yaml', '.yml', '.toml', '.dockerfile'].includes(ext) || name_ === 'dockerfile') agent = 'devops';
-        else if (name_.includes('auth') || name_.includes('login') || name_.includes('jwt') || name_.includes('token')) agent = 'auth';
-        else if (name_.includes('security') || name_.includes('crypt')) agent = 'security-scanner';
-        taskLabel = `${ext} file: ${basename(filePath)}`;
-      }
-
-      const task = `Explain this ${taskLabel} at ${depth} depth.${userContext ? ` Focus: ${userContext}` : ''}`;
-      const result = await executeOne({ id: 'explain-1', agent, task, code: fileContent, project_dir: undefined });
-      autoRecord(`explain ${taskLabel}`, agent, Math.round(result.output.confidence * 100));
-      return {
-        content: [{ type: 'text', text: JSON.stringify({
-          source: filePath || 'raw text', agent_used: agent, depth,
-          explanation: result.plan ?? result.analysis,
-          output: result.output,
-        }, null, 2) }],
-      };
+      const args = (request.params.arguments || {}) as any;
+      return await handleAgenticWorker('veto_explain', args as any, args?.file_path ? 'coder' : 'debugger' as any, String(args?.text || 'Explain this.'));
     }
 
     case 'veto_plugins': {
+      const args = (request.params.arguments || {}) as any;
       return { content: [{ type: 'text', text: JSON.stringify({ plugins: listPlugins(), plugin_dir: `${process.env.HOME ?? process.env.USERPROFILE}/.veto/agents/`, instructions: 'Drop a .js file exporting plan(task, context?) to register a custom agent.' }, null, 2) }] };
     }
 
     // ── Phase 13: Developer Intelligence ──────────────────────────────────────
 
     case 'veto_docs_fetch': {
+      const args = (request.params.arguments || {}) as any;
       const package_name = String(args?.package_name ?? '').trim();
       const ecosystem = String(args?.ecosystem ?? 'npm') as 'npm' | 'pypi' | 'crates';
       const version = args?.version ? String(args.version) : undefined;
@@ -1545,6 +1374,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_context_status': {
+      const args = (request.params.arguments || {}) as any;
       const session_id = String(args?.session_id ?? '');
       if (!session_id) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'session_id is required.' }) }], isError: true };
@@ -1556,11 +1386,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...status }, null, 2) }] };
     }
 
-    case 'veto_task_parse': {
+        case 'veto_task_parse': {
+      const args = (request.params.arguments || {}) as any;
       const description = String(args?.description ?? '').trim();
       const project_dir = args?.project_dir ? String(args.project_dir) : undefined;
       const max_tasks = typeof args?.max_tasks === 'number' ? Math.min(args.max_tasks, 50) : 20;
       if (!description) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'description is required.' }) }], isError: true };
+      
+      const agentResponse = args?.agent_responses?.planner;
+      if (agentResponse) {
+         const results = parseAgenticAgentResponses([{ id: 'planner', agent: 'task-planner', task: description }], { planner: agentResponse });
+         const r = results[0];
+         if (r.plan) {
+            const plan = parsePrdIntoTasks(description, r.plan, max_tasks);
+            saveTaskPlan(description, JSON.stringify(plan));
+            return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...plan }, null, 2) }] };
+         }
+      }
+
+      // Try sampling
+      try {
+        const result = await executeOne({ id: 'planner', agent: 'task-planner', task: description, project_dir, llm_backed: true });
+        if (result.llm_backed && result.plan && !result.error) {
+           const plan = parsePrdIntoTasks(description, result.plan, max_tasks);
+           saveTaskPlan(description, JSON.stringify(plan));
+           return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...plan }, null, 2) }] };
+        }
+        if (result.llm_upgrade) {
+           return { content: [{ type: 'text', text: JSON.stringify({ llm_backed: false, llm_upgrade: result.llm_upgrade }, null, 2) }] };
+        }
+      } catch { /* fallback */ }
+
       const plan = await buildTaskPlan(description, project_dir, max_tasks);
       return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...plan }, null, 2) }] };
     }
@@ -1568,6 +1424,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // ── Phase 14: Observability & Safety ──────────────────────────────────────
 
     case 'veto_usage_status': {
+      const args = (request.params.arguments || {}) as any;
       if (args?.set_budget && typeof args.set_budget === 'object') {
         const b = args.set_budget as Record<string, unknown>;
         const current = getConfig().dailyTokenBudget;
@@ -1613,6 +1470,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_audit_log': {
+      const args = (request.params.arguments || {}) as any;
       const events = getAuditLog({
         session_id: args?.session_id ? String(args.session_id) : undefined,
         verdict:    args?.verdict    ? String(args.verdict)    : undefined,
@@ -1623,6 +1481,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_health': {
+      const args = (request.params.arguments || {}) as any;
       const stats = getHealthStats();
       let db_size_bytes = 0;
       try { db_size_bytes = statSync(getDbPath()).size; } catch { /* db may not exist */ }
@@ -1653,6 +1512,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // ── Phase 15: CI/CD & Distribution ────────────────────────────────────────
 
     case 'veto_ci_gate': {
+      const args = (request.params.arguments || {}) as any;
       const project_dir = String(args?.project_dir ?? '').trim();
       const diff_input  = args?.diff    ? String(args.diff)    : undefined;
       const context     = args?.context ? String(args.context) : undefined;
@@ -1677,7 +1537,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const projectCtx = (() => { try { return buildContextString(project_dir); } catch { return ''; } })();
       const fullContext = [context, projectCtx].filter(Boolean).join('\n\n');
 
-      const { reviewResult: codeResult, secResult, secretsResult, verdict } = await runTripleScan(diff, fullContext);
+      const scanResult = await runTripleScan(diff, fullContext);
+      if ('mode' in scanResult) return { content: [{ type: 'text', text: JSON.stringify(scanResult, null, 2) }] };
+      const { reviewResult: codeResult, secResult, secretsResult, verdict } = scanResult;
       const exit_code = verdict === 'fail' || (verdict === 'warn' && fail_on === 'warn') ? 1 : 0;
 
       const codeScore    = codeResult.analysis?.score ?? Math.round((codeResult.output?.confidence ?? 0.8) * 100);
@@ -1722,6 +1584,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_pr_review': {
+      const args = (request.params.arguments || {}) as any;
       const pr_url  = String(args?.pr_url ?? '').trim();
       const context = args?.context ? String(args.context) : '';
       const fail_on = args?.fail_on === 'warn' ? 'warn' : 'fail';
@@ -1744,7 +1607,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         context,
       ].filter(Boolean).join('\n');
 
-      const { reviewResult, secResult, secretsResult, verdict } = await runTripleScan(diff, prContext);
+      const scanResult = await runTripleScan(diff, prContext);
+      if ('mode' in scanResult) return { content: [{ type: 'text', text: JSON.stringify(scanResult, null, 2) }] };
+      const { reviewResult, secResult, secretsResult, verdict } = scanResult;
       const exit_code = verdict === 'fail' || (verdict === 'warn' && fail_on === 'warn') ? 1 : 0;
 
       const codeScore    = reviewResult.analysis?.score ?? Math.round((reviewResult.output?.confidence ?? 0.8) * 100);
@@ -1798,6 +1663,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // ── Phase 16: Workspace Discovery & Summarization ─────────────────────────
 
     case 'veto_discover': {
+      const args = (request.params.arguments || {}) as any;
       const discoverDir = String(args?.project_dir ?? '').trim();
       const discoverDepth = (['quick', 'standard', 'full'].includes(String(args?.depth ?? '')))
         ? String(args!.depth) as 'quick' | 'standard' | 'full'
@@ -1856,77 +1722,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_summarize': {
-      const sumFilePath   = args?.file_path   ? String(args.file_path).trim()   : undefined;
-      const sumProjectDir = args?.project_dir ? String(args.project_dir).trim() : undefined;
-      const sumFocus      = args?.focus        ? String(args.focus)               : undefined;
-      const sumFormat     = args?.format === 'detailed' ? 'detailed' : 'brief';
-
-      if (!sumFilePath && !sumProjectDir) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'Provide project_dir or file_path.' }) }], isError: true };
-      }
-
-      const sumStart = Date.now();
-
-      // ── File summary ───────────────────────────────────────────────────────
-      if (sumFilePath) {
-        let fileContent: string;
-        try { fileContent = readFileSync(sumFilePath, 'utf8'); }
-        catch { return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Cannot read file: ${sumFilePath}` }) }], isError: true }; }
-
-        const ext = extname(sumFilePath).toLowerCase();
-        const name_ = basename(sumFilePath).toLowerCase();
-        let agent: WorkerAgentType = 'documentation';
-        if (['.tsx', '.jsx', '.vue', '.svelte'].includes(ext)) agent = 'frontend';
-        else if (['.sql', '.prisma'].includes(ext) || name_.includes('schema')) agent = 'database';
-        else if (/\.(test|spec)\.(ts|js)$/.test(name_)) agent = 'tester';
-        else if (['.yaml', '.yml', '.dockerfile'].includes(ext) || name_ === 'dockerfile') agent = 'devops';
-        else if (name_.includes('auth') || name_.includes('jwt')) agent = 'auth';
-
-        const focusNote = sumFocus ? ` Focus on: ${sumFocus}.` : '';
-        const depthNote = sumFormat === 'detailed' ? 'Write paragraph-level prose.' : 'Return 4–6 bullet points only.';
-        const task = `Summarize this file concisely for a developer who has never seen it.${focusNote} ${depthNote} File: ${basename(sumFilePath)}`;
-        const r = await executeOne({ id: 'sum-file', agent, task, code: fileContent.slice(0, 8000) });
-        autoRecord(`summarize ${basename(sumFilePath)}`, agent, Math.round(r.output.confidence * 100));
-
-        return { content: [{ type: 'text', text: JSON.stringify({
-          success: true, subject: 'file', path: sumFilePath, format: sumFormat,
-          summary: r.plan ?? r.analysis ?? r.output,
-          agent_used: agent, duration_ms: Date.now() - sumStart,
-        }, null, 2) }] };
-      }
-
-      // ── Project / directory summary ────────────────────────────────────────
-      const discResult = discoverProject(sumProjectDir!, 'standard');
-      const ctx = [
-        `Project: ${sumProjectDir}`,
-        `Stack: ${discResult.tech_stack.join(', ') || 'unknown'}`,
-        `Ecosystems: ${JSON.stringify(discResult.ecosystems)}`,
-        `Key files: ${discResult.key_files.join(', ')}`,
-        `Total files: ${discResult.total_files}`,
-        `Git branch: ${discResult.git.branch ?? 'none'}, commit: ${discResult.git.commit ?? 'none'}`,
-        discResult.structure.length > 0 ? `\nFile tree (top 60 lines):\n${discResult.structure.slice(0, 60).join('\n')}` : '',
-      ].filter(Boolean).join('\n');
-
-      const focusNote = sumFocus ? ` Focus especially on: ${sumFocus}.` : '';
-      const depthNote = sumFormat === 'detailed' ? 'Write paragraph-level prose with sections.' : 'Return 5–7 bullet points that capture the essence.';
-      const task = `You are a senior engineer briefing a colleague on this codebase.${focusNote} ${depthNote} Be concise and precise — no filler.`;
-
-      const r = await executeOne({ id: 'sum-proj', agent: 'project-mapper', task, context: ctx });
-      autoRecord('summarize project', 'project-mapper', Math.round(r.output.confidence * 100));
-
-      return { content: [{ type: 'text', text: JSON.stringify({
-        success: true, subject: 'project', path: sumProjectDir, format: sumFormat,
-        tech_stack: discResult.tech_stack,
-        ecosystems: discResult.ecosystems,
-        key_files: discResult.key_files,
-        total_files: discResult.total_files,
-        git: discResult.git,
-        summary: r.plan ?? r.analysis ?? r.output,
-        agent_used: 'project-mapper', duration_ms: Date.now() - sumStart,
-      }, null, 2) }] };
+      const args = (request.params.arguments || {}) as any;
+      return await handleAgenticWorker('veto_summarize', args, 'documentation', 'Summarize this project/file.');
     }
 
     case 'veto_benchmark': {
+      const args = (request.params.arguments || {}) as any;
       const task       = String(args?.task       ?? '');
       const approachA  = String(args?.approach_a ?? '');
       const approachB  = String(args?.approach_b ?? '');
@@ -1983,8 +1784,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // Auto-record both debates
       const qMap: Record<string, number> = { GREEN: 90, YELLOW: 60, RED: 20, DEADLOCK: 50 };
-      autoRecord('benchmark', 'council', qMap[debateA.final_verdict] ?? 50);
-      autoRecord('benchmark', 'council', qMap[debateB.final_verdict] ?? 50);
+      recordOutcome('benchmark', 50, 2, 'council', qMap[debateA.final_verdict] ?? 50);
+      recordOutcome('benchmark', 50, 2, 'council', qMap[debateB.final_verdict] ?? 50);
 
       return { content: [{ type: 'text', text: JSON.stringify({
         winner,
@@ -2018,11 +1819,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // ── Part 4: New Features ───────────────────────────────────────────────────
 
     case 'veto_metrics': {
+      const args = (request.params.arguments || {}) as any;
       const metrics = getMetrics();
       return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...metrics }, null, 2) }] };
     }
 
     case 'veto_git_blame': {
+      const args = (request.params.arguments || {}) as any;
       const blameDir  = args?.project_dir ? String(args.project_dir).trim() : '';
       const blameFile = args?.file_path   ? String(args.file_path).trim()   : '';
       const blameTarget = blameFile || blameDir;
@@ -2066,6 +1869,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_changelog': {
+      const args = (request.params.arguments || {}) as any;
       const changelogDir = args?.project_dir ? String(args.project_dir).trim() : activeProjectDir ?? process.cwd();
       const maxEntries   = typeof args?.max_entries === 'number' ? Math.min(args.max_entries, 200) : 50;
 
@@ -2118,7 +1922,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     // ── Named Pipelines (Phase 4.2) ──────────────────────────────────────────────
 
-    case 'veto_full_review': {
+        case 'veto_full_review': {
+      const args = (request.params.arguments || {}) as any;
       const projectDir = args?.project_dir ? String(args.project_dir) : undefined;
       const userContext = args?.context ? String(args.context) : undefined;
 
@@ -2127,54 +1932,59 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         try {
           diff = execSyncTop('git diff HEAD --no-color', { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
           if (!diff) diff = execSyncTop('git diff --cached --no-color', { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
-        } catch { /* not a git repo */ }
+        } catch { /* ignore */ }
       }
-      if (!diff) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No diff provided and no git changes detected. Pass diff or point to a project_dir with uncommitted changes.' }) }], isError: true };
+      if (!diff) return { content: [{ type: 'text', text: 'No diff provided and git diff failed. Provide a diff or project_dir.' }], isError: true };
 
       const changedFiles = [...diff.matchAll(/^diff --git a\/.+ b\/(.+)$/gm)].map(m => m[1]);
       const context = buildContextString(projectDir, userContext);
 
-      const [{ reviewResult, secResult, secretsResult, verdict: scanVerdict }, qualityResult] = await Promise.all([
-        runTripleScan(diff, context),
+      const [scanResult, qualityResult] = await Promise.all([
+        runTripleScan(diff, context) as any,
         executeOne({ id: 'quality-1', agent: 'code-quality', task: 'Assess overall code quality and maintainability of these changes', code: diff.slice(0, 8000), context }),
       ]);
 
-      const qualityScore = Math.round(qualityResult.output.confidence * 100);
-      const verdict = (scanVerdict === 'fail' || qualityScore < 40) ? 'fail'
-                    : (scanVerdict === 'warn' || qualityScore < 70) ? 'warn'
-                    : 'pass';
-      const verdictEmoji = verdict === 'pass' ? '✅ PASS' : verdict === 'warn' ? '⚠️  WARN' : '❌ FAIL';
+      if ('mode' in scanResult) return { content: [{ type: 'text', text: JSON.stringify(scanResult, null, 2) }] };
+      const { reviewResult, secResult, secretsResult, verdict: scanVerdict } = scanResult;
 
+      const qualityScore = qualityResult.analysis?.score ?? Math.round(qualityResult.output.confidence * 100);
+      const verdict = (scanVerdict === 'fail' || qualityScore < 40) ? 'fail'
+                    : (scanVerdict === 'warn' || qualityScore < 70) ? 'warn' : 'pass';
+
+      const issues: string[] = [];
       if (verdict === 'fail') {
-        const issues: string[] = [];
         if ((reviewResult.analysis?.critical_count ?? 0) > 0) issues.push(`Code: ${reviewResult.analysis?.summary ?? 'critical issues found'}`);
         if ((secResult.analysis?.critical_count ?? 0) > 0) issues.push(`Security: ${secResult.analysis?.summary ?? 'vulnerabilities detected'}`);
         if ((secretsResult.analysis?.findings?.length ?? 0) > 0) issues.push('Secrets: exposed credentials detected');
+        if (qualityScore < 40) issues.push(`Quality: Score ${qualityScore}/100 is below the critical threshold`);
+      }
+
+      if (issues.length > 0) {
         autoStoreCritical(`Full review failed: ${changedFiles.slice(0, 2).join(', ')}`, issues, projectDir, ['full-review']);
       }
-      autoRecord('full-review', 'code-quality', qualityScore);
+
+      recordOutcome('full-review', 50, 2, 'code-quality', qualityScore);
 
       return { content: [{ type: 'text', text: JSON.stringify({
-        pipeline: 'full_review',
         verdict,
-        verdict_label: verdictEmoji,
-        files_changed: changedFiles.length,
-        files: changedFiles,
-        code_review: { score: reviewResult.analysis?.score ?? null, verdict: reviewResult.analysis?.verdict ?? null, critical: reviewResult.analysis?.critical_count ?? 0, high: reviewResult.analysis?.high_count ?? 0, findings: reviewResult.analysis?.findings ?? [] },
-        security:    { score: secResult.analysis?.score ?? null, verdict: secResult.analysis?.verdict ?? null, critical: secResult.analysis?.critical_count ?? 0, high: secResult.analysis?.high_count ?? 0, findings: secResult.analysis?.findings ?? [] },
-        secrets:     { verdict: secretsResult.analysis?.verdict ?? null, findings: secretsResult.analysis?.findings ?? [] },
-        quality:     { score: qualityScore, recommendation: qualityResult.output.recommendation, plan: qualityResult.plan },
-        summary: [
-          `${verdictEmoji} — ${changedFiles.length} file(s) changed`,
+        score: qualityScore,
+        scans: {
+          code_review: { score: reviewResult.analysis?.score ?? null, verdict: reviewResult.analysis?.verdict ?? null, critical: reviewResult.analysis?.critical_count ?? 0, high: reviewResult.analysis?.high_count ?? 0, findings: reviewResult.analysis?.findings ?? [] },
+          security:    { score: secResult.analysis?.score ?? null, verdict: secResult.analysis?.verdict ?? null, critical: secResult.analysis?.critical_count ?? 0, high: secResult.analysis?.high_count ?? 0, findings: secResult.analysis?.findings ?? [] },
+          secrets:     { verdict: secretsResult.analysis?.verdict ?? null, findings: secretsResult.analysis?.findings ?? [] },
+        },
+        findings: [
+          `Quality: ${qualityScore}/100 (${verdict})`,
           `Code: ${reviewResult.analysis?.verdict ?? 'n/a'} (score ${reviewResult.analysis?.score ?? '?'}/100)`,
           `Security: ${secResult.analysis?.verdict ?? 'n/a'} — ${secResult.analysis?.critical_count ?? 0} critical, ${secResult.analysis?.high_count ?? 0} high`,
           `Secrets: ${(secretsResult.analysis?.findings?.length ?? 0) > 0 ? '🔴 Exposed credentials detected' : '✅ Clean'}`,
-          `Quality: ${qualityScore}/100`,
-        ].join('\n'),
+        ],
+        files_changed: changedFiles,
       }, null, 2) }] };
     }
 
     case 'veto_pre_commit': {
+      const args = (request.params.arguments || {}) as any;
       const projectDir = args?.project_dir ? String(args.project_dir) : undefined;
       const userContext = args?.context ? String(args.context) : undefined;
 
@@ -2203,8 +2013,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (hasCriticalCode) issues.push(`Code: ${reviewResult.analysis?.summary ?? 'critical issues found'}`);
         autoStoreCritical(`Pre-commit blocked: ${projectDir}`, issues, projectDir, ['pre-commit']);
       }
-      autoRecord('pre-commit', 'secrets',  hasSecrets ? 0 : 100);
-      autoRecord('pre-commit', 'reviewer', reviewResult.analysis?.score ?? Math.round(reviewResult.output.confidence * 100));
+      recordOutcome('pre-commit', 50, 2, 'secrets',  hasSecrets ? 0 : 100);
+      recordOutcome('pre-commit', 50, 2, 'reviewer', reviewResult.analysis?.score ?? Math.round(reviewResult.output.confidence * 100));
 
       return { content: [{ type: 'text', text: JSON.stringify({
         pipeline: 'pre_commit',
@@ -2221,58 +2031,58 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }, null, 2) }] };
     }
 
-    case 'veto_new_feature': {
+        case 'veto_new_feature': {
+      const args = (request.params.arguments || {}) as any;
       const description = String(args?.description ?? '').trim();
       const projectDir = args?.project_dir ? String(args.project_dir) : undefined;
       const userContext = args?.context ? String(args.context) : undefined;
+      const agentResponses = args?.agent_responses as any;
 
       if (!description) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'description is required.' }) }], isError: true };
 
-      const context = buildContextString(projectDir, userContext);
-
-      // Step 1 — governance first: council debate
-      const debateResult = await runLlmDebate(server, { task: description, context: userContext, project_dir: projectDir, strictness: 'standard' });
-      const outcomeId = saveCouncilOutcome({ task: description, verdict: debateResult.final_verdict, lead_dev: JSON.stringify(debateResult.votes.lead_dev), pm: JSON.stringify(debateResult.votes.pm), architect: JSON.stringify(debateResult.votes.architect), ux: JSON.stringify(debateResult.votes.ux), devil: JSON.stringify(debateResult.votes.devil), legal: JSON.stringify(debateResult.votes.legal), security: JSON.stringify(debateResult.votes.security), recommended: debateResult.recommended });
-      { const qMap: Record<string, number> = { GREEN: 90, YELLOW: 60, RED: 20, DEADLOCK: 50 }; const tMap: Record<string, 1|2|3> = { GREEN: 1, YELLOW: 2, RED: 3, DEADLOCK: 2 }; recordOutcome(description.slice(0, 50), 50, tMap[debateResult.final_verdict] ?? 2, 'council', qMap[debateResult.final_verdict] ?? 50); }
-
-      // RED verdict — block: do not plan what governance has rejected
-      if (debateResult.final_verdict === 'RED') {
-        return { content: [{ type: 'text', text: JSON.stringify({
-          pipeline: 'new_feature',
-          verdict: 'blocked',
-          council: { outcome_id: outcomeId, verdict: 'RED', block_reasons: debateResult.block_reasons, warnings: debateResult.warnings, recommended: debateResult.recommended },
-          agent_plan: null, tasks: null,
-          summary: `❌ BLOCKED — Council RED verdict. Resolve block_reasons before planning.\n${debateResult.block_reasons.map((r: string) => `  - ${r}`).join('\n')}`,
-        }, null, 2) }] };
+      // Step 1: Governance
+      const debateInput = { task: description, context: userContext, project_dir: projectDir, strictness: 'standard' as const };
+      let debateResult;
+      if (agentResponses?.council) {
+         debateResult = runFromAgentResponses(debateInput, parseAgentResponses(JSON.stringify(agentResponses.council), description)!);
+      } else {
+         debateResult = await runLlmDebate(server, debateInput);
       }
 
-      // Steps 2+3 — approved: plan + decompose in parallel
-      const VALID_AGENTS = ['coder','tester','reviewer','debugger','refactor','database','api','frontend','backend','devops','performance','auth','security-scanner','documentation'];
-      const rawAgent = (debateResult.recommended ?? '').toLowerCase().split(/[\s,;]/)[0];
-      const planAgent: WorkerAgentType = (VALID_AGENTS.includes(rawAgent) ? rawAgent : 'coder') as WorkerAgentType;
+      if (debateResult.final_verdict === 'RED') {
+        return { content: [{ type: 'text', text: JSON.stringify({ pipeline: 'new_feature', verdict: 'blocked', council: debateResult }, null, 2) }] };
+      }
 
-      const [planResult, taskPlan] = await Promise.all([
-        executeOne({ id: 'plan-1', agent: planAgent, task: description, context, project_dir: projectDir }),
-        buildTaskPlan(description, projectDir),
-      ]);
-      autoRecord('new-feature', planAgent, Math.round(planResult.output.confidence * 100));
+      // Step 2: Planning
+      let planResult;
+      if (agentResponses?.planner) {
+         planResult = parseAgenticAgentResponses([{ id: 'planner', agent: 'task-planner', task: description }], { planner: agentResponses.planner })[0];
+      } else {
+         planResult = await executeOne({ id: 'planner', agent: 'task-planner', task: description, project_dir: projectDir, llm_backed: true });
+      }
 
-      return { content: [{ type: 'text', text: JSON.stringify({
-        pipeline: 'new_feature',
-        verdict: debateResult.final_verdict === 'GREEN' ? 'approved' : 'approved_with_warnings',
-        council: { outcome_id: outcomeId, verdict: debateResult.final_verdict, block_reasons: debateResult.block_reasons, warnings: debateResult.warnings, recommended: debateResult.recommended },
-        agent_plan: { agent: planAgent, plan: planResult.plan, output: planResult.output },
-        tasks: taskPlan,
-        summary: [
-          `${debateResult.final_verdict === 'GREEN' ? '✅' : '⚠️'} Council: ${debateResult.final_verdict}`,
-          debateResult.warnings.length > 0 ? `Warnings: ${debateResult.warnings.join('; ')}` : null,
-          `Recommended agent: ${planAgent}`,
-          `Tasks: ${taskPlan.total_tasks} (est. ${taskPlan.duration_estimate})`,
-        ].filter(Boolean).join('\n'),
-      }, null, 2) }] };
+      if (planResult.llm_upgrade || (debateResult as any).llm_upgrade) {
+         return {
+           content: [{
+             type: 'text',
+             text: JSON.stringify({
+               llm_backed: false,
+               llm_upgrade: {
+                 council: (debateResult as any).llm_upgrade,
+                 planner: planResult.llm_upgrade,
+               }
+             }, null, 2)
+           }]
+         };
+      }
+
+      // Step 3: Tasks
+      const tasks = parsePrdIntoTasks(description, planResult.plan!, 10);
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, pipeline: 'new_feature', council: debateResult, plan: planResult.plan, tasks }, null, 2) }] };
     }
 
     case 'veto_delegate': {
+      const args = (request.params.arguments || {}) as any;
       const agentId = String(args?.agent_id ?? '').trim() as WorkerAgentType;
       const task    = String(args?.task ?? '').trim();
       const context = args?.context     ? String(args.context)     : undefined;
@@ -2286,7 +2096,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const enrichedCtx = buildContextString(projectDir, context);
       const result = await executeOne({ id: 'delegate-1', agent: agentId, task, context: enrichedCtx || undefined, project_dir: projectDir });
 
-      autoRecord(task, agentId, Math.round(result.output.confidence * 100));
+      recordOutcome(task, 50, 2, agentId, Math.round(result.output.confidence * 100));
 
       // Return compact summary only — no verbose findings/steps to avoid context pollution
       const summary = [
@@ -2308,6 +2118,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_commit_message': {
+      const args = (request.params.arguments || {}) as any;
       const projectDir = String(args?.project_dir ?? '').trim();
       const hint       = args?.hint ? String(args.hint) : undefined;
 
@@ -2329,7 +2140,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         context: hint,
       });
 
-      autoRecord('commit-message', 'git-agent', Math.round(result.output.confidence * 100));
+      recordOutcome('commit-message', 50, 2, 'git-agent', Math.round(result.output.confidence * 100));
 
       const message = (result.plan?.approach ?? result.output.recommendation ?? '').trim();
       const firstLine = message.split('\n')[0] ?? '';
@@ -2345,6 +2156,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_pr_description': {
+      const args = (request.params.arguments || {}) as any;
       const projectDir  = String(args?.project_dir ?? '').trim();
       const baseBranch  = args?.base_branch ? String(args.base_branch) : 'main';
       const titleHint   = args?.title   ? String(args.title)   : undefined;
@@ -2383,7 +2195,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
 
       const quality = Math.round(result.output.confidence * 100);
-      autoRecord('pr-description', 'documentation', quality);
+      recordOutcome('pr-description', 50, 2, 'documentation', quality);
 
       const body = (result.plan?.approach ?? result.output.recommendation ?? '').trim();
       const suggestedTitle = titleHint ?? (commitLog.split('\n')[0]?.replace(/^[a-f0-9]+ /, '') ?? 'Pull Request');
@@ -2397,6 +2209,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_pr_post': {
+      const args = (request.params.arguments || {}) as any;
       const m = String(args?.pr_url ?? '').match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
       if (!m) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'Invalid PR URL. Expected: https://github.com/owner/repo/pull/123' }) }], isError: true };
       const [, owner, repo, prNum] = m;
@@ -2443,6 +2256,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_debt_register': {
+      const args = (request.params.arguments || {}) as any;
       const project_dir = String(args?.project_dir ?? '').trim();
       if (!project_dir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
 
@@ -2463,7 +2277,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const maxFiles = typeof args?.max_files === 'number' ? Math.min(args.max_files, 30) : 10;
       const extensions = Array.isArray(args?.extensions) ? args.extensions.map(String) : ['.ts', '.js', '.py', '.go', '.java'];
       const topFiles = Object.entries(churnMap)
-        .filter(([f]) => extensions.some(ext => f.endsWith(ext)))
+        .filter(([f]) => extensions.some((ext: string) => f.endsWith(ext)))
         .sort((a, b) => b[1] - a[1])
         .slice(0, maxFiles)
         .map(([file, commits]) => ({ file, commits }));
@@ -2497,7 +2311,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         code: debtCode,
       });
 
-      autoRecord('debt-register', 'code-quality', Math.round(debtResult.output.confidence * 100));
+      recordOutcome('debt-register', 50, 2, 'code-quality', Math.round(debtResult.output.confidence * 100));
 
       const steps = debtResult.plan?.steps ?? [];
       let debtItems: Array<{
@@ -2542,6 +2356,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_adr': {
+      const args = (request.params.arguments || {}) as any;
       const task         = String(args?.task         ?? '').trim();
       const verdict      = String(args?.verdict      ?? '').trim().toUpperCase();
       const recommended  = String(args?.recommended  ?? '').trim();
@@ -2609,6 +2424,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_env_setup': {
+      const args = (request.params.arguments || {}) as any;
       const projectDir = String(args?.project_dir ?? '').trim();
       const writeFiles = args?.write_files === true;
 
@@ -2684,6 +2500,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_prompt_optimizer': {
+      const args = (request.params.arguments || {}) as any;
       const rawPrompt = String(args?.prompt ?? '').trim();
       const goal      = args?.goal ? String(args.goal) : undefined;
 
@@ -2716,7 +2533,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
 
       const quality = result.analysis?.score ?? Math.round(result.output.confidence * 100);
-      autoRecord('prompt-optimizer', 'documentation', quality);
+      recordOutcome('prompt-optimizer', 50, 2, 'documentation', quality);
 
       const highCount   = issues.filter(i => i.severity === 'high').length;
       const mediumCount = issues.filter(i => i.severity === 'medium').length;
@@ -2735,6 +2552,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_sre_advisor': {
+      const args = (request.params.arguments || {}) as any;
       const slo_target       = Number(args?.slo_target);
       const window_days      = Number(args?.window_days);
       const downtime_minutes = Number(args?.downtime_minutes);
@@ -2786,6 +2604,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_diagram': {
+      const args = (request.params.arguments || {}) as any;
       const project_dir = String(args?.project_dir ?? '').trim();
       const diagramType = String(args?.diagram_type ?? 'flowchart').trim();
       const focus       = args?.focus ? String(args.focus) : undefined;
@@ -2810,7 +2629,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
 
       const diagramQuality = diagramResult.analysis?.score ?? Math.round(diagramResult.output.confidence * 100);
-      autoRecord('diagram', 'documentation', diagramQuality);
+      recordOutcome('diagram', 50, 2, 'documentation', diagramQuality);
 
       const rawOutput = diagramResult.plan?.approach ?? diagramResult.output.recommendation ?? '';
 
@@ -2827,6 +2646,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_rca': {
+      const args = (request.params.arguments || {}) as any;
       const error      = String(args?.error ?? '').trim();
       const projectDir = args?.project_dir ? String(args.project_dir).trim() : '';
       const fileHint   = args?.file_hint   ? String(args.file_hint).trim()   : '';
@@ -2854,7 +2674,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
 
       const quality = Math.round(result.output.confidence * 100);
-      autoRecord('rca', 'debugger', quality);
+      recordOutcome('rca', 50, 2, 'debugger', quality);
 
       const root_cause = result.plan?.approach?.slice(0, 200) ?? result.output.recommendation.slice(0, 200);
       const fix_steps  = result.plan?.steps?.slice(0, 5) ?? [];
@@ -2871,6 +2691,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_release_notes': {
+      const args = (request.params.arguments || {}) as any;
       const projectDir = String(args?.project_dir ?? '').trim();
       const audience   = String(args?.audience ?? 'user') === 'developer' ? 'developer' : 'user';
 
@@ -2909,6 +2730,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_postmortem': {
+      const args = (request.params.arguments || {}) as any;
       const incident   = String(args?.incident ?? '').trim();
       const timeline   = args?.timeline    ? String(args.timeline).trim()   : '';
       const projectDir = args?.project_dir ? String(args.project_dir).trim() : '';
@@ -2953,6 +2775,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_doc_gen': {
+      const args = (request.params.arguments || {}) as any;
       const filePath = String(args?.file_path ?? '').trim();
       const styleArg = String(args?.style ?? 'auto').trim();
 
@@ -2981,7 +2804,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
 
       const docQuality = docGenResult.analysis?.score ?? Math.round(docGenResult.output.confidence * 100);
-      autoRecord('doc-gen', 'documentation', docQuality);
+      recordOutcome('doc-gen', 50, 2, 'documentation', docQuality);
 
       const annotatedContent = docGenResult.plan?.approach ?? docGenResult.output.recommendation ?? '';
       const symbolsDocumented = (annotatedContent.match(/@param\b/g) ?? []).length;
@@ -2995,103 +2818,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_type_coverage': {
-      const projectDir = String(args?.project_dir ?? '').trim();
-
-      if (!projectDir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
-
-      let grepOutput = '';
-      try {
-        grepOutput = execSyncTop('git grep -rn "any" --include="*.ts" --include="*.tsx" -- . ":(exclude)node_modules" ":(exclude)dist"', {
-          cwd: projectDir, timeout: 6000, stdio: ['pipe', 'pipe', 'pipe'],
-        }).toString();
-      } catch (e: unknown) {
-        grepOutput = (e as { stdout?: Buffer }).stdout?.toString() ?? '';
-      }
-
-      const anyLines = grepOutput.split('\n')
-        .filter(l => /:\s*any\b|as any\b|<any>/.test(l))
-        .slice(0, 100);
-      const fileSet = new Set(anyLines.map(l => l.split(':')[0]));
-      const maxFiles = typeof args?.max_files === 'number' ? Math.min(args.max_files, 30) : 20;
-      const topFiles = [...fileSet].slice(0, maxFiles);
-
-      const typeCoverResult = await executeOne({
-        id:    'typecover-1',
-        agent: 'coder' as WorkerAgentType,
-        task:  'Analyze these TypeScript `any` usages. For each location, suggest a specific replacement type (use inferred types, generics, or union types). Flag any `any` in auth/security/payment code as HIGH severity.',
-        code:  anyLines.join('\n').slice(0, 6000),
-      });
-
-      const typeCoverQuality = typeCoverResult.analysis?.score ?? Math.round(typeCoverResult.output.confidence * 100);
-      autoRecord('type-coverage', 'coder', typeCoverQuality);
-
-      const findings = anyLines.slice(0, 20).map(l => {
-        const parts = l.split(':');
-        const file    = parts[0] ?? '';
-        const lineNum = parseInt(parts[1] ?? '0', 10);
-        const lineContent = parts.slice(2).join(':').trim();
-        const isHighSeverity = /auth|security|payment|secret|token|password/i.test(file + lineContent);
-        const usage = /as any\b/.test(lineContent) ? 'as any' : /<any>/.test(lineContent) ? '<any>' : ': any';
-        return { file, line: lineNum, usage, severity: isHighSeverity ? 'high' : 'medium' };
-      });
-
-      const highSeverityCount = findings.filter(f => f.severity === 'high').length;
-      const typeCoveragePct = Math.max(0, 100 - Math.round(anyLines.length / 5));
-
-      return { content: [{ type: 'text', text: JSON.stringify({
-        total_any_usages:   anyLines.length,
-        files_affected:     topFiles.length,
-        high_severity:      highSeverityCount,
-        findings,
-        suggestions:        typeCoverResult.plan?.approach ?? typeCoverResult.output.recommendation ?? '',
-        type_coverage_pct:  typeCoveragePct,
-      }, null, 2) }] };
+      const args = (request.params.arguments || {}) as any;
+      return await handleAgenticWorker('veto_type_coverage', args, 'reviewer', 'Analyze TypeScript type coverage and suggest improvements.');
     }
 
     case 'veto_test_gaps': {
-      const projectDir     = String(args?.project_dir ?? '').trim();
-      const coverageReport = args?.coverage_report ? String(args.coverage_report).trim() : '';
-
-      if (!projectDir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
-
-      let coverageData = '';
-      if (coverageReport && existsSync(coverageReport)) {
-        try { coverageData = readFileSync(coverageReport, 'utf8').slice(0, 8000); } catch { /* skip */ }
-      }
-
-      let untestedFiles: string[] = [];
-      if (!coverageData) {
-        try {
-          const allFiles = execSyncTop('git ls-files --cached -- "*.ts" "*.js" "*.py"', {
-            cwd: projectDir, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'],
-          }).toString().split('\n').filter(Boolean);
-          const srcFiles  = allFiles.filter(f => !f.includes('.test.') && !f.includes('.spec.') && !f.includes('__test__'));
-          const testFiles = new Set(allFiles.filter(f => f.includes('.test.') || f.includes('.spec.')).map(f => f.replace(/\.(test|spec)\.(ts|js)$/, '')));
-          untestedFiles   = srcFiles.filter(f => !testFiles.has(f.replace(/\.(ts|js)$/, ''))).slice(0, 20);
-          coverageData    = `Files without tests:\n${untestedFiles.join('\n')}`;
-        } catch { coverageData = 'Could not determine coverage'; }
-      }
-
-      const testGapResult = await executeOne({
-        id:      'testgap-1',
-        agent:   'tester' as WorkerAgentType,
-        task:    'Identify test gaps and suggest concrete test cases. For each untested or low-coverage area, write a specific test scenario (what input, what expected output, what edge case). Prioritize: error handling paths, auth/security code, business logic.',
-        code:    coverageData,
-        context: buildContextString(projectDir) || undefined,
-      });
-
-      const testGapQuality = testGapResult.analysis?.score ?? Math.round(testGapResult.output.confidence * 100);
-      autoRecord('test-gaps', 'tester', testGapQuality);
-
-      return { content: [{ type: 'text', text: JSON.stringify({
-        gaps_found:      untestedFiles.length || coverageData.split('\n').length,
-        untested_files:  untestedFiles,
-        suggested_tests: testGapResult.plan?.approach ?? testGapResult.output.recommendation ?? '',
-        priority_areas:  [],
-      }, null, 2) }] };
+      const args = (request.params.arguments || {}) as any;
+      return await handleAgenticWorker('veto_test_gaps', args, 'tester', 'Identify untested paths and suggest test cases.');
     }
 
     case 'veto_onboard': {
+      const args = (request.params.arguments || {}) as any;
       const projectDir = String(args?.project_dir ?? '').trim();
       const role       = args?.role ? String(args.role).trim() : '';
 
@@ -3111,7 +2848,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
 
       const onboardQuality = onboardResult.analysis?.score ?? Math.round(onboardResult.output.confidence * 100);
-      autoRecord('onboard', 'documentation', onboardQuality);
+      recordOutcome('onboard', 50, 2, 'documentation', onboardQuality);
 
       return { content: [{ type: 'text', text: JSON.stringify({
         guide:    onboardResult.plan?.approach ?? onboardResult.output.recommendation ?? '',
@@ -3122,6 +2859,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     // ── veto_dep_advisor ────────────────────────────────────────────────────────
     case 'veto_dep_advisor': {
+      const args = (request.params.arguments || {}) as any;
       const projectDir = String(args?.project_dir ?? '').trim();
       let ecosystem = String(args?.ecosystem ?? 'auto');
       let packages: Array<{ name: string; version: string }> = [];
@@ -3173,7 +2911,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         code: JSON.stringify({ packages: packages.slice(0, 20), vulnerabilities }, null, 2).slice(0, 6000),
       });
 
-      autoRecord('dep_advisor', 'dependency-audit', depResult.analysis?.score ?? Math.round(depResult.output.confidence * 100));
+      recordOutcome('dep_advisor', 50, 2, 'dependency-audit', depResult.analysis?.score ?? Math.round(depResult.output.confidence * 100));
 
       return { content: [{ type: 'text', text: JSON.stringify({
         ecosystem,
@@ -3187,6 +2925,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     // ── veto_query_advisor ──────────────────────────────────────────────────────
     case 'veto_query_advisor': {
+      const args = (request.params.arguments || {}) as any;
       const query         = String(args?.query ?? '').trim();
       const schema        = args?.schema         ? String(args.schema).trim()         : '';
       const explainOutput = args?.explain_output ? String(args.explain_output).trim() : '';
@@ -3210,7 +2949,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         context: [schema && `Schema:\n${schema}`, explainOutput && `EXPLAIN:\n${explainOutput}`].filter(Boolean).join('\n'),
       });
 
-      autoRecord('query_advisor', 'database', queryResult.analysis?.score ?? Math.round(queryResult.output.confidence * 100));
+      recordOutcome('query_advisor', 50, 2, 'database', queryResult.analysis?.score ?? Math.round(queryResult.output.confidence * 100));
 
       const agentOutput = queryResult.plan?.approach ?? queryResult.output.recommendation ?? '';
       const indexStatements = agentOutput.split('\n').filter((l: string) => /CREATE INDEX/i.test(l)).map((l: string) => l.trim());
@@ -3227,6 +2966,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     // ── veto_bundle_advisor ─────────────────────────────────────────────────────
     case 'veto_bundle_advisor': {
+      const args = (request.params.arguments || {}) as any;
       let statsRaw = '';
       try { statsRaw = readFileSync(String(args?.stats_file ?? ''), 'utf8'); } catch (e) { return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Cannot read stats file: ${e}` }) }], isError: true }; }
       let statsData: Record<string, unknown> = {};
@@ -3248,7 +2988,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         code: summary,
       });
 
-      autoRecord('bundle_advisor', 'frontend', bundleResult.analysis?.score ?? Math.round(bundleResult.output.confidence * 100));
+      recordOutcome('bundle_advisor', 50, 2, 'frontend', bundleResult.analysis?.score ?? Math.round(bundleResult.output.confidence * 100));
 
       return { content: [{ type: 'text', text: JSON.stringify({
         total_size_kb:        Math.round(totalSize / 1024),
@@ -3261,6 +3001,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     // ── veto_dead_code ──────────────────────────────────────────────────────────
     case 'veto_dead_code': {
+      const args = (request.params.arguments || {}) as any;
       const projectDir = String(args?.project_dir ?? '').trim();
       const exts = Array.isArray(args?.extensions) ? (args.extensions as unknown[]).map(String) : ['.ts', '.js'];
       const includeArgs = exts.map(e => `--include="*${e}"`).join(' ');
@@ -3290,7 +3031,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         context: ctx || undefined,
       });
 
-      autoRecord('dead_code', 'code-quality', deadResult.analysis?.score ?? Math.round(deadResult.output.confidence * 100));
+      recordOutcome('dead_code', 50, 2, 'code-quality', deadResult.analysis?.score ?? Math.round(deadResult.output.confidence * 100));
 
       const agentOut = deadResult.plan?.approach ?? deadResult.output.recommendation ?? '';
       const safeMatches = agentOut.match(/\blow\b.*\bdelete\b|\bsafe to delete\b|\bsafely removed\b/gi) ?? [];
@@ -3306,6 +3047,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     // ── veto_hitl_checkpoint ────────────────────────────────────────────────────
     case 'veto_hitl_checkpoint': {
+      const args = (request.params.arguments || {}) as any;
       const stage      = String(args?.stage ?? '').trim();
       const context    = String(args?.context ?? '').trim();
       const riskLevel  = String(args?.risk_level ?? 'medium');
@@ -3346,6 +3088,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     // ── veto_openapi_gen ────────────────────────────────────────────────────────
     case 'veto_openapi_gen': {
+      const args = (request.params.arguments || {}) as any;
       const filePath   = args?.file_path   ? String(args.file_path)   : null;
       const projectDir = args?.project_dir ? String(args.project_dir) : null;
       const writeFileArg = args?.write_file === true;
@@ -3390,7 +3133,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const routeLineCount = (routeContent.match(/\bget\b|\bpost\b|\bput\b|\bpatch\b|\bdelete\b/gi) ?? []).length;
 
-      autoRecord('openapi_gen', 'api', openapiResult.analysis?.score ?? Math.round(openapiResult.output.confidence * 100));
+      recordOutcome('openapi_gen', 50, 2, 'api', openapiResult.analysis?.score ?? Math.round(openapiResult.output.confidence * 100));
 
       return { content: [{ type: 'text', text: JSON.stringify({
         spec,
@@ -3402,6 +3145,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     // ── veto_flag_auditor ───────────────────────────────────────────────────────
     case 'veto_flag_auditor': {
+      const args = (request.params.arguments || {}) as any;
       const projectDir = String(args?.project_dir ?? '').trim();
       const sdk        = String(args?.sdk ?? 'auto');
 
@@ -3438,7 +3182,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
 
       const agentOut = flagResult.plan?.approach ?? flagResult.output.recommendation ?? '';
-      autoRecord('flag_audit', 'code-quality', flagResult.analysis?.score ?? Math.round(flagResult.output.confidence * 100));
+      recordOutcome('flag_audit', 50, 2, 'code-quality', flagResult.analysis?.score ?? Math.round(flagResult.output.confidence * 100));
 
       // Parse a rough count from agentOut heuristics
       const activeCount    = (agentOut.match(/ACTIVE/g) ?? []).length;
@@ -3459,12 +3203,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     // ── Phase 7: Intelligence & Advanced ──────────────────────────────────────
     case 'veto_local_llm': {
+      const args = (request.params.arguments || {}) as any;
       const { task, model, provider } = args;
       const { callLocalLlm } = await import('./agents/local-llm.js');
       const result = await callLocalLlm({ task: String(task), model: model ? String(model) : undefined, provider: provider as any });
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
     case 'veto_clone_detector': {
+      const args = (request.params.arguments || {}) as any;
       const projectDir = String(args?.project_dir ?? '').trim();
       const extensions = Array.isArray(args?.extensions) ? args.extensions.map(String) : undefined;
       const minLines = typeof args?.min_lines === 'number' ? args.min_lines : undefined;
@@ -3473,84 +3219,34 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: 'text', text: JSON.stringify({ success: true, clones_found: findings.length, findings }, null, 2) }] };
     }
     case 'veto_lint_rules': {
-      const projectDir = String(args?.project_dir ?? '').trim();
-      const tool = String(args?.tool ?? 'eslint');
-      const ctx = buildContextString(projectDir);
-      const result = await executeOne({
-        id: 'lint-1',
-        agent: 'reviewer',
-        task: `Analyze the project coding style in ${projectDir} and auto-generate or update the optimal configuration file for ${tool}. Return the complete configuration file content and explain the choices based on detected patterns.`,
-        context: ctx || undefined,
-        project_dir: projectDir,
-      });
-      return { content: [{ type: 'text', text: JSON.stringify({ success: !result.error, tool, config: result.plan?.approach ?? result.output.recommendation, details: result.plan }, null, 2) }] };
+      const args = (request.params.arguments || {}) as any;
+      return await handleAgenticWorker('veto_lint_rules', args, 'reviewer', 'Analyze and generate lint rules.');
     }
     case 'veto_api_contract': {
-      const projectDir = String(args?.project_dir ?? '').trim();
-      const target = String(args?.target ?? 'generate');
-      const ctx = buildContextString(projectDir);
-      const result = await executeOne({
-        id: 'api-1',
-        agent: 'api',
-        task: `Perform API contract ${target} for ${projectDir}. ${target === 'generate' ? 'Generate a complete OpenAPI or TypeScript contract based on detected routes.' : 'Verify the existing contracts against the implementation and identify any breaking changes or mismatches.'}`,
-        context: ctx || undefined,
-        project_dir: projectDir,
-      });
-      return { content: [{ type: 'text', text: JSON.stringify({ success: !result.error, target, contract: result.plan?.approach ?? result.output.recommendation, details: result.plan }, null, 2) }] };
+      const args = (request.params.arguments || {}) as any;
+      return await handleAgenticWorker('veto_api_contract', args, 'api', 'Analyze or generate API contracts.');
     }
     case 'veto_merge_conflict': {
-      const filePath = String(args?.file_path ?? '').trim();
-      const projectDir = args?.project_dir ? String(args.project_dir) : undefined;
-      let content = '';
-      try { content = readFileSync(filePath, 'utf8'); } catch (err) { return { content: [{ type: 'text', text: `Error reading file: ${err}` }], isError: true }; }
-      
-      const hasConflicts = content.includes('<<<<<<<') && content.includes('>>>>>>>');
-      if (!hasConflicts) return { content: [{ type: 'text', text: 'No git conflict markers detected in file.' }] };
-
-      const result = await executeOne({
-        id: 'merge-1',
-        agent: 'debugger',
-        task: `Analyze the git conflict markers in ${filePath} and return a semantically correct resolution by understanding the intent of both branches. Return the complete resolved file content.`,
-        code: content.slice(0, 10000),
-        project_dir: projectDir,
-      });
-      return { content: [{ type: 'text', text: JSON.stringify({ success: !result.error, file: filePath, resolution: result.plan?.approach ?? result.output.recommendation }, null, 2) }] };
+      const args = (request.params.arguments || {}) as any;
+      return await handleAgenticWorker('veto_merge_conflict', args, 'debugger', 'Resolve git merge conflicts.');
     }
     case 'veto_translate': {
-      const text = args?.text ? String(args.text) : undefined;
-      const filePath = args?.file_path ? String(args.file_path) : undefined;
-      const targetLangs = Array.isArray(args?.target_langs) ? args.target_langs.map(String) : [];
-      let content = text || '';
-      if (filePath) { try { content = readFileSync(filePath, 'utf8'); } catch { return { content: [{ type: 'text', text: `Cannot read file: ${filePath}` }], isError: true }; } }
-      if (!content) return { content: [{ type: 'text', text: 'text or file_path is required.' }], isError: true };
-
-      const result = await executeOne({
-        id: 'trans-1',
-        agent: 'documentation',
-        task: `Translate the following text to [${targetLangs.join(', ')}]. Preserving all variables, code blocks, and formatting. Return a JSON object mapping language codes to translations.`,
-        code: content.slice(0, 8000),
-      });
-      return { content: [{ type: 'text', text: JSON.stringify({ success: !result.error, translations: result.plan?.approach ?? result.output.recommendation }, null, 2) }] };
+      const args = (request.params.arguments || {}) as any;
+      return await handleAgenticWorker('veto_translate', args, 'documentation', 'Translate text.');
     }
     case 'veto_a11y_advisor': {
-      const filePath = String(args?.file_path ?? '').trim();
-      let content = '';
-      try { content = readFileSync(filePath, 'utf8'); } catch { return { content: [{ type: 'text', text: `Cannot read file: ${filePath}` }], isError: true }; }
-      const result = await executeOne({
-        id: 'a11y-1',
-        agent: 'accessibility' as any,
-        task: `Analyze this UI component for WCAG accessibility violations. Identify contrast issues, missing labels, poor ARIA usage, and keyboard navigation gaps. Provide actionable fix recommendations.`,
-        code: content.slice(0, 8000),
-      });
-      return { content: [{ type: 'text', text: JSON.stringify({ success: !result.error, findings: result.analysis || result.output.recommendation }, null, 2) }] };
+      const args = (request.params.arguments || {}) as any;
+      return await handleAgenticWorker('veto_a11y_advisor', args, 'accessibility' as any, 'Analyze accessibility.');
     }
     case 'veto_session_replay': {
+      const args = (request.params.arguments || {}) as any;
       const sessionId = String(args?.session_id ?? '').trim();
       if (!sessionId) return { content: [{ type: 'text', text: 'session_id is required.' }], isError: true };
       const traces = getSessionReplay(sessionId);
       return { content: [{ type: 'text', text: JSON.stringify({ success: true, session_id: sessionId, events: traces }, null, 2) }] };
     }
     case 'veto_compose_agents': {
+      const args = (request.params.arguments || {}) as any;
       const { name, agents, workflow } = args;
       // Register custom meta-agent in memory (Stub persistence, but functional for the current session)
       return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: `Custom agent ${name} composed and registered.`, definition: { name, base_agents: agents, workflow } }, null, 2) }] };
@@ -3558,44 +3254,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     // ── Phase 8: Long-Horizon ─────────────────────────────────────────────────
     case 'veto_semantic_search': {
-      const { query, project_dir } = args;
-      const result = await executeOne({
-        id: 'search-1',
-        agent: 'search-agent' as any,
-        task: `Perform a semantic codebase search for: "${query}". Identify relevant modules, functions, and logic flows even if keywords don't match exactly. Explain the reasoning for each result.`,
-        project_dir: String(project_dir),
-      });
-      return { content: [{ type: 'text', text: JSON.stringify({ success: !result.error, query, results: result.plan?.approach ?? result.output.recommendation }, null, 2) }] };
+      const args = (request.params.arguments || {}) as any;
+      return await handleAgenticWorker('veto_semantic_search', args, 'search-agent' as any, 'Perform semantic search.');
     }
     case 'veto_sdd_agent': {
-      const { spec_file, project_dir, action } = args;
-      let spec = '';
-      try { spec = readFileSync(String(spec_file), 'utf8'); } catch { /* ignore */ }
-      const result = await executeOne({
-        id: 'sdd-1',
-        agent: 'task-planner',
-        task: `Execute Spec-Driven Development action '${action}' for the provided specification. ${action === 'validate' ? 'Check for inconsistencies.' : action === 'generate_ac' ? 'Generate acceptance criteria.' : 'Author BDD scenarios.'}`,
-        code: spec.slice(0, 8000),
-        project_dir: String(project_dir),
-      });
-      return { content: [{ type: 'text', text: JSON.stringify({ success: !result.error, action, output: result.plan?.approach ?? result.output.recommendation }, null, 2) }] };
+      const args = (request.params.arguments || {}) as any;
+      return await handleAgenticWorker('veto_sdd_agent', args, 'task-planner', 'Execute SDD actions.');
     }
     case 'veto_playwright': {
-      const { task, project_dir, url } = args;
-      const result = await executeOne({
-        id: 'pw-1',
-        agent: 'tester',
-        task: `Coordinate a Playwright browser session for: "${task}"${url ? ` starting at ${url}` : ''}. Output the recommended test script and identify any UI elements likely to be problematic.`,
-        project_dir: String(project_dir),
-      });
-      return { content: [{ type: 'text', text: JSON.stringify({ success: !result.error, task, url, script: result.plan?.approach ?? result.output.recommendation }, null, 2) }] };
+      const args = (request.params.arguments || {}) as any;
+      return await handleAgenticWorker('veto_playwright', args, 'tester', 'Coordinate Playwright browser session.');
     }
     case 'veto_notify_ide': {
+      const args = (request.params.arguments || {}) as any;
       const { action, path, message, level } = args;
       // In bidirectional MCP, some clients listen for logging or custom notifications
       if (action === 'show_message' && message) {
         await server.sendLoggingMessage({
-          level: level === 'error' ? 'error' : level === 'warning' ? 'warn' : 'info',
+          level: level === 'error' ? 'error' : level === 'warning' ? 'warning' : 'info',
           data: message,
         });
       }

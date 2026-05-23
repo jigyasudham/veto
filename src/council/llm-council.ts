@@ -134,8 +134,7 @@ async function callAgentLlm(
       messages: [{ role: 'user', content: { type: 'text', text: userText } }],
       systemPrompt: SYSTEM_PROMPTS[agentKey],
       maxTokens: 300,
-      includeContext: 'none',
-    });
+    } as any);
 
     const responseText = result.content.type === 'text' ? result.content.text : '';
     return parseAgentVote(responseText, agentKey, task);

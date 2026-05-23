@@ -12,10 +12,12 @@ export interface PipelineStep {
   retry_on_fail?: boolean; // if true, retry this step on gate failure (default false)
   max_retries?: number;    // max retry attempts (default 3, capped at 5)
   condition?: string;      // expression evaluated against prior step outputs; step skipped if false
-  dependencies?: string[];  // IDs of steps that must pass before this step runs (DAG mode only)
+  dependencies?: string[];
+  llm_backed?: boolean;
+  agent_outputs?: Record<string, unknown>;  // IDs of steps that must pass before this step runs (DAG mode only)
 }
 
-export type StepStatus = 'passed' | 'failed_gate' | 'skipped' | 'error' | 'retried';
+export type StepStatus = 'passed' | 'failed_gate' | 'skipped' | 'error' | 'retried' | 'agentic_loop';
 
 // ── Condition evaluator ───────────────────────────────────────────────────────
 // Supported: ==, !=, >=, <=, >, <, &&, ||, !, parens, string/number/bool literals, dotted paths
@@ -140,6 +142,7 @@ export interface StepResult {
   recommendation: string;
   gate?: number;
   duration_ms: number;
+  llm_upgrade?: any;
   error?: string;
   attempts?: number; // how many times this step ran (1 = no retries, 2+ = retried)
 }
@@ -160,14 +163,30 @@ export interface PipelineResult {
 
 /** Execute a single step and return a StepResult (no retry — used by DAG helper). */
 async function executeStep(step: PipelineStep, globalProjectDir?: string, elicitor?: (q: string) => Promise<string>): Promise<StepResult> {
-  const result = await executeOne({
+  const task = {
     id: step.id,
     agent: step.agent,
     task: step.task,
     code: step.code,
     context: step.context,
     project_dir: step.project_dir ?? globalProjectDir,
-  });
+    llm_backed: step.llm_backed ?? true,
+  };
+
+  if (step.agent_outputs && step.agent_outputs[step.id]) {
+     // logic handled in runPipeline or externally usually, but for completeness:
+  }
+
+  const result = await executeOne(task);
+
+  if (result.llm_upgrade) {
+    return {
+      id: step.id, agent: step.agent, status: 'agentic_loop',
+      confidence: 0, severity: 'info', recommendation: 'Upgrade to LLM needed',
+      gate: step.gate, duration_ms: result.duration_ms, llm_upgrade: result.llm_upgrade,
+      attempts: 1,
+    };
+  }
 
   if (result.error) {
     return {

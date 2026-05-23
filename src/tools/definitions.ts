@@ -303,6 +303,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         agent: {
           type: 'string',
           description: 'The worker agent to consult.',
@@ -375,6 +379,7 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_responses: { type: 'object', description: 'Phase 2 responses for council and agents.' },
         description: { type: 'string', description: 'Project description, PRD, or feature brief to parse into tasks.' },
         project_dir:  { type: 'string', description: 'Optional project directory for codebase context injection.' },
         max_tasks:    { type: 'number', description: 'Maximum number of tasks to generate (default 20).' },
@@ -389,6 +394,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         code:      { type: 'string', description: 'The code to review.' },
         context:   { type: 'string', description: 'Optional: file name, module description, or review focus.' },
         file_path: { type: 'string', description: 'Optional: absolute path to the file being reviewed. When provided, findings are stored as VS Code inline diagnostics.' },
@@ -402,6 +411,14 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_outputs: {
+          type: 'object',
+          description: 'Phase 2 responses from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         diff: { type: 'string', description: 'The git diff to review. If omitted, Veto runs git diff HEAD in project_dir.' },
         project_dir: { type: 'string', description: 'Absolute project path. Used to auto-read git diff if diff is not provided, and to inject codebase context.' },
         context: { type: 'string', description: 'Optional: PR description, ticket number, or focus area.' },
@@ -415,6 +432,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         code:      { type: 'string', description: 'The code to scan.' },
         context:   { type: 'string', description: 'Optional: language, framework, or specific concerns.' },
         file_path: { type: 'string', description: 'Optional: absolute path to the file being scanned. When provided, findings are stored as VS Code inline diagnostics.' },
@@ -428,6 +449,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         text:      { type: 'string', description: 'The text or code to scan for secrets.' },
         file_path: { type: 'string', description: 'Optional: absolute path to the file being scanned. When provided, findings are stored as VS Code inline diagnostics.' },
       },
@@ -440,6 +465,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_outputs: {
+          type: 'object',
+          description: 'Phase 2 responses from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         pr_url:  { type: 'string', description: 'Full GitHub PR URL. e.g. https://github.com/owner/repo/pull/123' },
         context: { type: 'string', description: 'Optional: PR description or ticket number for extra context.' },
         fail_on: { type: 'string', enum: ['warn', 'fail'], description: 'Whether WARN counts as a failure. Default: "fail".' },
@@ -662,6 +691,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_outputs: {
+          type: 'object',
+          description: 'Phase 2 responses from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         project_dir: { type: 'string', description: 'Absolute path to project. Reads git diff HEAD automatically.' },
         diff:        { type: 'string', description: 'Optional: pass a diff string directly instead of reading from project_dir.' },
         context:     { type: 'string', description: 'Optional: PR description or review context.' },
@@ -675,6 +708,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_outputs: {
+          type: 'object',
+          description: 'Phase 2 responses from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         project_dir: { type: 'string', description: 'Absolute path to project. Reads staged changes (git diff --cached) automatically.' },
         context:     { type: 'string', description: 'Optional: branch name or additional context.' },
       },
@@ -687,6 +724,7 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_responses: { type: 'object', description: 'Phase 2 responses for council and agents.' },
         description: { type: 'string', description: 'Feature description or user story.' },
         project_dir: { type: 'string', description: 'Optional: absolute path to project for context injection.' },
         context:     { type: 'string', description: 'Optional: constraints, team size, timeline, or architecture notes.' },
@@ -885,6 +923,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         project_dir: { type: 'string', description: 'Absolute path to TypeScript project root.' },
         max_files:   { type: 'number', description: 'Max files to analyze (default 20, max 30).' },
       },
@@ -897,6 +939,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         project_dir:     { type: 'string', description: 'Absolute path to project root.' },
         coverage_report: { type: 'string', description: 'Optional path to coverage JSON/lcov file.' },
         source_glob:     { type: 'string', description: 'Optional glob pattern for source files (e.g. "src/**/*.ts").' },
@@ -1121,6 +1167,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_outputs: {
+          type: 'object',
+          description: 'Phase 2 responses from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         project_dir: { type: 'string', description: 'Absolute project path. Veto reads git diff HEAD automatically.' },
         diff:        { type: 'string', description: 'Optional: pass a diff string directly instead of reading from project_dir.' },
         context:     { type: 'string', description: 'Optional: PR description or ticket number for context.' },
@@ -1195,6 +1245,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         file_path: { type: 'string', description: 'Absolute path to the file to explain.' },
         text:      { type: 'string', description: 'Raw text to explain — error messages, stack traces, compiler output, or any code snippet. Automatically routes to debugger agent for error-like content.' },
         depth:     { type: 'string', enum: ['overview', 'detailed', 'line-by-line'], description: 'Explanation depth. Default: overview.' },
@@ -1209,6 +1263,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         project_dir: { type: 'string', description: 'Absolute path to a project directory to summarize.' },
         file_path:   { type: 'string', description: 'Absolute path to a single file to summarize. If both project_dir and file_path are given, file_path takes precedence.' },
         focus:       { type: 'string', description: 'Optional focus area: e.g. "security", "APIs", "data flow", "architecture". Narrows the summary.' },
@@ -1258,6 +1316,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         task:     { type: 'string', description: 'The task or prompt.' },
         model:    { type: 'string', description: 'Local model name (e.g. llama3, mistral).' },
         provider: { type: 'string', enum: ['ollama', 'lmstudio'], description: 'Local provider.' }
@@ -1370,6 +1432,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         query: { type: 'string', description: 'Natural-language search query.' },
         project_dir: { type: 'string', description: 'Absolute path to project root.' }
       },
@@ -1382,6 +1448,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         spec_file: { type: 'string', description: 'Path to the specification file.' },
         project_dir: { type: 'string', description: 'Absolute path to project root.' },
         action: { type: 'string', enum: ['validate', 'generate_ac', 'author_bdd'], description: 'SDD action to perform.' }
@@ -1395,6 +1465,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         task: { type: 'string', description: 'Description of the browser task or test scenario.' },
         project_dir: { type: 'string', description: 'Absolute path to project root.' },
         url: { type: 'string', description: 'Optional starting URL for the browser session.' }

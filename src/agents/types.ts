@@ -73,6 +73,14 @@ export interface AgentTask {
   model?: string;
 }
 
+export interface AgenticAgentPrompt {
+  mode: 'agentic';
+  agent: WorkerAgentType;
+  instruction: string;
+  output_prompt: string;
+  schema: string;
+}
+
 export interface AgentResult {
   id: string;
   agent: WorkerAgentType;
@@ -81,5 +89,10 @@ export interface AgentResult {
   output: AgentOutput;          // always present — derived from plan or analysis
   duration_ms: number;
   llm_backed?: boolean;         // true when result came from MCP Sampling, false when deterministic
+  llm_upgrade?: {
+    available: true;
+    instruction: string;
+    prompt: AgenticAgentPrompt;
+  };
   error?: string;
 }
