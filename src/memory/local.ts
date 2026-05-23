@@ -197,6 +197,7 @@ function migrateCouncilOutcomes(db: DatabaseSync): void {
 
 export type SaveSessionInput = {
   platform?: string;
+  model?: string;
   connection_type?: string;
   project_dir?: string;
   summary?: string;
@@ -245,8 +246,8 @@ export function saveSession(input: SaveSessionInput): SessionSaveResult {
     VALUES (?, ?, ?, ?, ?, 'session_save', ?)
   `).run(randomUUID(), id, platform, connection_type, token_count, now);
 
-  // Context window guard
-  const window_size = CONTEXT_WINDOWS[platform] ?? 200_000;
+  // Context window guard — use model-specific window when available (Gemini 1M vs Claude 200k)
+  const window_size = resolveContextWindow(platform, input.model);
   const usage_pct = Math.round((token_count / window_size) * 100);
   const context_warning = usage_pct >= 80;
   const continuation_prompt = context_warning

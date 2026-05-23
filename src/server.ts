@@ -38,6 +38,7 @@ import type { AgentType, Platform } from './router/index.js';
 import { executeParallel, executeOne } from './agents/executor.js';
 import type { AgentTask, WorkerAgentType } from './agents/types.js';
 import { handoff, continueSession, getPlatformSetup } from './adapters/index.js';
+import type { SetupPlatform } from './adapters/index.js';
 import { startWatch, pollWatch, stopWatch, listWatches } from './watcher/index.js';
 import { runPipeline } from './workflow/pipeline.js';
 import type { PipelineStep } from './workflow/pipeline.js';
@@ -104,6 +105,34 @@ const server = new Server(
       resources: {},
       prompts: {},
     },
+    instructions: `Veto is a 49-tool MCP server for AI-assisted software engineering. Tools fall into five categories:
+
+SESSION & CONTEXT — veto_status, veto_session_save, veto_session_restore, veto_sessions_list, veto_continue, veto_handoff, veto_autosave_status. Persist work across context windows and switch AI platforms without losing progress. Call veto_session_save at 60–70% context capacity; veto_status triggers auto-save automatically above 70%.
+
+CODE INTELLIGENCE — veto_code_review, veto_diff_review, veto_security_scan, veto_secrets_scan, veto_ci_gate, veto_pr_review. Pass code or a git diff; each tool returns scored findings with severity (critical/high/medium/low). veto_diff_review and veto_ci_gate run code review + security + secrets scans in parallel — use these before any merge or deploy.
+
+COUNCIL & ROUTING — veto_council_debate, veto_route_task, veto_agent_plan, veto_execute_parallel, veto_workflow, veto_benchmark. The council runs 7 specialist agents (Lead Dev, PM, Architect, UX, Devil's Advocate, Legal, Security) and returns a verdict.
+
+Two-phase council flow (LLM-backed, no API keys needed):
+  Phase 1 — call veto_council_debate with { task }. The response includes llm_upgrade.debate_prompt.
+  Phase 2 — reason as all 7 agents using that prompt, produce agent_responses JSON, then call veto_council_debate again with { task, agent_responses } to get the final LLM-backed verdict.
+
+Council verdict colors:
+  GREEN   — approved, proceed with confidence
+  YELLOW  — approved with warnings, review warnings before shipping
+  RED     — blocked, do not proceed without addressing block_reasons
+  DEADLOCK — council split evenly, human decision required
+
+MEMORY & DISCOVERY — veto_memory_store, veto_memory_search, veto_memory_delete, veto_project_map_update, veto_project_map_get, veto_pattern_store, veto_patterns_list, veto_discover, veto_summarize, veto_explain. Use veto_discover to map an unknown repo in seconds, veto_summarize for a plain-English briefing, and veto_memory_store to persist key findings across sessions.
+
+OBSERVABILITY — veto_usage_status, veto_audit_log, veto_health, veto_metrics, veto_rate_status, veto_learning_stats, veto_learning_apply. Monitor token budgets, council decision history, and auto-router performance. Call veto_learning_apply after 20+ outcomes to tune routing thresholds from real data.
+
+Recommended start sequence:
+  1. veto_status — confirm server is running and check token usage
+  2. veto_discover or veto_summarize — orient to the codebase before touching files
+  3. veto_route_task — pick the right agent before heavy analysis
+  4. veto_diff_review or veto_council_debate — validate before shipping
+  5. veto_session_save — checkpoint before context fills`,
   }
 );
 
@@ -357,11 +386,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const existingId = args?.session_id ? String(args.session_id) : undefined;
 
+      const saveModel = args?.model ? String(args.model) : undefined;
       const sessionInput = {
         summary: saveSummary,
         context: saveContext,
         task_state: saveTaskState,
         platform: savePlatform,
+        model: saveModel,
         connection_type: args?.connection_type ? String(args.connection_type) : 'subscription',
         project_dir: sessionProjectDir,
         token_count: typeof args?.token_count === 'number' ? args.token_count : 0,
@@ -383,8 +414,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         result = saveSession(sessionInput);
       }
       // Cache for auto-save: future veto_status calls with high token_count will re-save this context
-      const saveModel = args?.model ? String(args.model) : undefined;
-      const resolvedWindow = saveModel ? resolveContextWindow(savePlatform, saveModel) : undefined;
+      const resolvedWindow = resolveContextWindow(savePlatform, saveModel);
       autoSave.cached = { summary: saveSummary, context: saveContext, task_state: saveTaskState, platform: savePlatform, project_dir: sessionProjectDir, context_window: resolvedWindow };
       autoSave.last_save_at = result.saved_at;
       autoSave.last_session_id = result.session_id;
@@ -397,7 +427,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           platform: savePlatform,
           model: saveModel,
           token_count: saveTokenCount,
-          context_window: resolvedWindow ?? resolveContextWindow(savePlatform, saveModel),
+          context_window: resolvedWindow,
           session_id: result.session_id,
         });
       }
@@ -1106,7 +1136,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_platform_setup': {
-      const platform = String(args?.platform ?? '').trim() as Platform;
+      const platform = String(args?.platform ?? '').trim() as SetupPlatform;
       const vetoServerPath = String(args?.veto_server_path ?? '').trim();
       if (!platform || !vetoServerPath) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'platform and veto_server_path are required.' }) }], isError: true };

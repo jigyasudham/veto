@@ -30,8 +30,10 @@ export type ContinueResult = {
   restored_at: string;
 };
 
+export type SetupPlatform = Platform | 'windsurf' | 'zed' | 'amazonq';
+
 export type PlatformSetupResult = {
-  platform: Platform;
+  platform: SetupPlatform;
   mcp_config: object;
   setup_steps: string[];
   rate_limit_signals: string[];
@@ -161,7 +163,81 @@ function buildContinueResult(session: ReturnType<typeof listSessions>[0], now: s
 
 // ─── Platform Setup ───────────────────────────────────────────────────────────
 
-export function getPlatformSetup(platform: Platform, vetoServerPath: string): PlatformSetupResult {
+export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string): PlatformSetupResult {
+  const mcpEntry = { command: 'npx', args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
+
+  // ── Windsurf ────────────────────────────────────────────────────────────────
+  if (platform === 'windsurf') {
+    return {
+      platform,
+      mcp_config: { mcpServers: { veto: mcpEntry }, config_path: '~/.codeium/windsurf/mcp_config.json' },
+      setup_steps: [
+        '1. Run: npx @jigyasudham/veto init  (auto-writes ~/.codeium/windsurf/mcp_config.json)',
+        '2. Fully restart Windsurf (quit and reopen)',
+        '3. Verify: call veto_status in Windsurf — should return { "status": "running" }',
+        'Tip: Windsurf also reads ~/.codeium/windsurf/rules/veto.md written by veto init.',
+      ],
+      rate_limit_signals: ['rate limit', 'too many requests', '429', 'quota exceeded'],
+      continue_command: 'veto_continue',
+      notes: [
+        'Windsurf uses mcpServers format in ~/.codeium/windsurf/mcp_config.json.',
+        'Veto init writes both the config file and ~/.codeium/windsurf/rules/veto.md automatically.',
+        'All veto_* tools work identically in Windsurf as in Claude Code.',
+      ],
+    };
+  }
+
+  // ── Zed ─────────────────────────────────────────────────────────────────────
+  if (platform === 'zed') {
+    const zedSettingsPath = process.platform === 'win32'
+      ? '%APPDATA%\\Zed\\settings.json'
+      : '~/.config/zed/settings.json';
+    return {
+      platform,
+      mcp_config: { context_servers: { veto: mcpEntry }, config_path: zedSettingsPath },
+      setup_steps: [
+        '1. Run: npx @jigyasudham/veto init  (auto-writes context_servers entry to Zed settings.json)',
+        '2. Fully restart Zed',
+        '3. Verify: call veto_status — should return { "status": "running" }',
+        `Zed config path: ${zedSettingsPath}`,
+      ],
+      rate_limit_signals: ['rate limit', 'too many requests', '429', 'quota exceeded'],
+      continue_command: 'veto_continue',
+      notes: [
+        'Zed uses "context_servers" (not "mcpServers") as the JSON key.',
+        'veto init detects Zed automatically and writes the correct format.',
+        'Zed AI features require a Pro subscription — MCP tools are only available in AI-enabled sessions.',
+      ],
+    };
+  }
+
+  // ── Amazon Q ────────────────────────────────────────────────────────────────
+  if (platform === 'amazonq') {
+    return {
+      platform,
+      mcp_config: {
+        mcpServers: { veto: mcpEntry },
+        global_config_path: '~/.aws/amazonq/mcp.json',
+        project_config_path: '.amazonq/mcp.json',
+      },
+      setup_steps: [
+        '1. Create ~/.aws/amazonq/mcp.json (global) or .amazonq/mcp.json (project-local):',
+        '   { "mcpServers": { "veto": { "command": "npx", "args": ["-y", "--package", "@jigyasudham/veto", "veto-server"] } } }',
+        '2. Restart Amazon Q Developer (VS Code extension or CLI)',
+        '3. Verify: call veto_status — should return { "status": "running" }',
+        'Tip: project-local .amazonq/mcp.json takes precedence over global ~/.aws/amazonq/mcp.json.',
+      ],
+      rate_limit_signals: ['throttling', 'service quota', 'rate limit', 'too many requests', '429'],
+      continue_command: 'veto_continue',
+      notes: [
+        'Amazon Q supports both global (~/.aws/amazonq/mcp.json) and project-local (.amazonq/mcp.json) configs.',
+        'Amazon Q Developer requires an AWS Builder ID or IAM Identity Center account.',
+        'veto init does not yet auto-configure Amazon Q — write the config file manually per the steps above.',
+      ],
+    };
+  }
+
+  // ── Claude / Gemini / Codex (existing platforms) ────────────────────────────
   const configs: Record<Platform, { configPath: string; configKey: string; installCmd: string; notes: string[] }> = {
     claude: {
       configPath: '~/.claude/settings.json (managed by `claude mcp add`)',
@@ -198,8 +274,7 @@ export function getPlatformSetup(platform: Platform, vetoServerPath: string): Pl
     },
   };
 
-  const cfg = configs[platform] ?? configs['claude'];
-  const mcpEntry = { command: 'npx', args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
+  const cfg = configs[platform as Platform] ?? configs['claude'];
 
   const claudeSteps = [
     `1. Run: claude mcp add veto -s user -- npx -y --package @jigyasudham/veto veto-server`,

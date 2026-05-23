@@ -286,6 +286,151 @@ async function initCommand() {
 
   console.log('');
 
+  // 5. Write platform-specific context guidance files
+  // These are read at session start by each AI client — zero tool calls needed.
+  console.log('  Writing context guidance files...');
+  console.log('');
+
+  const VETO_GUIDE = `# Veto MCP Server
+
+Veto is active. 49 tools across 5 categories:
+
+**Session & Context** — veto_status · veto_session_save · veto_continue · veto_handoff
+Save work at 60–70% context capacity. veto_status triggers auto-save above 70%.
+
+**Code Intelligence** — veto_diff_review · veto_code_review · veto_security_scan · veto_secrets_scan · veto_ci_gate
+Run veto_diff_review before any merge — it runs all three scans in parallel.
+
+**Council & Routing** — veto_council_debate · veto_route_task · veto_execute_parallel
+Council = 7 specialist agents (Lead Dev, PM, Architect, UX, Devil's Advocate, Legal, Security).
+Verdicts: GREEN (proceed) · YELLOW (warnings) · RED (blocked) · DEADLOCK (human decision needed).
+Two-phase LLM-backed flow: call with { task } → get debate_prompt → reason as all 7 agents → call again with { task, agent_responses }.
+
+**Memory & Discovery** — veto_discover · veto_summarize · veto_memory_store · veto_memory_search
+Run veto_discover on any unfamiliar repo before touching files.
+
+**Observability** — veto_usage_status · veto_health · veto_audit_log · veto_learning_stats
+
+Recommended start sequence:
+1. veto_status — confirm running
+2. veto_discover — map the project
+3. veto_route_task — pick the right agent
+4. veto_diff_review — validate before shipping
+5. veto_session_save — checkpoint before context fills
+`;
+
+  let ctxWritten = 0;
+
+  // Gemini CLI: ~/.gemini/GEMINI.md
+  const geminiDir = join(HOME, '.gemini');
+  if (existsSync(geminiDir)) {
+    try {
+      writeFileSync(join(geminiDir, 'GEMINI.md'), VETO_GUIDE, 'utf8');
+      console.log(c.green('  ✓ ') + 'Gemini CLI — wrote ~/.gemini/GEMINI.md');
+      ctxWritten++;
+    } catch { console.log(c.yellow('  ⚠ ') + 'Gemini CLI — could not write GEMINI.md (permission denied?)'); }
+  }
+
+  // Codex CLI: project AGENTS.md + global ~/.codex/AGENTS.override.md
+  const codexDir2 = join(HOME, '.codex');
+  if (existsSync(codexDir2)) {
+    // Project-level: only write if not already present (user may have customized it)
+    const projectAgents = join(cwd, 'AGENTS.md');
+    if (!existsSync(projectAgents)) {
+      try {
+        writeFileSync(projectAgents, VETO_GUIDE, 'utf8');
+        console.log(c.green('  ✓ ') + `Codex CLI — wrote AGENTS.md in ${cwd}`);
+        ctxWritten++;
+      } catch { console.log(c.yellow('  ⚠ ') + 'Codex CLI — could not write AGENTS.md'); }
+    } else {
+      console.log(c.dim('  · ') + c.dim('Codex CLI — AGENTS.md already exists, skipping'));
+    }
+    // Global override
+    try {
+      writeFileSync(join(codexDir2, 'AGENTS.override.md'), VETO_GUIDE, 'utf8');
+      console.log(c.green('  ✓ ') + 'Codex CLI — wrote ~/.codex/AGENTS.override.md');
+      ctxWritten++;
+    } catch { console.log(c.yellow('  ⚠ ') + 'Codex CLI — could not write AGENTS.override.md'); }
+  }
+
+  // Windsurf: ~/.codeium/windsurf/rules/veto.md
+  const windsurfRulesDir = join(HOME, '.codeium', 'windsurf', 'rules');
+  if (existsSync(join(HOME, '.codeium', 'windsurf'))) {
+    try {
+      mkdirSync(windsurfRulesDir, { recursive: true });
+      writeFileSync(join(windsurfRulesDir, 'veto.md'), VETO_GUIDE, 'utf8');
+      console.log(c.green('  ✓ ') + 'Windsurf — wrote ~/.codeium/windsurf/rules/veto.md');
+      ctxWritten++;
+    } catch { console.log(c.yellow('  ⚠ ') + 'Windsurf — could not write rules/veto.md'); }
+  }
+
+  if (ctxWritten > 0) console.log('');
+
+  // 6. Write Claude Code hook templates to .claude/hooks/ in current project
+  // Hooks enforce secrets scanning on every file write and auto-save before compaction.
+  if (existsSync(claudeDir)) {
+    const hooksDir = join(cwd, '.claude', 'hooks');
+    const settingsPath = join(cwd, '.claude', 'settings.json');
+    try {
+      mkdirSync(hooksDir, { recursive: true });
+
+      // Secrets scan — bash (Mac/Linux)
+      const shLines = [
+        '#!/usr/bin/env bash',
+        '# Veto hook: scan written files for exposed secrets (no API key needed).',
+        '# Triggered by Claude Code PostToolUse after Write/Edit tool calls.',
+        'FILE="$1"',
+        '[ -z "$FILE" ] && exit 0',
+        '[ ! -f "$FILE" ] && exit 0',
+        "PATTERNS='(api[_-]?key|secret[_-]?key|password|passwd|token|access[_-]?key|private[_-]?key)\\s*[=:]\\s*[A-Za-z0-9+/]{20,}'",
+        'if grep -qiE "$PATTERNS" "$FILE" 2>/dev/null; then',
+        '  echo "Veto: possible secret detected in $FILE — run veto_secrets_scan to confirm"',
+        '  exit 1',
+        'fi',
+        'exit 0',
+        '',
+      ];
+      writeFileSync(join(hooksDir, 'veto-secrets-scan.sh'), shLines.join('\n'), 'utf8');
+
+      // Secrets scan — PowerShell (Windows)
+      const ps1Lines = [
+        '# Veto hook: scan written files for exposed secrets (no API key needed).',
+        'param([string]$File)',
+        'if (-not $File -or -not (Test-Path $File)) { exit 0 }',
+        "$pattern = '(api[_-]?key|secret[_-]?key|password|passwd|token|access[_-]?key|private[_-]?key)\\s*[=:]\\s*[A-Za-z0-9+/]{20,}'",
+        'if (Select-String -Path $File -Pattern $pattern -Quiet -CaseSensitive:$false) {',
+        '  Write-Host "Veto: possible secret detected in $File — run veto_secrets_scan to confirm"',
+        '  exit 1',
+        '}',
+        'exit 0',
+        '',
+      ];
+      writeFileSync(join(hooksDir, 'veto-secrets-scan.ps1'), ps1Lines.join('\n'), 'utf8');
+
+      // Wire hooks into .claude/settings.json if it exists or create it
+      let projectSettings: Record<string, unknown> = {};
+      if (existsSync(settingsPath)) {
+        try { projectSettings = JSON.parse(readFileSync(settingsPath, 'utf8')); } catch { /* leave empty */ }
+      } else {
+        mkdirSync(dirname(settingsPath), { recursive: true });
+      }
+      const hooks = (projectSettings.hooks as Record<string, unknown>) ?? {};
+      // Only add if not already configured
+      if (!hooks['PostToolUse']) {
+        const scanCmd = process.platform === 'win32'
+          ? 'powershell -ExecutionPolicy Bypass -File .claude/hooks/veto-secrets-scan.ps1 "$CLAUDE_TOOL_INPUT_FILE_PATH"'
+          : 'bash .claude/hooks/veto-secrets-scan.sh "$CLAUDE_TOOL_INPUT_FILE_PATH"';
+        hooks['PostToolUse'] = [{ matcher: 'Write|Edit', hooks: [{ type: 'command', command: scanCmd }] }];
+        projectSettings.hooks = hooks;
+        writeFileSync(settingsPath, JSON.stringify(projectSettings, null, 2) + '\n', 'utf8');
+        console.log(c.green('  ✓ ') + 'Claude Code — wrote .claude/hooks/veto-secrets-scan + PostToolUse hook entry');
+      } else {
+        console.log(c.dim('  · ') + c.dim('Claude Code — PostToolUse hook already configured, skipping'));
+      }
+    } catch { console.log(c.yellow('  ⚠ ') + 'Claude Code — could not write hook templates (permission denied?)'); }
+    console.log('');
+  }
+
   if (configured === 0 && skipped === 0) {
     console.log(c.yellow('  ⚠  No AI tools detected.'));
     console.log('  Install Claude Code, Gemini CLI, or Codex CLI and run veto init again.');

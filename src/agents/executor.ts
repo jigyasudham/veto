@@ -1,4 +1,5 @@
 import { AgentTask, AgentResult, AgentOutput, AgentPlan, AgentAnalysis, WorkerAgentType } from './types.js';
+import { validateAgentPlan, validateAgentAnalysis } from './validate.js';
 import { buildContextString } from '../context/reader.js';
 import { getPlugin, isPlugin } from '../plugins/loader.js';
 
@@ -167,7 +168,8 @@ export async function executeOne(task: AgentTask): Promise<AgentResult> {
     const enrichedContext = buildContextString(task.project_dir, task.context);
 
     if (useAnalyze && agent.analyze) {
-      const analysis = agent.analyze(task.code!, enrichedContext || task.context);
+      const raw = agent.analyze(task.code!, enrichedContext || task.context);
+      const analysis = validateAgentAnalysis(raw, task.agent) ?? raw;
       return {
         id: task.id,
         agent: task.agent,
@@ -176,7 +178,8 @@ export async function executeOne(task: AgentTask): Promise<AgentResult> {
         duration_ms: Date.now() - start,
       };
     } else {
-      const plan = agent.plan(task.task, enrichedContext || task.context);
+      const raw = agent.plan(task.task, enrichedContext || task.context);
+      const plan = validateAgentPlan(raw, task.agent) ?? raw;
       return {
         id: task.id,
         agent: task.agent,
