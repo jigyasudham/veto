@@ -677,6 +677,159 @@ export const TOOL_DEFINITIONS = [
       required: ['agent_id', 'task'],
     },
   },
+  {
+    name: 'veto_prompt_optimizer',
+    description: 'Scores a prompt for failure modes (vague role, missing output format, injection-prone, no examples) and returns a rewritten version with improvements. Zero API keys needed — uses the local agent loop.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: 'The prompt to optimize (system or user prompt).' },
+        role:   { type: 'string', description: "Optional — 'system' | 'user' (helps tailor analysis)." },
+        goal:   { type: 'string', description: 'Optional — what the prompt is trying to accomplish.' },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
+    name: 'veto_sre_advisor',
+    description: 'Calculates SLO error budget status (remaining %, projected exhaustion) and returns ranked reliability improvements. Error budget math is deterministic; prioritization uses the local agent loop.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slo_target:       { type: 'number', description: 'SLO target % (e.g. 99.9).' },
+        window_days:      { type: 'number', description: 'Measurement window in days (e.g. 30).' },
+        downtime_minutes: { type: 'number', description: 'Total downtime minutes in the window.' },
+        incidents: {
+          type: 'array',
+          description: 'Optional — recent incidents.',
+          items: {
+            type: 'object',
+            properties: {
+              date:             { type: 'string', description: 'ISO date of the incident.' },
+              duration_minutes: { type: 'number', description: 'Duration of the incident in minutes.' },
+              description:      { type: 'string', description: 'Short description of the incident.' },
+            },
+          },
+        },
+        service_name: { type: 'string', description: 'Optional — name of the service.' },
+      },
+      required: ['slo_target', 'window_days', 'downtime_minutes'],
+    },
+  },
+  {
+    name: 'veto_diagram',
+    description: "Generates a Mermaid architecture diagram of the project. Returns diagram text ready to paste into GitHub, Notion, or any Mermaid renderer.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir:  { type: 'string', description: 'Absolute path to project.' },
+        diagram_type: { type: 'string', description: "Diagram type: 'flowchart' | 'classDiagram' | 'sequenceDiagram' | 'C4Context' (default: 'flowchart')." },
+        focus:        { type: 'string', description: "Optional — what to focus on (e.g. 'data flow', 'auth', 'API')." },
+      },
+      required: ['project_dir'],
+    },
+  },
+  {
+    name: 'veto_adr',
+    description: 'Converts a veto_council_debate result into a MADR-format Architecture Decision Record (ADR). Writes to docs/decisions/NNNN-<slug>.md if project_dir is provided. Returns the ADR markdown content.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task:         { type: 'string', description: 'The decision/task that was debated.' },
+        verdict:      { type: 'string', description: 'Council verdict: GREEN/YELLOW/RED/DEADLOCK.' },
+        recommended:  { type: 'string', description: 'The recommended approach from the council.' },
+        rationale:    { type: 'string', description: 'Optional additional rationale or context.' },
+        consequences: { type: 'string', description: 'Optional known consequences of this decision.' },
+        project_dir:  { type: 'string', description: 'Optional path to write the ADR file.' },
+        outcome_id:   { type: 'string', description: 'Optional council outcome_id for reference.' },
+      },
+      required: ['task', 'verdict', 'recommended'],
+    },
+  },
+  {
+    name: 'veto_env_setup',
+    description: 'Analyzes project config files (package.json, requirements.txt, .env, etc.) and generates a .env.example with all required environment variables, plus a step-by-step setup guide.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir:  { type: 'string', description: 'Absolute path to project.' },
+        write_files:  { type: 'boolean', description: 'If true, write .env.example to disk (default false).' },
+      },
+      required: ['project_dir'],
+    },
+  },
+  {
+    name: 'veto_commit_message',
+    description: 'Generates a conventional-commit message from staged changes (git diff --cached). Returns type, scope, subject, and body following the Conventional Commits specification.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir: { type: 'string', description: 'Absolute path to the git repository.' },
+        hint:        { type: 'string', description: 'Optional extra context for the commit (ticket number, motivation, etc.).' },
+      },
+      required: ['project_dir'],
+    },
+  },
+  {
+    name: 'veto_pr_description',
+    description: "Generates a complete GitHub PR description (title, summary, change list, test plan, breaking changes) from git diff main...HEAD. Ready to paste into GitHub or post via veto_pr_post.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir:  { type: 'string', description: 'Absolute path to the git repository.' },
+        base_branch:  { type: 'string', description: "Branch to diff against (default: 'main')." },
+        title:        { type: 'string', description: 'Optional PR title hint.' },
+        context:      { type: 'string', description: 'Optional: ticket number, description, or motivation.' },
+      },
+      required: ['project_dir'],
+    },
+  },
+  {
+    name: 'veto_pr_post',
+    description: 'Posts veto_pr_review or veto_diff_review findings directly to a GitHub PR as review comments. Requires GITHUB_TOKEN environment variable. Returns the review URL.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pr_url: {
+          type: 'string',
+          description: 'GitHub PR URL: https://github.com/owner/repo/pull/123',
+        },
+        findings: {
+          type: 'array',
+          description: 'Findings from veto_pr_review or veto_diff_review.',
+          items: {
+            type: 'object',
+            properties: {
+              severity: { type: 'string', description: "Severity: 'critical' | 'high' | 'medium' | 'low'" },
+              message:  { type: 'string', description: 'Finding message.' },
+              location: { type: 'string', description: 'Optional file:line hint.' },
+            },
+            required: ['severity', 'message'],
+          },
+        },
+        body:  { type: 'string', description: 'Optional overall review summary posted as top-level comment.' },
+        event: { type: 'string', description: "Review event: 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES' (default: 'COMMENT')." },
+      },
+      required: ['pr_url', 'findings'],
+    },
+  },
+  {
+    name: 'veto_debt_register',
+    description: 'Analyzes code quality + git commit frequency to produce a ranked technical debt register. High-churn + low-quality files are highest priority. Returns a prioritized list with debt type, location, and suggested agent.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir: { type: 'string', description: 'Absolute path to project.' },
+        max_files:   { type: 'number', description: 'Max files to analyze (default 10, max 30).' },
+        extensions:  {
+          type: 'array',
+          description: "File extensions to scan (default: ['.ts','.js','.py','.go']).",
+          items: { type: 'string' },
+        },
+      },
+      required: ['project_dir'],
+    },
+  },
   // ── Workflow & CI ─────────────────────────────────────────────────────────────
   {
     name: 'veto_workflow',

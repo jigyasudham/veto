@@ -47,7 +47,7 @@ import type { PipelineStep } from './workflow/pipeline.js';
 import { loadPlugins, listPlugins } from './plugins/loader.js';
 import { fetchPrDiff } from './github/pr-fetcher.js';
 import { discoverProject } from './discover.js';
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
 import { extname, basename, join, dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -193,6 +193,15 @@ const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint
   veto_pre_commit:        { readOnlyHint: true },
   veto_new_feature:       { readOnlyHint: false, destructiveHint: false },
   veto_delegate:          { readOnlyHint: true },
+  veto_prompt_optimizer:  { readOnlyHint: true },
+  veto_sre_advisor:       { readOnlyHint: true },
+  veto_diagram:           { readOnlyHint: true },
+  veto_pr_post:           { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  veto_debt_register:     { readOnlyHint: true },
+  veto_adr:               { readOnlyHint: false, destructiveHint: false },
+  veto_env_setup:         { readOnlyHint: false, destructiveHint: false },
+  veto_commit_message:    { readOnlyHint: true },
+  veto_pr_description:    { readOnlyHint: true },
   veto_workflow:          { readOnlyHint: false, destructiveHint: false },
   veto_ci_gate:           { readOnlyHint: false, destructiveHint: false },
   veto_usage_status:      { readOnlyHint: false, destructiveHint: false },
@@ -2216,6 +2225,525 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         severity: result.output.severity ?? null,
         duration_ms: result.duration_ms,
         truncated: summary.length >= maxLen,
+      }, null, 2) }] };
+    }
+
+    case 'veto_commit_message': {
+      const projectDir = String(args?.project_dir ?? '').trim();
+      const hint       = args?.hint ? String(args.hint) : undefined;
+
+      if (!projectDir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
+
+      let diff = '';
+      try {
+        diff = execSyncTop('git diff --cached --no-color', { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+      } catch { /* not a git repo */ }
+      if (!diff) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No staged changes. Run git add first.' }) }], isError: true };
+
+      const truncatedDiff = diff.slice(0, 6000);
+
+      const result = await executeOne({
+        id:      'commit-msg-1',
+        agent:   'git-agent' as WorkerAgentType,
+        task:    'Generate a conventional commit message for these staged changes. Follow the Conventional Commits spec: type(scope): subject\n\nbody. Types: feat/fix/docs/chore/refactor/test/perf/ci/build/style. Be concise. Subject ≤ 72 chars.',
+        code:    truncatedDiff,
+        context: hint,
+      });
+
+      autoRecord('commit-message', 'git-agent', Math.round(result.output.confidence * 100));
+
+      const message = (result.plan?.approach ?? result.output.recommendation ?? '').trim();
+      const firstLine = message.split('\n')[0] ?? '';
+      const match = firstLine.match(/^(\w+)(?:\(([^)]+)\))?!?:\s*(.+)/);
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        message,
+        type:       match ? match[1] : null,
+        scope:      match ? (match[2] ?? null) : null,
+        subject:    match ? match[3] : null,
+        confidence: Math.round(result.output.confidence * 100),
+      }, null, 2) }] };
+    }
+
+    case 'veto_pr_description': {
+      const projectDir  = String(args?.project_dir ?? '').trim();
+      const baseBranch  = args?.base_branch ? String(args.base_branch) : 'main';
+      const titleHint   = args?.title   ? String(args.title)   : undefined;
+      const userContext = args?.context ? String(args.context) : undefined;
+
+      if (!projectDir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
+
+      let stat = '';
+      let commitLog = '';
+      try {
+        stat      = execSyncTop(`git diff ${baseBranch}...HEAD --no-color --stat`,  { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+        commitLog = execSyncTop(`git log ${baseBranch}...HEAD --oneline`,            { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+      } catch (e) {
+        if (!stat && !commitLog) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `git diff failed: ${(e as Error).message}` }) }], isError: true };
+      }
+
+      let fullDiff = '';
+      try {
+        fullDiff = execSyncTop(`git diff ${baseBranch}...HEAD --no-color`, { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+      } catch { /* ignore */ }
+
+      const contextParts: string[] = [];
+      if (titleHint)   contextParts.push(`PR Title: ${titleHint}`);
+      if (userContext) contextParts.push(`Context: ${userContext}`);
+      if (commitLog)   contextParts.push(`Commits:\n${commitLog}`);
+      if (stat)        contextParts.push(`Diff stat:\n${stat}`);
+      const builtContext = contextParts.join('\n\n');
+
+      const result = await executeOne({
+        id:          'pr-desc-1',
+        agent:       'documentation' as WorkerAgentType,
+        task:        "Write a complete GitHub Pull Request description. Include: ## Summary (3–5 bullet points of what changed and why), ## Changes (file-level breakdown from the diff stat), ## Test Plan (bulleted checklist of how to verify the changes), ## Breaking Changes (any API or interface changes; say 'None' if clean). Be specific and developer-facing.",
+        code:        fullDiff.slice(0, 8000),
+        context:     builtContext || undefined,
+        project_dir: projectDir,
+      });
+
+      const quality = Math.round(result.output.confidence * 100);
+      autoRecord('pr-description', 'documentation', quality);
+
+      const body = (result.plan?.approach ?? result.output.recommendation ?? '').trim();
+      const suggestedTitle = titleHint ?? (commitLog.split('\n')[0]?.replace(/^[a-f0-9]+ /, '') ?? 'Pull Request');
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        title:       suggestedTitle,
+        body,
+        base_branch: baseBranch,
+        confidence:  quality,
+      }, null, 2) }] };
+    }
+
+    case 'veto_pr_post': {
+      const m = String(args?.pr_url ?? '').match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
+      if (!m) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'Invalid PR URL. Expected: https://github.com/owner/repo/pull/123' }) }], isError: true };
+      const [, owner, repo, prNum] = m;
+
+      if (!process.env.GITHUB_TOKEN) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'GITHUB_TOKEN env var not set' }) }], isError: true };
+
+      const findings: Array<{ severity: string; message: string; location?: string }> =
+        Array.isArray(args?.findings) ? args.findings : [];
+      const reviewBody = args?.body ? String(args.body) :
+        `Veto review: ${findings.length} finding(s) — ${findings.filter(f => f.severity === 'critical' || f.severity === 'high').length} critical/high`;
+      const eventVal = String(args?.event ?? '');
+      const event = ['COMMENT', 'APPROVE', 'REQUEST_CHANGES'].includes(eventVal) ? eventVal : 'COMMENT';
+
+      const comments = findings
+        .filter(f => f.severity === 'critical' || f.severity === 'high')
+        .slice(0, 20)
+        .map(f => ({ body: `**[${f.severity.toUpperCase()}]** ${f.message}${f.location ? `\n\n_Location: ${f.location}_` : ''}` }));
+
+      const prPostUrl = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNum}/reviews`;
+      const prPostHeaders: Record<string, string> = {
+        'User-Agent': 'veto-mcp-server',
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
+      };
+      const prPostResp = await fetch(prPostUrl, {
+        method: 'POST',
+        headers: prPostHeaders,
+        body: JSON.stringify({ body: reviewBody, event, comments }),
+      });
+      if (!prPostResp.ok) {
+        const err = await prPostResp.text();
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `GitHub API error ${prPostResp.status}: ${err.slice(0, 200)}` }) }], isError: true };
+      }
+      const review = await prPostResp.json() as { id: number; html_url: string; state: string };
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        success: true,
+        review_id: review.id,
+        review_url: review.html_url,
+        event,
+        findings_posted: comments.length,
+        total_findings: findings.length,
+      }, null, 2) }] };
+    }
+
+    case 'veto_debt_register': {
+      const project_dir = String(args?.project_dir ?? '').trim();
+      if (!project_dir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
+
+      let gitLog = '';
+      try {
+        gitLog = execSyncTop('git log --since=90.days --name-only --format="" --no-merges', {
+          cwd: project_dir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'],
+        }).toString();
+      } catch { /* not a git repo */ }
+
+      const churnMap: Record<string, number> = {};
+      for (const line of gitLog.split('\n').filter(Boolean)) {
+        if (line.includes('.')) {
+          churnMap[line.trim()] = (churnMap[line.trim()] ?? 0) + 1;
+        }
+      }
+
+      const maxFiles = typeof args?.max_files === 'number' ? Math.min(args.max_files, 30) : 10;
+      const extensions = Array.isArray(args?.extensions) ? args.extensions.map(String) : ['.ts', '.js', '.py', '.go', '.java'];
+      const topFiles = Object.entries(churnMap)
+        .filter(([f]) => extensions.some(ext => f.endsWith(ext)))
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, maxFiles)
+        .map(([file, commits]) => ({ file, commits }));
+
+      const fileContents = topFiles.map(({ file, commits }) => {
+        try {
+          const abs = join(project_dir, file);
+          const content = readFileSync(abs, 'utf8').slice(0, 3000);
+          return { file, commits, content };
+        } catch { return { file, commits, content: '' }; }
+      }).filter(f => f.content);
+
+      if (fileContents.length === 0) {
+        return { content: [{ type: 'text', text: JSON.stringify({
+          total_files_analyzed: 0,
+          date_range: 'last 90 days',
+          debt_items: [],
+          summary: 'No eligible files found in git history for the last 90 days.',
+        }, null, 2) }] };
+      }
+
+      const debtCode = fileContents
+        .map(f => `=== ${f.file} (${f.commits} commits) ===\n${f.content}`)
+        .join('\n\n')
+        .slice(0, 8000);
+
+      const debtResult = await executeOne({
+        id: `debt-${Date.now()}`,
+        agent: 'code-quality',
+        task: 'Analyze these high-churn source files for technical debt. For each file, identify: (1) the primary debt type (complexity/duplication/coupling/coverage/documentation), (2) severity (high/medium/low), (3) estimated fix effort in hours, (4) recommended agent to fix it. Rank by: high-churn × high-severity first.',
+        code: debtCode,
+      });
+
+      autoRecord('debt-register', 'code-quality', Math.round(debtResult.output.confidence * 100));
+
+      const steps = debtResult.plan?.steps ?? [];
+      let debtItems: Array<{
+        file: string;
+        churn_commits: number;
+        priority: string;
+        debt_type: string;
+        suggested_agent: string;
+        estimated_hours: number;
+      }>;
+
+      if (steps.length > 0) {
+        debtItems = steps.map((step: string, i: number) => {
+          const matchedFile = fileContents[i] ?? fileContents[0];
+          return {
+            file: matchedFile.file,
+            churn_commits: matchedFile?.commits ?? 0,
+            priority: i < Math.ceil(steps.length / 3) ? 'high' : i < Math.ceil(steps.length * 2 / 3) ? 'medium' : 'low',
+            debt_type: 'complexity',
+            suggested_agent: 'refactor',
+            estimated_hours: 2,
+            description: step,
+          };
+        });
+      } else {
+        debtItems = fileContents.map(f => ({
+          file: f.file,
+          churn_commits: f.commits,
+          priority: f.commits > 20 ? 'high' : f.commits > 10 ? 'medium' : 'low',
+          debt_type: 'complexity',
+          suggested_agent: 'refactor',
+          estimated_hours: 2,
+        }));
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        total_files_analyzed: fileContents.length,
+        date_range: 'last 90 days',
+        debt_items: debtItems,
+        summary: (debtResult.plan?.approach ?? debtResult.output.recommendation ?? '').trim(),
+      }, null, 2) }] };
+    }
+
+    case 'veto_adr': {
+      const task         = String(args?.task         ?? '').trim();
+      const verdict      = String(args?.verdict      ?? '').trim().toUpperCase();
+      const recommended  = String(args?.recommended  ?? '').trim();
+      const rationale    = args?.rationale    ? String(args.rationale)    : undefined;
+      const consequences = args?.consequences ? String(args.consequences) : undefined;
+      const projectDir   = args?.project_dir  ? String(args.project_dir)  : undefined;
+      const outcomeId    = args?.outcome_id   ? String(args.outcome_id)   : undefined;
+
+      if (!task || !verdict || !recommended) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'task, verdict, and recommended are required.' }) }], isError: true };
+      }
+
+      const statusMap: Record<string, string> = {
+        GREEN:    'Accepted',
+        YELLOW:   'Accepted with reservations',
+        RED:      'Rejected',
+        DEADLOCK: 'Deferred',
+      };
+      const adrStatus  = statusMap[verdict] ?? 'Under review';
+      const today      = new Date().toISOString().slice(0, 10);
+      const outcomeRef = outcomeId ? ` (outcome: ${outcomeId})` : '';
+
+      const adrContent = [
+        `# ${task.slice(0, 80)}`,
+        '',
+        `Date: ${today}`,
+        `Status: ${adrStatus}`,
+        `Council verdict: ${verdict}${outcomeRef}`,
+        '',
+        '## Context',
+        '',
+        task,
+        ...(rationale ? ['', rationale] : []),
+        '',
+        '## Decision',
+        '',
+        recommended,
+        '',
+        '## Consequences',
+        '',
+        consequences ?? 'Under review.',
+      ].join('\n');
+
+      let adrFilePath: string | null = null;
+      if (projectDir) {
+        const slug         = task.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40);
+        const decisionsDir = join(projectDir, 'docs', 'decisions');
+        let nextNum = 1;
+        try {
+          const files = readdirSync(decisionsDir);
+          nextNum = files.filter(f => /^\d{4}-/.test(f)).length + 1;
+        } catch { /* directory doesn't exist yet */ }
+        const paddedNum = String(nextNum).padStart(4, '0');
+        adrFilePath = join(decisionsDir, `${paddedNum}-${slug}.md`);
+        mkdirSync(decisionsDir, { recursive: true });
+        writeFileSync(adrFilePath, adrContent, 'utf8');
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        success:   true,
+        adr:       adrContent,
+        file_path: adrFilePath,
+        status:    adrStatus,
+      }, null, 2) }] };
+    }
+
+    case 'veto_env_setup': {
+      const projectDir = String(args?.project_dir ?? '').trim();
+      const writeFiles = args?.write_files === true;
+
+      if (!projectDir) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
+      }
+
+      const detected: string[]     = [];
+      const summaryParts: string[] = [];
+
+      // Read package.json
+      const pkgPath = join(projectDir, 'package.json');
+      if (existsSync(pkgPath)) {
+        detected.push('node');
+        try {
+          const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as Record<string, unknown>;
+          summaryParts.push(`Node project: ${pkg.name ?? 'unnamed'}`);
+          if (pkg.scripts && typeof pkg.scripts === 'object') {
+            summaryParts.push(`Scripts: ${Object.keys(pkg.scripts as object).join(', ')}`);
+          }
+          if (pkg.dependencies && typeof pkg.dependencies === 'object') {
+            summaryParts.push(`Dependencies: ${Object.keys(pkg.dependencies as object).slice(0, 20).join(', ')}`);
+          }
+        } catch { /* ignore parse errors */ }
+      }
+
+      // Read .env or .env.local
+      for (const envFile of ['.env', '.env.local']) {
+        const envPath = join(projectDir, envFile);
+        if (existsSync(envPath)) {
+          try {
+            const lines = readFileSync(envPath, 'utf8').split('\n');
+            const vars  = lines.filter(l => /^[A-Z_]+=/.test(l)).map(l => l.split('=')[0]);
+            if (vars.length > 0) {
+              summaryParts.push(`Existing env vars (${envFile}): ${vars.join(', ')}`);
+            }
+          } catch { /* ignore */ }
+        }
+      }
+
+      // Note other config files
+      for (const f of ['requirements.txt', 'pyproject.toml']) {
+        if (existsSync(join(projectDir, f))) { detected.push('python'); summaryParts.push(`Python config found: ${f}`); }
+      }
+      if (existsSync(join(projectDir, 'Cargo.toml'))) {
+        detected.push('rust'); summaryParts.push('Rust project found: Cargo.toml');
+      }
+      for (const f of ['docker-compose.yml', 'docker-compose.yaml']) {
+        if (existsSync(join(projectDir, f))) { summaryParts.push(`Docker Compose found: ${f}`); }
+      }
+
+      const projectSummary = summaryParts.join('\n') || 'No configuration files found.';
+      const enrichedCtx    = buildContextString(projectDir, projectSummary);
+      const agentTask      = 'Generate a .env.example file for this project. List every environment variable needed with a placeholder value and a one-line comment explaining what it is. Then write a numbered setup guide (5-10 steps) for a developer setting up this project from scratch.';
+      const envResult      = await executeOne({ id: 'env-setup-1', agent: 'devops', task: agentTask, context: enrichedCtx || undefined, project_dir: projectDir });
+
+      const rawOutput  = envResult.output.recommendation ?? envResult.plan?.approach ?? '';
+      const envLines   = rawOutput.split('\n').filter((l: string) => /^[A-Z_]+=/.test(l));
+      const envExample = envLines.length > 0 ? envLines.join('\n') : '# Add your environment variables here\n';
+
+      let written = false;
+      if (writeFiles) {
+        writeFileSync(join(projectDir, '.env.example'), envExample, 'utf8');
+        written = true;
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        env_example: envExample,
+        setup_guide: rawOutput,
+        written,
+        detected:    [...new Set(detected)],
+      }, null, 2) }] };
+    }
+
+    case 'veto_prompt_optimizer': {
+      const rawPrompt = String(args?.prompt ?? '').trim();
+      const goal      = args?.goal ? String(args.goal) : undefined;
+
+      if (!rawPrompt) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'prompt is required.' }) }], isError: true };
+
+      const prompt = rawPrompt.length > 8000 ? rawPrompt.slice(0, 8000) : rawPrompt;
+
+      // Deterministic pre-scan
+      const issues: Array<{ category: string; severity: string; finding: string }> = [];
+      const p = prompt.toLowerCase();
+      if (!p.includes('you are') && !p.includes('your role') && !p.includes('act as') && !p.includes('you\'re a')) {
+        issues.push({ category: 'role', severity: 'medium', finding: 'No role definition found. Add "You are a [role]..." to anchor behavior.' });
+      }
+      if (!p.includes('format') && !p.includes('json') && !p.includes('markdown') && !p.includes('return') && !p.includes('output')) {
+        issues.push({ category: 'output_format', severity: 'medium', finding: 'No output format specified. Specify JSON, markdown, or plain text.' });
+      }
+      if (/ignore (previous|prior|above|all)|disregard|forget|pretend/i.test(prompt)) {
+        issues.push({ category: 'injection', severity: 'high', finding: 'Prompt may be injection-prone — contains phrases attackers commonly use.' });
+      }
+      if (prompt.trim().split(/\s+/).length < 20) {
+        issues.push({ category: 'specificity', severity: 'low', finding: 'Prompt is very short. Add more context and constraints for better results.' });
+      }
+
+      const result = await executeOne({
+        id:      'prompt-optimizer-1',
+        agent:   'documentation' as WorkerAgentType,
+        task:    'You are a prompt engineering expert. Analyze this prompt for failure modes: vague instructions, missing context, ambiguous outputs, injection risks, lack of examples, poor role definition. Then rewrite it to be clearer, more specific, and safer. Return: 1) A numbered list of issues found, 2) A complete rewritten version of the prompt.',
+        code:    prompt,
+        context: goal ? `Goal: ${goal}` : undefined,
+      });
+
+      const quality = result.analysis?.score ?? Math.round(result.output.confidence * 100);
+      autoRecord('prompt-optimizer', 'documentation', quality);
+
+      const highCount   = issues.filter(i => i.severity === 'high').length;
+      const mediumCount = issues.filter(i => i.severity === 'medium').length;
+      const lowCount    = issues.filter(i => i.severity === 'low').length;
+      const score = Math.min(100, Math.max(0, 100 - highCount * 20 - mediumCount * 10 - lowCount * 5));
+
+      const rewritten_prompt    = result.plan?.approach ?? result.output.recommendation ?? '';
+      const improvement_summary = result.analysis?.summary ?? result.plan?.steps?.join('; ') ?? '';
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        score,
+        issues,
+        rewritten_prompt,
+        improvement_summary,
+      }, null, 2) }] };
+    }
+
+    case 'veto_sre_advisor': {
+      const slo_target       = Number(args?.slo_target);
+      const window_days      = Number(args?.window_days);
+      const downtime_minutes = Number(args?.downtime_minutes);
+      const service_name     = args?.service_name ? String(args.service_name) : undefined;
+      const incidents        = Array.isArray(args?.incidents) ? (args.incidents as Array<{ date: string; duration_minutes: number; description: string }>) : [];
+
+      if (!slo_target || !window_days || isNaN(downtime_minutes)) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'slo_target, window_days, and downtime_minutes are required.' }) }], isError: true };
+      }
+
+      // Deterministic error budget math
+      const sloFraction        = slo_target / 100;
+      const windowMinutes      = window_days * 24 * 60;
+      const totalBudgetMinutes = windowMinutes * (1 - sloFraction);
+      const consumedMinutes    = downtime_minutes;
+      const remainingMinutes   = Math.max(0, totalBudgetMinutes - consumedMinutes);
+      const remainingPct       = totalBudgetMinutes > 0 ? Math.round((remainingMinutes / totalBudgetMinutes) * 1000) / 10 : 0;
+      const exhaustedAt: string | null = consumedMinutes > 0 && remainingMinutes > 0
+        ? new Date(Date.now() + (remainingMinutes / consumedMinutes) * window_days * 86400_000).toISOString().slice(0, 10)
+        : consumedMinutes >= totalBudgetMinutes ? 'EXHAUSTED' : null;
+      const status = remainingPct > 50 ? 'healthy' : remainingPct > 20 ? 'at_risk' : remainingPct > 0 ? 'critical' : 'exhausted';
+
+      // Build incident summary for the agent
+      const incidentSummary = incidents.length > 0
+        ? 'Recent incidents:\n' + incidents.map(i => `- ${i.date}: ${i.duration_minutes} min — ${i.description}`).join('\n')
+        : 'No incident data provided.';
+
+      const sreResult = await executeOne({
+        id:      'sre-advisor-1',
+        agent:   'performance' as WorkerAgentType,
+        task:    'You are an SRE advisor. Given this service\'s error budget status, suggest: 1) Top 3 reliability improvements ranked by error budget recovery potential, 2) Whether to freeze non-critical deployments, 3) Specific monitoring improvements. Be concrete and actionable.',
+        context: `Service: ${service_name || 'unknown'}\nSLO: ${slo_target}%\nWindow: ${window_days} days\nBudget remaining: ${remainingPct}% (${remainingMinutes.toFixed(1)} min)\nStatus: ${status}\n${incidentSummary}`,
+      });
+
+      const recommendations = sreResult.plan?.approach ?? sreResult.output.recommendation ?? '';
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        slo_target_pct:       slo_target,
+        window_days,
+        total_budget_minutes: Math.round(totalBudgetMinutes * 10) / 10,
+        consumed_minutes:     consumedMinutes,
+        remaining_minutes:    Math.round(remainingMinutes * 10) / 10,
+        remaining_pct:        remainingPct,
+        status,
+        projected_exhaustion: exhaustedAt,
+        recommendations,
+        freeze_recommended:   remainingPct < 20,
+      }, null, 2) }] };
+    }
+
+    case 'veto_diagram': {
+      const project_dir = String(args?.project_dir ?? '').trim();
+      const diagramType = String(args?.diagram_type ?? 'flowchart').trim();
+      const focus       = args?.focus ? String(args.focus) : undefined;
+
+      if (!project_dir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
+
+      const ctx = buildContextString(project_dir);
+
+      let fileTree = '';
+      try {
+        fileTree = execSyncTop('git ls-files --others --cached --exclude-standard', {
+          cwd: project_dir, timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'],
+        }).toString().split('\n').filter((f: string) => !f.includes('node_modules') && !f.includes('dist/')).slice(0, 60).join('\n');
+      } catch { /* not a git repo */ }
+
+      const diagramResult = await executeOne({
+        id:      'diagram-1',
+        agent:   'documentation' as WorkerAgentType,
+        task:    `Generate a ${diagramType} Mermaid diagram of this project's architecture. Output ONLY the raw Mermaid diagram code (starting with 'flowchart TD' or similar — no markdown fences, no explanation text). Focus on: ${focus || 'overall system architecture, main modules, and data flow'}. Keep it under 30 nodes for readability.`,
+        code:    fileTree.slice(0, 4000),
+        context: ctx || undefined,
+      });
+
+      const diagramQuality = diagramResult.analysis?.score ?? Math.round(diagramResult.output.confidence * 100);
+      autoRecord('diagram', 'documentation', diagramQuality);
+
+      const rawOutput = diagramResult.plan?.approach ?? diagramResult.output.recommendation ?? '';
+
+      // Extract Mermaid block — find first line matching a known diagram type keyword
+      const lines = rawOutput.split('\n');
+      const startIdx = lines.findIndex((l: string) => /^(flowchart|graph|classDiagram|sequenceDiagram|C4Context|erDiagram)/.test(l.trim()));
+      const mermaid = startIdx >= 0 ? lines.slice(startIdx).join('\n').trim() : rawOutput.trim();
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        diagram_type: diagramType,
+        mermaid,
+        render_hint: 'Paste into https://mermaid.live or a GitHub markdown code block with ```mermaid',
       }, null, 2) }] };
     }
 
