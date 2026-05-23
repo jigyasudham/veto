@@ -235,6 +235,7 @@ const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint
   veto_translate:         { readOnlyHint: false, destructiveHint: false },
   veto_a11y_advisor:      { readOnlyHint: true },
   veto_session_replay:    { readOnlyHint: true },
+  veto_compose_agents:    { readOnlyHint: false, destructiveHint: false },
 };
 
 // ─── Tool Definitions ─────────────────────────────────────────────────────────

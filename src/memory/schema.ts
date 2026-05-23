@@ -182,6 +182,21 @@ export const CREATE_TABLES = `
     expires_at   TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS tool_call_trace_log (
+    id            TEXT PRIMARY KEY,
+    session_id    TEXT,
+    tool_name     TEXT NOT NULL,
+    args_json     TEXT,
+    result_status TEXT NOT NULL DEFAULT 'success',
+    error_message TEXT,
+    duration_ms   INTEGER NOT NULL,
+    tokens_used   INTEGER,
+    recorded_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_tool_trace_session ON tool_call_trace_log(session_id);
+  CREATE INDEX IF NOT EXISTS idx_tool_trace_name    ON tool_call_trace_log(tool_name);
+
   CREATE INDEX IF NOT EXISTS idx_scan_diag_file ON scan_diagnostics(file_path);
   CREATE INDEX IF NOT EXISTS idx_routing_fb_hash ON routing_feedback(task_hash);
   CREATE INDEX IF NOT EXISTS idx_routing_fb_exp  ON routing_feedback(expires_at);
@@ -287,4 +302,5 @@ export type ProjectMapRow = {
   key_modules: string | null;
   tech_stack: string | null;
   updated_at: string;
-};
+};e x p o r t   t y p e   T o o l C a l l T r a c e L o g R o w   =   {   i d :   s t r i n g ;   s e s s i o n _ i d :   s t r i n g   |   n u l l ;   t o o l _ n a m e :   s t r i n g ;   a r g s _ j s o n :   s t r i n g   |   n u l l ;   r e s u l t _ s t a t u s :   s t r i n g ;   e r r o r _ m e s s a g e :   s t r i n g   |   n u l l ;   d u r a t i o n _ m s :   n u m b e r ;   t o k e n s _ u s e d :   n u m b e r   |   n u l l ;   r e c o r d e d _ a t :   s t r i n g ;   } ;  
+ 
