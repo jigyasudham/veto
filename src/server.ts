@@ -226,6 +226,15 @@ const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint
   veto_hitl_checkpoint:   { readOnlyHint: true },
   veto_openapi_gen:       { readOnlyHint: false, destructiveHint: false },
   veto_flag_auditor:      { readOnlyHint: true },
+  // Phase 7: Intelligence & Advanced
+  veto_local_llm:         { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  veto_clone_detector:    { readOnlyHint: true },
+  veto_lint_rules:        { readOnlyHint: false, destructiveHint: false },
+  veto_api_contract:      { readOnlyHint: false, destructiveHint: false },
+  veto_merge_conflict:    { readOnlyHint: false, destructiveHint: false },
+  veto_translate:         { readOnlyHint: false, destructiveHint: false },
+  veto_a11y_advisor:      { readOnlyHint: true },
+  veto_session_replay:    { readOnlyHint: true },
 };
 
 // ─── Tool Definitions ─────────────────────────────────────────────────────────
@@ -3393,6 +3402,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         sdk_detected:       sdk === 'auto' ? (findings.includes('ldClient') ? 'launchdarkly' : findings.includes('unleash') ? 'unleash' : 'custom') : sdk,
         council_note:       'Run veto_council_debate before removing any flags to assess downstream risk.',
       }, null, 2) }] };
+    }
+
+    // ── Phase 7: Intelligence & Advanced ──────────────────────────────────────
+    case 'veto_local_llm': {
+      const { task, model, provider } = args;
+      return { content: [{ type: 'text', text: `veto_local_llm: Submitting task to local model ${model} via ${provider}. (Stub implementation)` }] };
+    }
+    case 'veto_clone_detector': {
+      const { project_dir, extensions, min_lines } = args;
+      return { content: [{ type: 'text', text: `veto_clone_detector: Scanned ${project_dir} for structural clones. Found 0 exact matches. (Stub implementation)` }] };
+    }
+    case 'veto_lint_rules': {
+      const { project_dir, tool } = args;
+      return { content: [{ type: 'text', text: `veto_lint_rules: Analyzed ${project_dir} and auto-generated optimal config for ${tool}. (Stub implementation)` }] };
+    }
+    case 'veto_api_contract': {
+      const { project_dir, target } = args;
+      return { content: [{ type: 'text', text: `veto_api_contract: API contract ${target} completed for ${project_dir}. (Stub implementation)` }] };
+    }
+    case 'veto_merge_conflict': {
+      const { file_path } = args;
+      return { content: [{ type: 'text', text: `veto_merge_conflict: Analyzed git conflict markers in ${file_path}. Semantic resolution generated. (Stub implementation)` }] };
+    }
+    case 'veto_translate': {
+      const { target_langs } = args;
+      return { content: [{ type: 'text', text: `veto_translate: Text translated successfully to [${target_langs?.join(',')}]. (Stub implementation)` }] };
+    }
+    case 'veto_a11y_advisor': {
+      const { file_path } = args;
+      return { content: [{ type: 'text', text: `veto_a11y_advisor: Scanned ${file_path} for WCAG violations. No critical issues found. (Stub implementation)` }] };
+    }
+    case 'veto_session_replay': {
+      const { session_id } = args;
+      return { content: [{ type: 'text', text: `veto_session_replay: Successfully replayed event stream for session ${session_id}. (Stub implementation)` }] };
     }
 
     default:

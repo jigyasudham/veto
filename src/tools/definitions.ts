@@ -226,6 +226,14 @@ export const TOOL_DEFINITIONS = [
           enum: ['fast', 'standard', 'strict'],
           description: 'Council depth. fast: 3 core agents (dev + architect + security), instant. standard: all 7 agents (default). strict: all 7 + Devil\'s Advocate rebuttal round on the most critical blocker.',
         },
+        architect_model: {
+          type: 'string',
+          description: 'Optional: override model used for the architecture/planning phase (e.g. claude-3-7-sonnet).',
+        },
+        editor_model: {
+          type: 'string',
+          description: 'Optional: override model used for the editing/execution phase (e.g. claude-3-5-haiku).',
+        },
       },
       required: ['task'],
     },
@@ -333,6 +341,14 @@ export const TOOL_DEFINITIONS = [
         max_tokens: {
           type: 'number',
           description: 'Optional: token budget for this parallel execution. Veto estimates combined output tokens and warns if the estimate exceeds this limit. Logged to usage_log.',
+        },
+        architect_model: {
+          type: 'string',
+          description: 'Optional: override model used for the architecture/planning phase (e.g. claude-3-7-sonnet).',
+        },
+        editor_model: {
+          type: 'string',
+          description: 'Optional: override model used for the editing/execution phase (e.g. claude-3-5-haiku).',
         },
       },
       required: ['tasks'],
@@ -1124,7 +1140,7 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
-        platform: { type: 'string', enum: ['claude', 'gemini', 'codex'], description: 'The platform to get setup instructions for.' },
+        platform: { type: 'string', enum: ['claude', 'gemini', 'codex', 'copilot', 'jetbrains'], description: 'The platform to get setup instructions for.' },
         veto_server_path: { type: 'string', description: 'Absolute path to the built veto server (dist/server.js).' },
       },
       required: ['platform', 'veto_server_path'],
@@ -1213,6 +1229,105 @@ export const TOOL_DEFINITIONS = [
         max_entries:  { type: 'number', description: 'Maximum commits to include (default 50, max 200).' },
       },
       required: [],
+    },
+  },
+  // ── Phase 7: Intelligence & Advanced ──────────────────────────────────────────
+  {
+    name: 'veto_local_llm',
+    description: 'Routes a task to a local LLM (via Ollama or LM Studio) instead of a cloud provider. Useful for privacy-sensitive data or simple, repetitive tasks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task:     { type: 'string', description: 'The task or prompt.' },
+        model:    { type: 'string', description: 'Local model name (e.g. llama3, mistral).' },
+        provider: { type: 'string', enum: ['ollama', 'lmstudio'], description: 'Local provider.' }
+      },
+      required: ['task'],
+    },
+  },
+  {
+    name: 'veto_clone_detector',
+    description: 'Scans the project for duplicated code blocks or structural clones. Returns grouped findings and refactoring suggestions.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir: { type: 'string', description: 'Absolute path to project root.' },
+        extensions:  { type: 'array', items: { type: 'string' }, description: 'File extensions to scan.' },
+        min_lines:   { type: 'number', description: 'Minimum number of identical lines to flag (default 5).' }
+      },
+      required: ['project_dir'],
+    },
+  },
+  {
+    name: 'veto_lint_rules',
+    description: 'Analyzes project coding style and auto-generates or updates ESLint/Prettier/Ruff configurations to match current conventions.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir: { type: 'string', description: 'Absolute path to project root.' },
+        tool:        { type: 'string', enum: ['eslint', 'prettier', 'ruff'], description: 'The linting tool to configure.' }
+      },
+      required: ['project_dir', 'tool'],
+    },
+  },
+  {
+    name: 'veto_api_contract',
+    description: 'Analyzes API endpoints and generates/verifies API contracts (e.g. OpenAPI or TypeScript types) to ensure front/back compatibility.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir: { type: 'string', description: 'Absolute path to project root.' },
+        target:      { type: 'string', enum: ['generate', 'verify'], description: 'Action to perform.' }
+      },
+      required: ['project_dir', 'target'],
+    },
+  },
+  {
+    name: 'veto_merge_conflict',
+    description: 'Analyzes a file with git conflict markers and returns a semantically correct resolution by understanding the intent of both branches.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file_path:   { type: 'string', description: 'Path to the file containing conflict markers.' },
+        project_dir: { type: 'string', description: 'Optional project directory for context.' }
+      },
+      required: ['file_path'],
+    },
+  },
+  {
+    name: 'veto_translate',
+    description: 'Translates text or structured i18n files (JSON/YAML) to target languages while preserving variables and formatting.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text:         { type: 'string', description: 'Text to translate (optional if file_path provided).' },
+        file_path:    { type: 'string', description: 'Path to i18n file (optional if text provided).' },
+        target_langs: { type: 'array', items: { type: 'string' }, description: 'Target language codes.' }
+      },
+      required: ['target_langs'],
+    },
+  },
+  {
+    name: 'veto_a11y_advisor',
+    description: 'Analyzes UI components (React, Vue, HTML) for accessibility (a11y) compliance (WCAG) and provides actionable fix recommendations.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file_path:   { type: 'string', description: 'Path to the UI component file.' },
+        project_dir: { type: 'string', description: 'Optional project directory context.' }
+      },
+      required: ['file_path'],
+    },
+  },
+  {
+    name: 'veto_session_replay',
+    description: 'Replays an event stream session to restore full conversational context from a past interaction.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'The session ID to replay.' },
+      },
+      required: ['session_id'],
     },
   },
 ] as const;
