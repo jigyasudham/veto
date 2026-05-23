@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { getDb } from '../memory/local.js';
 import { getConfig } from '../memory/config.js';
 
-export type Platform = 'claude' | 'gemini' | 'codex';
+export type Platform = 'claude' | 'gemini' | 'codex' | 'antigravity';
 
 export type RateLimitEntry = {
   platform: Platform;
@@ -21,6 +21,7 @@ export type RateStatus = {
   claude: RateLimitEntry;
   gemini: RateLimitEntry;
   codex: RateLimitEntry;
+  antigravity: RateLimitEntry;
   updated_at: string;
 };
 
@@ -105,6 +106,7 @@ export function getRateStatus(): RateStatus {
     claude: buildEntry('claude'),
     gemini: buildEntry('gemini'),
     codex: buildEntry('codex'),
+    antigravity: buildEntry('antigravity'),
     updated_at: new Date().toISOString(),
   };
 }
@@ -114,7 +116,8 @@ export function getRoutingAdvice(preferred: Platform): Platform {
   const entry = buildEntry(preferred);
   if (entry.status === 'critical') {
     if (preferred === 'claude') return 'gemini';
-    if (preferred === 'gemini') return 'codex';
+    if (preferred === 'gemini') return 'antigravity';
+    if (preferred === 'antigravity') return 'codex';
     return 'claude';
   }
   if (entry.status === 'warning' && preferred === 'claude') {

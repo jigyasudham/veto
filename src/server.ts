@@ -1433,6 +1433,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             claude: typeof b.claude === 'number' ? b.claude : current.claude,
             gemini: typeof b.gemini === 'number' ? b.gemini : current.gemini,
             codex:  typeof b.codex  === 'number' ? b.codex  : current.codex,
+            antigravity: typeof b.antigravity === 'number' ? b.antigravity : current.antigravity,
           },
         });
       }
@@ -1451,11 +1452,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               claude: rateStatus.claude.tokens_today,
               gemini: rateStatus.gemini.tokens_today,
               codex:  rateStatus.codex.tokens_today,
+              antigravity: rateStatus.antigravity.tokens_today,
             },
             budget_used_pct: {
               claude: rateStatus.claude.used_percent,
               gemini: rateStatus.gemini.used_percent,
               codex:  rateStatus.codex.used_percent,
+              antigravity: rateStatus.antigravity.used_percent,
             },
             operation_budget_log: recentBudgetLog.map(e => ({
               tool: e.tool_name,

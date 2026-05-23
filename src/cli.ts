@@ -109,6 +109,12 @@ const PLATFORMS = [
     detectionDir: join(HOME, '.gemini'),
   },
   {
+    name: 'Antigravity CLI',
+    path: join(HOME, '.gemini', 'antigravity-cli', 'mcp_config.json'),
+    format: 'mcpServers' as const,
+    detectionDir: join(HOME, '.gemini', 'antigravity-cli'),
+  },
+  {
     name: 'Cursor',
     path: join(HOME, '.cursor', 'mcp.json'),
     format: 'mcpServers' as const,
@@ -334,14 +340,14 @@ Recommended start sequence:
 
   let ctxWritten = 0;
 
-  // Gemini CLI: ~/.gemini/GEMINI.md
+  // Gemini & Antigravity CLI: ~/.gemini/GEMINI.md
   const geminiDir = join(HOME, '.gemini');
   if (existsSync(geminiDir)) {
     try {
       writeFileSync(join(geminiDir, 'GEMINI.md'), VETO_GUIDE, 'utf8');
-      console.log(c.green('  ✓ ') + 'Gemini CLI — wrote ~/.gemini/GEMINI.md');
+      console.log(c.green('  ✓ ') + 'Gemini/Antigravity CLI — wrote ~/.gemini/GEMINI.md');
       ctxWritten++;
-    } catch { console.log(c.yellow('  ⚠ ') + 'Gemini CLI — could not write GEMINI.md (permission denied?)'); }
+    } catch { console.log(c.yellow('  ⚠ ') + 'Gemini/Antigravity CLI — could not write GEMINI.md'); }
   }
 
   // Codex CLI: project AGENTS.md + global ~/.codex/AGENTS.override.md
@@ -582,9 +588,10 @@ async function doctorCommand() {
 
   // Other platforms — check their config JSON files
   const platforms = [
-    { name: 'Gemini CLI', configPath: join(HOME, '.gemini', 'settings.json'),               detectionDir: join(HOME, '.gemini'),             key: 'mcpServers' },
-    { name: 'Cursor',     configPath: join(HOME, '.cursor', 'mcp.json'),                    detectionDir: join(HOME, '.cursor'),             key: 'mcpServers' },
-    { name: 'Windsurf',   configPath: join(HOME, '.codeium', 'windsurf', 'mcp_config.json'), detectionDir: join(HOME, '.codeium', 'windsurf'), key: 'mcpServers' },
+    { name: 'Gemini CLI',      configPath: join(HOME, '.gemini', 'settings.json'),               detectionDir: join(HOME, '.gemini'),             key: 'mcpServers' },
+    { name: 'Antigravity CLI', configPath: join(HOME, '.gemini', 'antigravity-cli', 'mcp_config.json'), detectionDir: join(HOME, '.gemini', 'antigravity-cli'), key: 'mcpServers' },
+    { name: 'Cursor',          configPath: join(HOME, '.cursor', 'mcp.json'),                    detectionDir: join(HOME, '.cursor'),             key: 'mcpServers' },
+    { name: 'Windsurf',        configPath: join(HOME, '.codeium', 'windsurf', 'mcp_config.json'), detectionDir: join(HOME, '.codeium', 'windsurf'), key: 'mcpServers' },
     {
       name: 'Zed',
       configPath: process.platform === 'win32'

@@ -7,6 +7,7 @@ export type VetoConfig = {
     claude: number;
     gemini: number;
     codex: number;
+    antigravity: number;
   };
 };
 
@@ -16,6 +17,7 @@ export const DEFAULT_BUDGETS: VetoConfig['dailyTokenBudget'] = {
   claude:  500_000,
   gemini: 1_000_000,
   codex:   200_000,
+  antigravity: 1_000_000,
 };
 
 export function getConfig(): VetoConfig {
@@ -29,6 +31,7 @@ export function getConfig(): VetoConfig {
         claude:  raw.dailyTokenBudget?.claude  ?? DEFAULT_BUDGETS.claude,
         gemini:  raw.dailyTokenBudget?.gemini  ?? DEFAULT_BUDGETS.gemini,
         codex:   raw.dailyTokenBudget?.codex   ?? DEFAULT_BUDGETS.codex,
+        antigravity: raw.dailyTokenBudget?.antigravity ?? DEFAULT_BUDGETS.antigravity,
       },
     };
   } catch {

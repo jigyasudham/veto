@@ -274,7 +274,7 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
     };
   }
 
-  // ── Claude / Gemini / Codex (existing platforms) ────────────────────────────
+// ── Claude / Gemini / Codex / Antigravity (existing platforms) ─────────────
   const configs: Record<Platform, { configPath: string; configKey: string; installCmd: string; notes: string[] }> = {
     claude: {
       configPath: '~/.claude/settings.json (managed by `claude mcp add`)',
@@ -295,6 +295,16 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
         'Gemini CLI connects via stdio MCP — same server instance as Claude.',
         'Free tier: 1,500 requests/day (15 RPM) — Veto tracks this automatically.',
         'All veto_* tools work identically on Gemini as on Claude.',
+      ],
+    },
+    antigravity: {
+      configPath: '~/.gemini/antigravity-cli/mcp_config.json',
+      configKey:  'mcpServers',
+      installCmd: 'npm install -g @jigyasudham/veto',
+      notes: [
+        'Antigravity CLI is the official successor to Gemini CLI.',
+        'It stores MCP config in ~/.gemini/antigravity-cli/mcp_config.json.',
+        'All veto_* tools are supported with agentic reasoning enabled.',
       ],
     },
     codex: {
@@ -319,6 +329,14 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
     `2. Fully restart Claude Code (quit and reopen — not just reload window)`,
     `3. Verify: call veto_status — should return { "status": "running" }`,
     `   Tip: run this once and it persists globally. No need to re-run per project.`,
+  ];
+
+  const antigravitySteps = [
+    `1. Install Veto: npm install -g @jigyasudham/veto`,
+    `2. Add to mcp_config.json: ~/.gemini/antigravity-cli/mcp_config.json`,
+    `   "veto": { "command": "npx", "args": ["-y", "@jigyasudham/veto", "veto-server"] }`,
+    `3. Fully restart Antigravity CLI (agy)`,
+    `4. Verify: call veto_status — should return { "status": "running" }`,
   ];
 
   const codexSteps = [
@@ -348,7 +366,7 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
   return {
     platform,
     mcp_config: platform === 'codex' ? codexMcpConfig : { [cfg.configKey]: { veto: mcpEntry } },
-    setup_steps: platform === 'claude' ? claudeSteps : platform === 'codex' ? codexSteps : genericSteps,
+    setup_steps: platform === 'claude' ? claudeSteps : platform === 'antigravity' ? antigravitySteps : platform === 'codex' ? codexSteps : genericSteps,
     rate_limit_signals: ['rate limit', 'too many requests', '429', 'quota exceeded', 'resource exhausted'],
     continue_command: 'veto_continue',
     notes: cfg.notes,
@@ -359,10 +377,12 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
 
 function selectTarget(from: Platform, rateStatus: ReturnType<typeof getRateStatus>): Platform {
   const order: Platform[] = from === 'claude'
-    ? ['gemini', 'codex']
+    ? ['gemini', 'antigravity', 'codex']
     : from === 'gemini'
-    ? ['codex', 'claude']
-    : ['claude', 'gemini'];
+    ? ['antigravity', 'codex', 'claude']
+    : from === 'antigravity'
+    ? ['codex', 'claude', 'gemini']
+    : ['claude', 'gemini', 'antigravity'];
 
   for (const p of order) {
     if (rateStatus[p].status !== 'critical') return p;
