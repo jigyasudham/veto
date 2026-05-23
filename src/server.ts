@@ -202,6 +202,9 @@ const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint
   veto_env_setup:         { readOnlyHint: false, destructiveHint: false },
   veto_commit_message:    { readOnlyHint: true },
   veto_pr_description:    { readOnlyHint: true },
+  veto_rca:               { readOnlyHint: true },
+  veto_release_notes:     { readOnlyHint: true },
+  veto_postmortem:        { readOnlyHint: true },
   veto_workflow:          { readOnlyHint: false, destructiveHint: false },
   veto_ci_gate:           { readOnlyHint: false, destructiveHint: false },
   veto_usage_status:      { readOnlyHint: false, destructiveHint: false },
@@ -209,6 +212,20 @@ const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint
   veto_memory_delete:     { readOnlyHint: false, destructiveHint: true },
   veto_memory_import:     { readOnlyHint: false, destructiveHint: true },
   veto_platform_setup:    { readOnlyHint: false, destructiveHint: true,  openWorldHint: true },
+  // documentation & quality
+  veto_doc_gen:           { readOnlyHint: true },
+  veto_type_coverage:     { readOnlyHint: true },
+  veto_test_gaps:         { readOnlyHint: true },
+  veto_onboard:           { readOnlyHint: true },
+  // code intelligence — dep / query / bundle / dead-code
+  veto_dep_advisor:       { readOnlyHint: true, openWorldHint: true },
+  veto_query_advisor:     { readOnlyHint: true },
+  veto_bundle_advisor:    { readOnlyHint: true },
+  veto_dead_code:         { readOnlyHint: true },
+  // hitl / openapi / flag auditor
+  veto_hitl_checkpoint:   { readOnlyHint: true },
+  veto_openapi_gen:       { readOnlyHint: false, destructiveHint: false },
+  veto_flag_auditor:      { readOnlyHint: true },
 };
 
 // ─── Tool Definitions ─────────────────────────────────────────────────────────
@@ -2744,6 +2761,637 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         diagram_type: diagramType,
         mermaid,
         render_hint: 'Paste into https://mermaid.live or a GitHub markdown code block with ```mermaid',
+      }, null, 2) }] };
+    }
+
+    case 'veto_rca': {
+      const error      = String(args?.error ?? '').trim();
+      const projectDir = args?.project_dir ? String(args.project_dir).trim() : '';
+      const fileHint   = args?.file_hint   ? String(args.file_hint).trim()   : '';
+
+      if (!error) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'error is required.' }) }], isError: true };
+
+      const userContext = buildContextString(projectDir || undefined);
+
+      let gitContext = '';
+      try {
+        const recent = execSyncTop('git log --oneline -15', { cwd: projectDir || undefined, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
+        gitContext = `Recent commits:\n${recent}`;
+        if (fileHint) {
+          const blame = execSyncTop(`git log --oneline -10 -- "${fileHint}"`, { cwd: projectDir || undefined, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
+          gitContext += `\nRecent changes to ${fileHint}:\n${blame}`;
+        }
+      } catch { /* not a git repo */ }
+
+      const result = await executeOne({
+        id:      'rca-1',
+        agent:   'debugger' as WorkerAgentType,
+        task:    'Perform a structured root-cause analysis. Identify: (1) the most likely root cause, (2) the probable introducing commit or change, (3) immediate fix steps, (4) prevention recommendations.',
+        code:    error.slice(0, 6000),
+        context: [gitContext, userContext].filter(Boolean).join('\n') || undefined,
+      });
+
+      const quality = Math.round(result.output.confidence * 100);
+      autoRecord('rca', 'debugger', quality);
+
+      const root_cause = result.plan?.approach?.slice(0, 200) ?? result.output.recommendation.slice(0, 200);
+      const fix_steps  = result.plan?.steps?.slice(0, 5) ?? [];
+      const hypothesis = result.output.recommendation;
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        root_cause,
+        hypothesis,
+        suspect_commits: [],
+        fix_steps,
+        prevention:  [],
+        confidence:  quality,
+      }, null, 2) }] };
+    }
+
+    case 'veto_release_notes': {
+      const projectDir = String(args?.project_dir ?? '').trim();
+      const audience   = String(args?.audience ?? 'user') === 'developer' ? 'developer' : 'user';
+
+      if (!projectDir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
+
+      let fromRef = args?.from_ref ? String(args.from_ref) : '';
+      if (!fromRef) {
+        try { fromRef = execSyncTop('git describe --tags --abbrev=0', { cwd: projectDir, timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim(); }
+        catch { fromRef = ''; }
+      }
+
+      const logCmd = fromRef ? `git log ${fromRef}..HEAD --oneline --no-merges` : 'git log --oneline --no-merges -30';
+      let commits = '';
+      try { commits = execSyncTop(logCmd, { cwd: projectDir, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim(); }
+      catch { return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'Could not read git log. Ensure project_dir is a git repository.' }) }], isError: true }; }
+
+      if (!commits) return { content: [{ type: 'text', text: JSON.stringify({ success: true, release_notes: 'No changes since last tag.', commits_processed: 0 }) }] };
+
+      const commitsCount = commits.split('\n').filter(Boolean).length;
+
+      const result = await executeOne({
+        id:    'relnotes-1',
+        agent: 'documentation' as WorkerAgentType,
+        task:  `Generate ${audience === 'developer' ? 'developer-facing' : 'user-facing'} release notes from these git commits. Rewrite technical commit messages into clear benefit-focused language. Group by: New Features, Improvements, Bug Fixes, Other. Each line should be one sentence describing the user benefit.`,
+        code:  commits.slice(0, 4000),
+      });
+
+      const release_notes = result.plan?.approach ?? result.output.recommendation;
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        release_notes,
+        from_ref:          fromRef || 'HEAD~30',
+        commits_processed: commitsCount,
+        audience,
+      }, null, 2) }] };
+    }
+
+    case 'veto_postmortem': {
+      const incident   = String(args?.incident ?? '').trim();
+      const timeline   = args?.timeline    ? String(args.timeline).trim()   : '';
+      const projectDir = args?.project_dir ? String(args.project_dir).trim() : '';
+      const service    = args?.service     ? String(args.service).trim()     : '';
+
+      if (!incident) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'incident is required.' }) }], isError: true };
+
+      let auditCtx = '';
+      let correlatedRedVerdicts = 0;
+      try {
+        const log = getAuditLog({ verdict: 'RED', limit: 5 });
+        if (log.length > 0) {
+          correlatedRedVerdicts = log.length;
+          auditCtx = `Past RED council verdicts:\n${log.map((e: { summary?: string }) => `- ${e.summary ?? ''}`).join('\n')}`;
+        }
+      } catch { /* ignore */ }
+
+      const context = [
+        timeline   && `Timeline:\n${timeline}`,
+        service    && `Service: ${service}`,
+        auditCtx   || '',
+      ].filter(Boolean).join('\n\n') || undefined;
+
+      const result = await executeOne({
+        id:      'pm-1',
+        agent:   'debugger' as WorkerAgentType,
+        task:    'Write a blameless postmortem. Include: (1) Incident summary (2) Root cause (five-whys analysis) (3) Impact (4) Timeline of detection/response/resolution (5) Action items with owner and deadline (6) What went well (7) Prevention measures. Use a constructive tone — blame systems not people.',
+        code:    incident.slice(0, 4000),
+        context,
+      });
+
+      const postmortem  = result.plan?.approach ?? result.output.recommendation;
+      const root_cause  = result.output.recommendation.split(/[.!?]/)[0]?.trim() ?? '';
+      const action_items = result.plan?.steps?.slice(0, 10) ?? [];
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        postmortem,
+        root_cause,
+        action_items,
+        correlated_red_verdicts: correlatedRedVerdicts,
+      }, null, 2) }] };
+    }
+
+    case 'veto_doc_gen': {
+      const filePath = String(args?.file_path ?? '').trim();
+      const styleArg = String(args?.style ?? 'auto').trim();
+
+      if (!filePath) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'file_path is required.' }) }], isError: true };
+
+      let content = '';
+      try {
+        content = readFileSync(filePath, 'utf8');
+      } catch (e: unknown) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Could not read file: ${(e as Error).message}` }) }], isError: true };
+      }
+
+      let detectedStyle = styleArg;
+      if (styleArg === 'auto') {
+        const ext = extname(filePath).toLowerCase();
+        if (ext === '.ts' || ext === '.tsx') detectedStyle = 'tsdoc';
+        else if (ext === '.py') detectedStyle = 'docstring';
+        else detectedStyle = 'jsdoc';
+      }
+
+      const docGenResult = await executeOne({
+        id:    'docgen-1',
+        agent: 'documentation' as WorkerAgentType,
+        task:  `Add ${detectedStyle} documentation comments to all public functions, classes, interfaces, and exported constants in this file. For each, add: (1) a one-line summary, (2) @param descriptions, (3) @returns description, (4) @throws if applicable. Return the COMPLETE file content with documentation added — do not truncate.`,
+        code:  content.slice(0, 10000),
+      });
+
+      const docQuality = docGenResult.analysis?.score ?? Math.round(docGenResult.output.confidence * 100);
+      autoRecord('doc-gen', 'documentation', docQuality);
+
+      const annotatedContent = docGenResult.plan?.approach ?? docGenResult.output.recommendation ?? '';
+      const symbolsDocumented = (annotatedContent.match(/@param\b/g) ?? []).length;
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        file_path:          filePath,
+        style:              detectedStyle,
+        annotated_content:  annotatedContent,
+        symbols_documented: symbolsDocumented,
+      }, null, 2) }] };
+    }
+
+    case 'veto_type_coverage': {
+      const projectDir = String(args?.project_dir ?? '').trim();
+
+      if (!projectDir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
+
+      let grepOutput = '';
+      try {
+        grepOutput = execSyncTop('git grep -rn "any" --include="*.ts" --include="*.tsx" -- . ":(exclude)node_modules" ":(exclude)dist"', {
+          cwd: projectDir, timeout: 6000, stdio: ['pipe', 'pipe', 'pipe'],
+        }).toString();
+      } catch (e: unknown) {
+        grepOutput = (e as { stdout?: Buffer }).stdout?.toString() ?? '';
+      }
+
+      const anyLines = grepOutput.split('\n')
+        .filter(l => /:\s*any\b|as any\b|<any>/.test(l))
+        .slice(0, 100);
+      const fileSet = new Set(anyLines.map(l => l.split(':')[0]));
+      const maxFiles = typeof args?.max_files === 'number' ? Math.min(args.max_files, 30) : 20;
+      const topFiles = [...fileSet].slice(0, maxFiles);
+
+      const typeCoverResult = await executeOne({
+        id:    'typecover-1',
+        agent: 'coder' as WorkerAgentType,
+        task:  'Analyze these TypeScript `any` usages. For each location, suggest a specific replacement type (use inferred types, generics, or union types). Flag any `any` in auth/security/payment code as HIGH severity.',
+        code:  anyLines.join('\n').slice(0, 6000),
+      });
+
+      const typeCoverQuality = typeCoverResult.analysis?.score ?? Math.round(typeCoverResult.output.confidence * 100);
+      autoRecord('type-coverage', 'coder', typeCoverQuality);
+
+      const findings = anyLines.slice(0, 20).map(l => {
+        const parts = l.split(':');
+        const file    = parts[0] ?? '';
+        const lineNum = parseInt(parts[1] ?? '0', 10);
+        const lineContent = parts.slice(2).join(':').trim();
+        const isHighSeverity = /auth|security|payment|secret|token|password/i.test(file + lineContent);
+        const usage = /as any\b/.test(lineContent) ? 'as any' : /<any>/.test(lineContent) ? '<any>' : ': any';
+        return { file, line: lineNum, usage, severity: isHighSeverity ? 'high' : 'medium' };
+      });
+
+      const highSeverityCount = findings.filter(f => f.severity === 'high').length;
+      const typeCoveragePct = Math.max(0, 100 - Math.round(anyLines.length / 5));
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        total_any_usages:   anyLines.length,
+        files_affected:     topFiles.length,
+        high_severity:      highSeverityCount,
+        findings,
+        suggestions:        typeCoverResult.plan?.approach ?? typeCoverResult.output.recommendation ?? '',
+        type_coverage_pct:  typeCoveragePct,
+      }, null, 2) }] };
+    }
+
+    case 'veto_test_gaps': {
+      const projectDir     = String(args?.project_dir ?? '').trim();
+      const coverageReport = args?.coverage_report ? String(args.coverage_report).trim() : '';
+
+      if (!projectDir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
+
+      let coverageData = '';
+      if (coverageReport && existsSync(coverageReport)) {
+        try { coverageData = readFileSync(coverageReport, 'utf8').slice(0, 8000); } catch { /* skip */ }
+      }
+
+      let untestedFiles: string[] = [];
+      if (!coverageData) {
+        try {
+          const allFiles = execSyncTop('git ls-files --cached -- "*.ts" "*.js" "*.py"', {
+            cwd: projectDir, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'],
+          }).toString().split('\n').filter(Boolean);
+          const srcFiles  = allFiles.filter(f => !f.includes('.test.') && !f.includes('.spec.') && !f.includes('__test__'));
+          const testFiles = new Set(allFiles.filter(f => f.includes('.test.') || f.includes('.spec.')).map(f => f.replace(/\.(test|spec)\.(ts|js)$/, '')));
+          untestedFiles   = srcFiles.filter(f => !testFiles.has(f.replace(/\.(ts|js)$/, ''))).slice(0, 20);
+          coverageData    = `Files without tests:\n${untestedFiles.join('\n')}`;
+        } catch { coverageData = 'Could not determine coverage'; }
+      }
+
+      const testGapResult = await executeOne({
+        id:      'testgap-1',
+        agent:   'tester' as WorkerAgentType,
+        task:    'Identify test gaps and suggest concrete test cases. For each untested or low-coverage area, write a specific test scenario (what input, what expected output, what edge case). Prioritize: error handling paths, auth/security code, business logic.',
+        code:    coverageData,
+        context: buildContextString(projectDir) || undefined,
+      });
+
+      const testGapQuality = testGapResult.analysis?.score ?? Math.round(testGapResult.output.confidence * 100);
+      autoRecord('test-gaps', 'tester', testGapQuality);
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        gaps_found:      untestedFiles.length || coverageData.split('\n').length,
+        untested_files:  untestedFiles,
+        suggested_tests: testGapResult.plan?.approach ?? testGapResult.output.recommendation ?? '',
+        priority_areas:  [],
+      }, null, 2) }] };
+    }
+
+    case 'veto_onboard': {
+      const projectDir = String(args?.project_dir ?? '').trim();
+      const role       = args?.role ? String(args.role).trim() : '';
+
+      if (!projectDir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
+
+      let readme = '';
+      for (const name of ['README.md', 'readme.md', 'README.txt']) {
+        try { readme = readFileSync(join(projectDir, name), 'utf8').slice(0, 3000); break; } catch { /* skip */ }
+      }
+
+      const onboardResult = await executeOne({
+        id:          'onboard-1',
+        agent:       'documentation' as WorkerAgentType,
+        task:        `Write a complete onboarding guide for a new ${role || 'fullstack'} developer joining this project. Include: (1) Setup steps (clone, install, env vars, first run), (2) Architecture overview (key directories and their purpose), (3) Key files to understand first, (4) How to run tests, (5) Development workflow, (6) First PR checklist (what to check before submitting). Be specific to this codebase.`,
+        context:     [buildContextString(projectDir), readme ? `README:\n${readme}` : ''].filter(Boolean).join('\n\n') || undefined,
+        project_dir: projectDir,
+      });
+
+      const onboardQuality = onboardResult.analysis?.score ?? Math.round(onboardResult.output.confidence * 100);
+      autoRecord('onboard', 'documentation', onboardQuality);
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        guide:    onboardResult.plan?.approach ?? onboardResult.output.recommendation ?? '',
+        role:     role || 'fullstack',
+        sections: ['Setup', 'Architecture', 'Key Files', 'Testing', 'Workflow', 'First PR'],
+      }, null, 2) }] };
+    }
+
+    // ── veto_dep_advisor ────────────────────────────────────────────────────────
+    case 'veto_dep_advisor': {
+      const projectDir = String(args?.project_dir ?? '').trim();
+      let ecosystem = String(args?.ecosystem ?? 'auto');
+      let packages: Array<{ name: string; version: string }> = [];
+
+      // Try npm first
+      if (ecosystem === 'auto' || ecosystem === 'npm') {
+        try {
+          const pkg = JSON.parse(readFileSync(join(projectDir, 'package.json'), 'utf8'));
+          const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+          packages = Object.entries(deps).map(([name, ver]) => ({ name, version: String(ver).replace(/[\^~>=<]/g, '').split('.')[0] + '.0.0' })).slice(0, 50);
+          ecosystem = 'npm';
+        } catch { /* try next */ }
+      }
+      if ((ecosystem === 'auto' || ecosystem === 'pypi') && packages.length === 0) {
+        try {
+          const req = readFileSync(join(projectDir, 'requirements.txt'), 'utf8');
+          packages = req.split('\n').filter(l => l.trim() && !l.startsWith('#')).map(l => { const [name, ver='0.0.0'] = l.split(/[==>=<]/); return { name: name.trim(), version: ver.trim() || '0.0.0' }; }).slice(0, 50);
+          ecosystem = 'pypi';
+        } catch { /* skip */ }
+      }
+      if (packages.length === 0) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No package.json or requirements.txt found in project_dir.' }) }], isError: true };
+
+      let vulnerabilities: Array<{ package: string; version: string; vuln_id: string; severity: string; summary: string }> = [];
+      let osvAvailable = false;
+      try {
+        const osvEcosystem = ecosystem === 'npm' ? 'npm' : ecosystem === 'pypi' ? 'PyPI' : 'crates.io';
+        const body = { queries: packages.slice(0, 30).map(p => ({ package: { name: p.name, ecosystem: osvEcosystem }, version: p.version })) };
+        const resp = await fetch('https://api.osv.dev/v1/querybatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (resp.ok) {
+          const data = await resp.json() as { results: Array<{ vulns?: Array<{ id: string; summary: string; database_specific?: { severity?: string } }> }> };
+          data.results.forEach((r, i) => {
+            for (const v of (r.vulns ?? [])) {
+              vulnerabilities.push({ package: packages[i].name, version: packages[i].version, vuln_id: v.id, severity: v.database_specific?.severity?.toLowerCase() ?? 'unknown', summary: v.summary });
+            }
+          });
+          osvAvailable = true;
+        }
+      } catch { /* OSV unavailable — proceed without vuln data */ }
+
+      const depResult = await executeOne({
+        id: 'dep-1',
+        agent: 'dependency-audit',
+        task: 'Analyze these dependencies and produce a risk-ranked upgrade plan. For each vulnerable or outdated package: (1) risk level, (2) recommended version, (3) breaking-change risk, (4) migration steps.',
+        code: JSON.stringify({ packages: packages.slice(0, 20), vulnerabilities }, null, 2).slice(0, 6000),
+      });
+
+      autoRecord('dep_advisor', 'dependency-audit', depResult.analysis?.score ?? Math.round(depResult.output.confidence * 100));
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        ecosystem,
+        packages_scanned:    packages.length,
+        vulnerabilities_found: vulnerabilities.length,
+        vulns:               vulnerabilities,
+        upgrade_plan:        depResult.plan?.approach ?? depResult.output.recommendation ?? '',
+        osv_available:       osvAvailable,
+      }, null, 2) }] };
+    }
+
+    // ── veto_query_advisor ──────────────────────────────────────────────────────
+    case 'veto_query_advisor': {
+      const query         = String(args?.query ?? '').trim();
+      const schema        = args?.schema         ? String(args.schema).trim()         : '';
+      const explainOutput = args?.explain_output ? String(args.explain_output).trim() : '';
+
+      if (!query) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'query is required.' }) }], isError: true };
+
+      // Deterministic pre-scan for common issues
+      const issues: string[] = [];
+      const q = query.toLowerCase();
+      if (/select \*/i.test(query)) issues.push('SELECT * detected — specify only needed columns');
+      if (/where.*like\s+'%/i.test(query)) issues.push('Leading wildcard LIKE pattern prevents index use');
+      if (!q.includes('limit') && (q.includes('select') && !q.includes('count'))) issues.push('No LIMIT clause — could return unbounded result set');
+      const joinCount = (q.match(/\bjoin\b/g) ?? []).length;
+      if (joinCount > 4) issues.push(`${joinCount} JOINs detected — verify indexes on join columns`);
+
+      const queryResult = await executeOne({
+        id: 'query-1',
+        agent: 'database',
+        task: 'Analyze this SQL query for performance issues. Provide: (1) Rewritten optimized query, (2) Specific CREATE INDEX statements needed, (3) N+1 query detection if this is part of a loop, (4) Estimated improvement percentage, (5) Index risk assessment (will this lock the table?)',
+        code: query.slice(0, 4000),
+        context: [schema && `Schema:\n${schema}`, explainOutput && `EXPLAIN:\n${explainOutput}`].filter(Boolean).join('\n'),
+      });
+
+      autoRecord('query_advisor', 'database', queryResult.analysis?.score ?? Math.round(queryResult.output.confidence * 100));
+
+      const agentOutput = queryResult.plan?.approach ?? queryResult.output.recommendation ?? '';
+      const indexStatements = agentOutput.split('\n').filter((l: string) => /CREATE INDEX/i.test(l)).map((l: string) => l.trim());
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        issues_detected:      issues,
+        optimized_query:      '',
+        index_statements:     indexStatements,
+        n_plus_one_risk:      /n\+1|n \+ 1/i.test(agentOutput),
+        recommendations:      agentOutput,
+        estimated_improvement: '',
+      }, null, 2) }] };
+    }
+
+    // ── veto_bundle_advisor ─────────────────────────────────────────────────────
+    case 'veto_bundle_advisor': {
+      let statsRaw = '';
+      try { statsRaw = readFileSync(String(args?.stats_file ?? ''), 'utf8'); } catch (e) { return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Cannot read stats file: ${e}` }) }], isError: true }; }
+      let statsData: Record<string, unknown> = {};
+      try { statsData = JSON.parse(statsRaw); } catch { return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'stats_file is not valid JSON' }) }], isError: true }; }
+
+      // Extract key metrics from webpack stats format
+      const assets = ((statsData.assets as Array<{ name: string; size: number }>) ?? []).sort((a, b) => b.size - a.size).slice(0, 20);
+      const totalSize = assets.reduce((s, a) => s + (a.size ?? 0), 0);
+      const summary = JSON.stringify({
+        total_assets: assets.length,
+        total_size_kb: Math.round(totalSize / 1024),
+        top_assets: assets.slice(0, 10).map(a => ({ name: a.name, size_kb: Math.round(a.size / 1024) })),
+      }, null, 2);
+
+      const bundleResult = await executeOne({
+        id: 'bundle-1',
+        agent: 'frontend',
+        task: 'Analyze this bundle stats and provide: (1) Top 10 heaviest modules to target, (2) Duplicate packages to deduplicate, (3) Code-split candidates (lazy-loadable routes or heavy features), (4) Packages safe to move to CDN externals (React, lodash, etc.), (5) Estimated size reduction achievable.',
+        code: summary,
+      });
+
+      autoRecord('bundle_advisor', 'frontend', bundleResult.analysis?.score ?? Math.round(bundleResult.output.confidence * 100));
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        total_size_kb:        Math.round(totalSize / 1024),
+        assets_analyzed:      assets.length,
+        heaviest_modules:     assets.slice(0, 10).map(a => ({ name: a.name, size_kb: Math.round(a.size / 1024) })),
+        recommendations:      bundleResult.plan?.approach ?? bundleResult.output.recommendation ?? '',
+        estimated_reduction_pct: 0,
+      }, null, 2) }] };
+    }
+
+    // ── veto_dead_code ──────────────────────────────────────────────────────────
+    case 'veto_dead_code': {
+      const projectDir = String(args?.project_dir ?? '').trim();
+      const exts = Array.isArray(args?.extensions) ? (args.extensions as unknown[]).map(String) : ['.ts', '.js'];
+      const includeArgs = exts.map(e => `--include="*${e}"`).join(' ');
+
+      const patterns: Array<{ label: string; regex: string }> = [
+        { label: 'exported but possibly unused', regex: 'export (function|const|class|interface|type)' },
+        { label: 'TODO/FIXME markers',           regex: '// (TODO|FIXME|HACK|XXX)' },
+        { label: 'feature flag patterns',         regex: 'if.*flags?\\.\\w+|if.*feature.*enabled|if.*isEnabled' },
+        { label: 'commented-out code blocks',     regex: '^\\/\\/' },
+      ];
+      let findings = '';
+      for (const { label, regex } of patterns) {
+        try {
+          const out = execSyncTop(`git grep -rn "${regex}" ${includeArgs} -- . ":(exclude)node_modules" ":(exclude)dist"`, { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
+          const lines = out.split('\n').filter(Boolean).slice(0, 20);
+          if (lines.length > 0) findings += `\n=== ${label} (${lines.length} found) ===\n${lines.join('\n')}`;
+        } catch { /* no matches — git grep exits 1 */ }
+      }
+      if (!findings) return { content: [{ type: 'text', text: JSON.stringify({ success: true, dead_code_items: [], summary: 'No dead code patterns detected.' }) }] };
+
+      const ctx = buildContextString(projectDir);
+      const deadResult = await executeOne({
+        id: 'dead-1',
+        agent: 'code-quality',
+        task: 'Identify dead code and safe deletion candidates from these patterns. For each item: (1) is it actually dead/unused?, (2) safe to delete?, (3) deletion risk (high/medium/low). Focus on exports with zero imports, always-true/false flags, and commented blocks older than 6 months.',
+        code: findings.slice(0, 6000),
+        context: ctx || undefined,
+      });
+
+      autoRecord('dead_code', 'code-quality', deadResult.analysis?.score ?? Math.round(deadResult.output.confidence * 100));
+
+      const agentOut = deadResult.plan?.approach ?? deadResult.output.recommendation ?? '';
+      const safeMatches = agentOut.match(/\blow\b.*\bdelete\b|\bsafe to delete\b|\bsafely removed\b/gi) ?? [];
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        dead_code_items:  [],
+        total_found:      findings.split('\n').filter(l => l.startsWith('===')).length,
+        safe_to_delete:   safeMatches.length,
+        recommendations:  agentOut,
+        council_note:     'Run veto_council_debate before deleting any exports to check downstream impact.',
+      }, null, 2) }] };
+    }
+
+    // ── veto_hitl_checkpoint ────────────────────────────────────────────────────
+    case 'veto_hitl_checkpoint': {
+      const stage      = String(args?.stage ?? '').trim();
+      const context    = String(args?.context ?? '').trim();
+      const riskLevel  = String(args?.risk_level ?? 'medium');
+      const workflowId = args?.workflow_id ? String(args.workflow_id) : null;
+      const options: string[] = Array.isArray(args?.options) ? (args.options as unknown[]).map(String) : ['Approve', 'Reject', 'Modify'];
+
+      if (!stage || !context) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'stage and context are required.' }) }], isError: true };
+
+      const riskEmoji = ({ low: '🟢', medium: '🟡', high: '🟠', critical: '🔴' } as Record<string, string>)[riskLevel] ?? '🟡';
+      const checkpoint_id = `hitl-${Date.now().toString(36)}`;
+
+      const formatted = [
+        `## ⏸️  Human-in-the-Loop Checkpoint`,
+        ``,
+        `**Stage:** ${stage}${workflowId ? ` (workflow: ${workflowId})` : ''}`,
+        `**Risk:** ${riskEmoji} ${riskLevel.toUpperCase()}`,
+        ``,
+        `### What is about to happen`,
+        context,
+        ``,
+        `### Your response options`,
+        options.map((o, i) => `${i + 1}. **${o}**`).join('\n'),
+        ``,
+        `_Respond with your choice to continue the workflow. The agent is waiting._`,
+      ].join('\n');
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        checkpoint_id,
+        stage,
+        risk_level: riskLevel,
+        status: 'waiting_for_approval',
+        options,
+        formatted_request: formatted,
+        workflow_id: workflowId,
+        created_at: new Date().toISOString(),
+      }, null, 2) }] };
+    }
+
+    // ── veto_openapi_gen ────────────────────────────────────────────────────────
+    case 'veto_openapi_gen': {
+      const filePath   = args?.file_path   ? String(args.file_path)   : null;
+      const projectDir = args?.project_dir ? String(args.project_dir) : null;
+      const writeFileArg = args?.write_file === true;
+      const framework  = String(args?.framework ?? 'auto');
+
+      let routeContent = '';
+      if (filePath) {
+        try { routeContent = readFileSync(filePath, 'utf8').slice(0, 10000); } catch (e) { return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Cannot read ${filePath}: ${e}` }) }], isError: true }; }
+      } else if (projectDir) {
+        try {
+          const candidates = execSyncTop(
+            'git ls-files --cached -- "*.ts" "*.js" "*.py"',
+            { cwd: projectDir, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }
+          ).toString().split('\n').filter((f: string) => /route|router|api|endpoint|controller/i.test(f) && !f.includes('node_modules') && !f.includes('dist/')).slice(0, 5);
+          for (const f of candidates) {
+            try { routeContent += `\n// FILE: ${f}\n${readFileSync(join(projectDir, f), 'utf8').slice(0, 3000)}\n`; } catch { /* skip */ }
+          }
+        } catch { /* not a git repo */ }
+      }
+      if (!routeContent) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No route files found. Provide file_path or project_dir with route files.' }) }], isError: true };
+
+      const openapiResult = await executeOne({
+        id:    'openapi-1',
+        agent: 'api' as WorkerAgentType,
+        task:  `Generate a complete OpenAPI 3.1 specification in YAML format for these ${framework === 'auto' ? 'API' : framework} route definitions. Include: info block (title, version), servers, all paths with HTTP methods, request body schemas, response schemas (200, 400, 401, 404, 500), and security schemes if auth is detected. Output ONLY valid YAML — no markdown fences, no explanation.`,
+        code:  routeContent,
+      });
+
+      const rawSpec = openapiResult.plan?.approach ?? openapiResult.output.recommendation ?? '';
+      const specLines = rawSpec.split('\n');
+      const specStart = specLines.findIndex((l: string) => /^(openapi:|info:)/.test(l.trim()));
+      const spec = specStart >= 0 ? specLines.slice(specStart).join('\n').trim() : rawSpec.trim();
+
+      let writtenTo: string | null = null;
+      if (writeFileArg && projectDir && spec) {
+        try {
+          const outPath = join(projectDir, 'openapi.yaml');
+          writeFileSync(outPath, spec, 'utf8');
+          writtenTo = outPath;
+        } catch { /* skip write errors */ }
+      }
+
+      const routeLineCount = (routeContent.match(/\bget\b|\bpost\b|\bput\b|\bpatch\b|\bdelete\b/gi) ?? []).length;
+
+      autoRecord('openapi_gen', 'api', openapiResult.analysis?.score ?? Math.round(openapiResult.output.confidence * 100));
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        spec,
+        written_to:       writtenTo,
+        routes_detected:  routeLineCount,
+        framework,
+      }, null, 2) }] };
+    }
+
+    // ── veto_flag_auditor ───────────────────────────────────────────────────────
+    case 'veto_flag_auditor': {
+      const projectDir = String(args?.project_dir ?? '').trim();
+      const sdk        = String(args?.sdk ?? 'auto');
+
+      if (!projectDir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
+
+      const patterns = [
+        { label: 'LaunchDarkly', regex: 'ldClient\\.variation|isFeatureEnabled|client\\.boolVariation' },
+        { label: 'Unleash',      regex: 'isEnabled\\(|getVariant\\(|unleash\\.isEnabled' },
+        { label: 'Custom flags', regex: 'flags?\\[|flags?\\.\\w+|feature[Ff]lag|isFeature|FEATURE_' },
+        { label: 'Env-based flags', regex: 'process\\.env\\.FEATURE_|process\\.env\\.ENABLE_|process\\.env\\.FF_' },
+      ];
+
+      let findings = '';
+      let totalMatches = 0;
+      for (const { label, regex } of patterns) {
+        try {
+          const out = execSyncTop(
+            `git grep -rn "${regex}" --include="*.ts" --include="*.js" --include="*.py" -- . ":(exclude)node_modules" ":(exclude)dist"`,
+            { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }
+          ).toString();
+          const lines = out.split('\n').filter(Boolean);
+          totalMatches += lines.length;
+          if (lines.length > 0) findings += `\n=== ${label} (${lines.length} occurrences) ===\n${lines.slice(0, 15).join('\n')}`;
+        } catch { /* no matches */ }
+      }
+
+      if (!findings) return { content: [{ type: 'text', text: JSON.stringify({ success: true, flags_found: 0, flag_items: [], summary: 'No feature flag patterns detected.' }) }] };
+
+      const flagResult = await executeOne({
+        id:    'flags-1',
+        agent: 'code-quality' as WorkerAgentType,
+        task:  'Analyze these feature flag usages and classify each unique flag as: (1) ACTIVE — still toggled in code and worth keeping, (2) CANDIDATE_REMOVAL — always-true/always-false or deprecated, (3) ORPHANED — referenced but flag definition not found. For each, provide: flag name, classification, last-seen location, and safe-to-remove assessment.',
+        code:  findings.slice(0, 6000),
+      });
+
+      const agentOut = flagResult.plan?.approach ?? flagResult.output.recommendation ?? '';
+      autoRecord('flag_audit', 'code-quality', flagResult.analysis?.score ?? Math.round(flagResult.output.confidence * 100));
+
+      // Parse a rough count from agentOut heuristics
+      const activeCount    = (agentOut.match(/ACTIVE/g) ?? []).length;
+      const removalCount   = (agentOut.match(/CANDIDATE_REMOVAL/g) ?? []).length;
+      const orphanedCount  = (agentOut.match(/ORPHANED/g) ?? []).length;
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        flags_found:        totalMatches,
+        active:             activeCount,
+        candidate_removal:  removalCount,
+        orphaned:           orphanedCount,
+        flag_items:         [],
+        recommendations:    agentOut,
+        sdk_detected:       sdk === 'auto' ? (findings.includes('ldClient') ? 'launchdarkly' : findings.includes('unleash') ? 'unleash' : 'custom') : sdk,
+        council_note:       'Run veto_council_debate before removing any flags to assess downstream risk.',
       }, null, 2) }] };
     }
 

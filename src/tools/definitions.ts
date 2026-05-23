@@ -830,6 +830,189 @@ export const TOOL_DEFINITIONS = [
       required: ['project_dir'],
     },
   },
+  // ── Documentation & Quality ──────────────────────────────────────────────────
+  {
+    name: 'veto_doc_gen',
+    description: 'Reads a source file and generates JSDoc/TSDoc/docstring comments for all public APIs. Returns the annotated file content.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file_path: { type: 'string', description: 'Absolute path to source file.' },
+        style:     { type: 'string', description: "Documentation style: 'jsdoc', 'tsdoc', 'docstring', or 'auto' (default).", enum: ['jsdoc', 'tsdoc', 'docstring', 'auto'] },
+      },
+      required: ['file_path'],
+    },
+  },
+  {
+    name: 'veto_type_coverage',
+    description: "Scans a TypeScript project for `any`, implicit `any`, and `as any` casts. Suggests specific replacement types using surrounding code context. Flags `any` in auth/security paths as high severity.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir: { type: 'string', description: 'Absolute path to TypeScript project root.' },
+        max_files:   { type: 'number', description: 'Max files to analyze (default 20, max 30).' },
+      },
+      required: ['project_dir'],
+    },
+  },
+  {
+    name: 'veto_test_gaps',
+    description: 'Reads a coverage report (lcov/JSON) or scans source files to identify untested paths and suggests concrete test cases.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir:     { type: 'string', description: 'Absolute path to project root.' },
+        coverage_report: { type: 'string', description: 'Optional path to coverage JSON/lcov file.' },
+        source_glob:     { type: 'string', description: 'Optional glob pattern for source files (e.g. "src/**/*.ts").' },
+      },
+      required: ['project_dir'],
+    },
+  },
+  {
+    name: 'veto_onboard',
+    description: "Generates a complete new-developer onboarding guide: setup, architecture, key files, how to run tests, first PR checklist.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir: { type: 'string', description: 'Absolute path to project root.' },
+        role:        { type: 'string', description: "Developer role focus, e.g. 'frontend', 'backend', 'fullstack'." },
+      },
+      required: ['project_dir'],
+    },
+  },
+  // ── Diagnosis & Release ───────────────────────────────────────────────────────
+  {
+    name: 'veto_rca',
+    description: 'Stack trace or error description → structured root-cause hypothesis with likely introducing commit. Combines git blame/log with debugger analysis.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        error:       { type: 'string', description: 'Error message or stack trace to analyze.' },
+        project_dir: { type: 'string', description: 'Git repo root for blame context (optional).' },
+        file_hint:   { type: 'string', description: 'Suspected file path for focused git blame (optional).' },
+      },
+      required: ['error'],
+    },
+  },
+  {
+    name: 'veto_release_notes',
+    description: "Generates user-facing release notes from merged commits since the last git tag. Rewrites dev-speak into plain English (fix: race condition → Login is now more reliable).",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir: { type: 'string', description: 'Absolute path to the git repository.' },
+        from_ref:    { type: 'string', description: 'Tag or commit to diff from (default: last tag).' },
+        audience:    { type: 'string', description: "Target audience: 'user' (default) or 'developer'.", enum: ['user', 'developer'] },
+      },
+      required: ['project_dir'],
+    },
+  },
+  {
+    name: 'veto_postmortem',
+    description: 'Incident description + timeline → blameless postmortem with five-whys RCA, action items, and correlation with past council RED verdicts if available.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        incident:    { type: 'string', description: 'Incident description.' },
+        timeline:    { type: 'string', description: 'Timeline of events (freeform, optional).' },
+        project_dir: { type: 'string', description: 'Git repo root for audit log correlation (optional).' },
+        service:     { type: 'string', description: 'Service or system name (optional).' },
+      },
+      required: ['incident'],
+    },
+  },
+  // ── Code Intelligence (Dep / Query / Bundle / Dead-code) ─────────────────────
+  {
+    name: 'veto_dep_advisor',
+    description: 'Parses package.json/requirements.txt/Cargo.toml lockfile, queries OSV.dev (free, no key) for known vulnerabilities, and returns a risk-ranked upgrade plan with breaking-change flags.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir: { type: 'string', description: 'Absolute path to the project directory.' },
+        ecosystem:   { type: 'string', description: "Package ecosystem: 'npm', 'pypi', 'cargo', or 'auto' (default).", enum: ['npm', 'pypi', 'cargo', 'auto'] },
+      },
+      required: ['project_dir'],
+    },
+  },
+  {
+    name: 'veto_query_advisor',
+    description: 'Accepts a SQL query or EXPLAIN ANALYZE output + optional schema → returns rewrite suggestions, CREATE INDEX statements, N+1 detection, and index risk assessment.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query:          { type: 'string', description: 'SQL query or EXPLAIN ANALYZE output to analyze.' },
+        schema:         { type: 'string', description: 'Optional CREATE TABLE statements or schema description.' },
+        explain_output: { type: 'string', description: 'Optional EXPLAIN ANALYZE output if available.' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'veto_bundle_advisor',
+    description: 'Accepts a webpack/Rollup/Vite stats JSON file → top 10 heaviest modules, duplicate packages, code-split candidates, and CDN externalization suggestions.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        stats_file:  { type: 'string', description: 'Absolute path to the bundle stats JSON file (webpack stats format).' },
+        project_dir: { type: 'string', description: 'Optional absolute path to the project root.' },
+      },
+      required: ['stats_file'],
+    },
+  },
+  {
+    name: 'veto_dead_code',
+    description: 'Project-scope dead code detector: unused exports, unreachable branches, stale feature flags (always-true/false constants). Returns council-governed deletion recommendations.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir: { type: 'string', description: 'Absolute path to the project root.' },
+        extensions:  { type: 'array', description: "File extensions to scan (default: ['.ts','.js']).", items: { type: 'string' } },
+      },
+      required: ['project_dir'],
+    },
+  },
+  // ── HITL / OpenAPI / Flag Auditor ────────────────────────────────────────────
+  {
+    name: 'veto_hitl_checkpoint',
+    description: 'Pauses an agentic workflow and returns a structured approval-request the host AI surfaces to the user. The user\'s reply in the AI conversation provides the approval signal. Use before destructive operations, RED council verdicts, or bulk deletes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        stage:       { type: 'string', description: 'Workflow stage name, e.g. "database-migration".' },
+        context:     { type: 'string', description: 'What is about to happen and why.' },
+        options:     { type: 'array', items: { type: 'string' }, description: 'Choices to present (default: [\'Approve\',\'Reject\',\'Modify\']).' },
+        risk_level:  { type: 'string', description: 'Risk level of the operation.', enum: ['low', 'medium', 'high', 'critical'] },
+        workflow_id: { type: 'string', description: 'ID of the parent workflow for tracking (optional).' },
+      },
+      required: ['stage', 'context'],
+    },
+  },
+  {
+    name: 'veto_openapi_gen',
+    description: 'Reads Express/FastAPI/Hono/Fastify route files and generates an OpenAPI 3.1 spec YAML. Returns the spec as a string and optionally writes it to openapi.yaml.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file_path:   { type: 'string', description: 'Single route file to parse (optional).' },
+        project_dir: { type: 'string', description: 'Scan all route files in project (optional).' },
+        framework:   { type: 'string', description: "Framework hint: 'express','fastapi','hono','fastify', or 'auto' (default).", enum: ['express', 'fastapi', 'hono', 'fastify', 'auto'] },
+        write_file:  { type: 'boolean', description: 'Write openapi.yaml to project root (optional).' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'veto_flag_auditor',
+    description: 'SDK-agnostic feature flag auditor — detects LaunchDarkly/Unleash SDK calls AND custom if(flags.X) patterns. Classifies flags as: actively toggled / candidate for removal / orphaned.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir: { type: 'string', description: 'Absolute path to the project root.' },
+        sdk:         { type: 'string', description: "SDK hint: 'launchdarkly','unleash','custom', or 'auto' (default)." },
+      },
+      required: ['project_dir'],
+    },
+  },
   // ── Workflow & CI ─────────────────────────────────────────────────────────────
   {
     name: 'veto_workflow',
