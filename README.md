@@ -1,8 +1,8 @@
 # veto
 
-> **62 agentic tools. 50+ specialists. 3 AIs. Self-learning. Zero cost.**
+> **62 agentic tools. 50+ specialists. 4 AIs. Self-learning. Zero cost.**
 
-An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, Gemini CLI, Cursor, Windsurf, Zed, Copilot, and JetBrains using your existing subscriptions — giving every AI a council of specialist agents, local LLM support, SDD agents, playwright automation, persistent cross-platform memory, a self-learning router, CI/CD gates, workspace discovery, and bidirectional IDE communication.
+An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, Gemini CLI, Antigravity CLI, Cursor, Windsurf, Zed, Copilot, and JetBrains using your existing subscriptions — giving every AI a council of specialist agents, local LLM support, SDD agents, playwright automation, persistent cross-platform memory, a self-learning router, CI/CD gates, workspace discovery, and bidirectional IDE communication.
 
 ---
 
@@ -10,7 +10,7 @@ An MCP server that runs locally on your machine, plugs into Claude Code, Codex C
 
 **Veto v2.0 is now 100% Agentic.**
 
-Every tool in Veto uses a **2-phase agentic loop pattern** — no API keys required, zero extra cost, working identically across Claude Code, Gemini CLI, and Codex CLI.
+Every tool in Veto uses a **2-phase agentic loop pattern** — no API keys required, zero extra cost, working identically across Claude Code, Gemini CLI, Antigravity CLI, and Codex CLI.
 
 ### The 2-Phase Agentic Loop
 1.  **Phase 1 (Sampling):** The tool first attempts real LLM reasoning via **MCP Sampling** (the host AI's native ability to "create a message"). If supported by your client (like Claude Code or Gemini CLI), the agent performs deep reasoning and returns a structured plan or analysis instantly.

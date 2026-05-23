@@ -6,7 +6,7 @@ export function plan(task: string, context?: string): AgentPlan {
   const isInfra = t.includes('hosting') || t.includes('server') || t.includes('cloud') || t.includes('infra');
 
   const approach = isTokenCost
-    ? 'Analyse AI token costs across all three platforms. Track tokens-per-task, cost-per-tier, and cost trajectory over time. Identify the top 3 cost drivers and recommend routing adjustments. A 20% reduction in average tier without quality loss is typically achievable via better router threshold calibration.'
+    ? 'Analyse AI token costs across all four platforms. Track tokens-per-task, cost-per-tier, and cost trajectory over time. Identify the top 3 cost drivers and recommend routing adjustments. A 20% reduction in average tier without quality loss is typically achievable via better router threshold calibration.'
     : isInfra
     ? 'Analyse infrastructure costs by service. Identify idle resources, over-provisioned instances, and services that could be consolidated. Compare reserved vs. on-demand pricing for predictable workloads. Document the cost-per-feature to identify which features have disproportionate infrastructure cost.'
     : 'Track the three cost categories in this project: AI token spend, infrastructure, and developer time. Developer time is almost always the largest cost and the most under-tracked. Quantify each category, identify the top driver, and recommend the highest-ROI reduction.';
