@@ -1,8 +1,8 @@
-| Category | Tools |\n|---|---|\n| **Session** | eto_status · eto_session_save · eto_session_restore · eto_sessions_list · eto_autosave_status · eto_session_replay |\n| **Router** | eto_route_task · eto_rate_status |\n| **Council** | eto_council_debate · eto_benchmark · eto_adr |\n| **Agents** | eto_agent_plan · eto_execute_parallel · eto_explain · eto_compose_agents · eto_delegate |\n| **Review** | eto_code_review · eto_security_scan · eto_secrets_scan · eto_diff_review · eto_full_review · eto_pr_review |\n| **Pipelines** | eto_pre_commit · eto_new_feature · eto_workflow · eto_task_parse |\n| **Advanced** | eto_local_llm · eto_semantic_search · eto_sdd_agent · eto_playwright · eto_notify_ide |\n| **Quality** | eto_clone_detector · eto_lint_rules · eto_api_contract · eto_a11y_advisor · eto_type_coverage · eto_test_gaps |\n| **Watching** | eto_watch · eto_watch_poll · eto_watch_stop |\n| **Memory** | eto_memory_store · eto_memory_search · eto_memory_delete · eto_project_map_update · eto_project_map_get · eto_pattern_store · eto_patterns_list · eto_memory_export · eto_memory_import |\n| **Learning** | eto_record_outcome · eto_learning_stats · eto_learning_apply |\n| **Handoff** | eto_handoff · eto_continue · eto_platform_setup |\n| **Observability** | eto_usage_status · eto_audit_log · eto_health · eto_metrics |\n| **Discover** | eto_discover · eto_summarize · eto_git_blame · eto_changelog · eto_onboard · eto_debt_register |\n| **DevTools** | eto_docs_fetch · eto_context_status · eto_openapi_gen · eto_flag_auditor · eto_env_setup · eto_commit_message · eto_pr_description · eto_pr_post · eto_prompt_optimizer · eto_sre_advisor · eto_diagram · eto_rca · eto_translate · eto_merge_conflict |\n| **Plugins** | eto_plugins |# veto
+# veto
 
 > **50 agents. 62 tools. 3 AIs. Self-learning. Zero extra cost.**
 
-An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, Gemini CLI, Cursor, Windsurf, Zed, Copilot, and JetBrains using your existing subscriptions — giving every AI a council of specialist agents, local LLM support, SDD agents, playwright automation, persistent cross-platform memory, a self-learning router, CI/CD gates, workspace discovery, and bidirectional IDE communication. — giving every AI a council of specialist agents, persistent cross-platform memory, a self-learning router, CI/CD gates, workspace discovery, live docs, cross-platform handoff, usage metrics, and the ability to say no to bad decisions before any code is written.
+An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, Gemini CLI, Cursor, Windsurf, Zed, Copilot, and JetBrains using your existing subscriptions — giving every AI a council of specialist agents, local LLM support, SDD agents, playwright automation, persistent cross-platform memory, a self-learning router, CI/CD gates, workspace discovery, and bidirectional IDE communication.
 
 ---
 
@@ -174,20 +174,21 @@ All config files are home-directory relative — they apply globally across all 
 
 | Category | Tools |
 |---|---|
-| **Session** | `veto_status` · `veto_session_save` · `veto_session_restore` · `veto_sessions_list` · `veto_autosave_status` |
+| **Session** | `veto_status` · `veto_session_save` · `veto_session_restore` · `veto_sessions_list` · `veto_autosave_status` · `veto_session_replay` |
 | **Router** | `veto_route_task` · `veto_rate_status` |
-| **Council** | `veto_council_debate` · `veto_benchmark` |
-| **Agents** | `veto_agent_plan` · `veto_execute_parallel` · `veto_explain` |
-| **Review** | `veto_code_review` · `veto_security_scan` · `veto_secrets_scan` · `veto_diff_review` |
-| **Pipelines** | `veto_workflow` |
+| **Council** | `veto_council_debate` · `veto_benchmark` · `veto_adr` |
+| **Agents** | `veto_agent_plan` · `veto_execute_parallel` · `veto_explain` · `veto_compose_agents` · `veto_delegate` |
+| **Review** | `veto_code_review` · `veto_security_scan` · `veto_secrets_scan` · `veto_diff_review` · `veto_full_review` · `veto_pr_review` |
+| **Pipelines** | `veto_pre_commit` · `veto_new_feature` · `veto_workflow` · `veto_task_parse` |
+| **Advanced** | `veto_local_llm` · `veto_semantic_search` · `veto_sdd_agent` · `veto_playwright` · `veto_notify_ide` |
+| **Quality** | `veto_clone_detector` · `veto_lint_rules` · `veto_api_contract` · `veto_a11y_advisor` · `veto_type_coverage` · `veto_test_gaps` |
 | **Watching** | `veto_watch` · `veto_watch_poll` · `veto_watch_stop` |
 | **Memory** | `veto_memory_store` · `veto_memory_search` · `veto_memory_delete` · `veto_project_map_update` · `veto_project_map_get` · `veto_pattern_store` · `veto_patterns_list` · `veto_memory_export` · `veto_memory_import` |
 | **Learning** | `veto_record_outcome` · `veto_learning_stats` · `veto_learning_apply` |
 | **Handoff** | `veto_handoff` · `veto_continue` · `veto_platform_setup` |
-| **Intelligence** | `veto_docs_fetch` · `veto_context_status` · `veto_task_parse` |
 | **Observability** | `veto_usage_status` · `veto_audit_log` · `veto_health` · `veto_metrics` |
-| **CI/CD** | `veto_ci_gate` · `veto_pr_review` |
-| **Discover** | `veto_discover` · `veto_summarize` · `veto_git_blame` · `veto_changelog` |
+| **Discover** | `veto_discover` · `veto_summarize` · `veto_git_blame` · `veto_changelog` · `veto_onboard` · `veto_debt_register` |
+| **DevTools** | `veto_docs_fetch` · `veto_context_status` · `veto_openapi_gen` · `veto_flag_auditor` · `veto_env_setup` · `veto_commit_message` · `veto_pr_description` · `veto_pr_post` · `veto_prompt_optimizer` · `veto_sre_advisor` · `veto_diagram` · `veto_rca` · `veto_translate` · `veto_merge_conflict` |
 | **Plugins** | `veto_plugins` |
 
 ## MCP Resources
