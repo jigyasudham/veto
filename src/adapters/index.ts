@@ -30,7 +30,7 @@ export type ContinueResult = {
   restored_at: string;
 };
 
-export type SetupPlatform = Platform | 'windsurf' | 'zed' | 'amazonq';
+export type SetupPlatform = Platform | 'windsurf' | 'zed' | 'amazonq' | 'copilot' | 'jetbrains';
 
 export type PlatformSetupResult = {
   platform: SetupPlatform;
@@ -233,6 +233,43 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
         'Amazon Q supports both global (~/.aws/amazonq/mcp.json) and project-local (.amazonq/mcp.json) configs.',
         'Amazon Q Developer requires an AWS Builder ID or IAM Identity Center account.',
         'veto init does not yet auto-configure Amazon Q — write the config file manually per the steps above.',
+      ],
+    };
+  }
+
+  // ── Copilot ─────────────────────────────────────────────────────────────────
+  if (platform === 'copilot') {
+    return {
+      platform,
+      mcp_config: { mcpServers: { veto: mcpEntry }, config_path: '.github/copilot/mcp.json' },
+      setup_steps: [
+        '1. Run: npx @jigyasudham/veto init  (auto-writes .github/copilot/mcp.json)',
+        '2. Restart VS Code or your GitHub Copilot client',
+        '3. Verify: call veto_status — should return { "status": "running" }',
+      ],
+      rate_limit_signals: ['rate limit', 'too many requests', '429', 'quota exceeded'],
+      continue_command: 'veto_continue',
+      notes: [
+        'Copilot MCP requires VS Code Insiders and the pre-release version of GitHub Copilot Chat.',
+      ],
+    };
+  }
+
+  // ── JetBrains ───────────────────────────────────────────────────────────────
+  if (platform === 'jetbrains') {
+    return {
+      platform,
+      mcp_config: { mcpServers: { veto: mcpEntry }, config_path: 'Settings > Tools > MCP Servers' },
+      setup_steps: [
+        '1. Open JetBrains IDE Settings > Tools > MCP Servers',
+        '2. Add a new server using stdio. Command: npx, Args: -y --package @jigyasudham/veto veto-server',
+        '3. Apply and restart the AI Assistant chat',
+        '4. Verify: call veto_status — should return { "status": "running" }',
+      ],
+      rate_limit_signals: ['rate limit', 'too many requests', '429', 'quota exceeded'],
+      continue_command: 'veto_continue',
+      notes: [
+        'JetBrains AI supports MCP as of 2025.2 EAP.',
       ],
     };
   }

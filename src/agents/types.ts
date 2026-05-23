@@ -69,6 +69,7 @@ export interface AgentTask {
   code?: string;
   context?: string;
   project_dir?: string;
+  llm_backed?: boolean;
 }
 
 export interface AgentResult {

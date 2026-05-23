@@ -838,6 +838,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         task,
         context: args?.context ? String(args.context) : undefined,
         project_dir: args?.project_dir ? String(args.project_dir) : undefined,
+        llm_backed: args?.llm_backed === true,
       });
       if (result.error) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: result.error }) }], isError: true };
@@ -1002,6 +1003,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case 'veto_execute_parallel': {
       const rawTasks = Array.isArray(args?.tasks) ? args.tasks : [];
+      const llmBacked = args?.llm_backed === true;
+      const agentOutputs = args?.agent_outputs as Record<string, unknown> | undefined;
+
       if (rawTasks.length === 0) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'tasks array is required and must not be empty.' }) }], isError: true };
       }
@@ -1013,8 +1017,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         code: t.code ? String(t.code) : undefined,
         context: t.context ? String(t.context) : undefined,
         project_dir: t.project_dir ? String(t.project_dir) : parallelProjectDir,
+        llm_backed: llmBacked,
       }));
-      const results = await executeParallel(tasks);
+
+      // Phase 2: Agentic loop
+      if (llmBacked && !agentOutputs) {
+        const prompts = tasks.map(t => buildAgenticAgentPrompt(t)).filter(Boolean);
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              mode: 'agentic_loop',
+              instruction: 'Reason as each agent below using their provided roles and schemas. Return a JSON object mapping task IDs (or agent names) to agent responses.',
+              prompts,
+            }, null, 2)
+          }]
+        };
+      }
+
+      const results = (llmBacked && agentOutputs)
+        ? (await import('./agents/llm-runner.js')).parseAgenticAgentResponses(tasks, agentOutputs)
+        : await executeParallel(tasks);
 
       // #40: auto-record learning outcome per completed parallel task
       for (let i = 0; i < results.length; i++) {
@@ -1409,7 +1432,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         dependencies: Array.isArray(s.dependencies) ? s.dependencies.map(String) : undefined,
       }));
       const mode = String(args?.mode ?? 'linear') === 'dag' ? 'dag' : 'linear';
-      const result = await runPipeline(steps, args?.project_dir ? String(args.project_dir) : undefined, mode);
+      const result = await runPipeline(
+        steps,
+        args?.project_dir ? String(args.project_dir) : undefined,
+        mode,
+        async (question: string) => {
+          try {
+            const resp = await server.createMessage({
+              messages: [{ role: 'user', content: { type: 'text', text: question } }]
+            });
+            return resp.content.type === 'text' ? resp.content.text : '';
+          } catch {
+            return ''; // sampling not supported by client
+          }
+        }
+      );
 
       // #39: auto-record learning outcome per executed workflow step
       for (const step of result.results) {

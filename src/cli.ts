@@ -420,6 +420,18 @@ Recommended start sequence:
       ];
       writeFileSync(join(hooksDir, 'veto-secrets-scan.ps1'), ps1Lines.join('\n'), 'utf8');
 
+      // Phase 1.4: Write standard hook files that Claude Code looks for
+      const postFileWrite = process.platform === 'win32'
+        ? `@powershell -NoProfile -ExecutionPolicy Bypass -File ".claude\\hooks\\veto-secrets-scan.ps1" "%1"`
+        : `#!/bin/sh\n./.claude/hooks/veto-secrets-scan.sh "$1"`;
+
+      const preCompact = process.platform === 'win32'
+        ? `@npx -y @jigyasudham/veto veto_session_save --auto_summarize=true`
+        : `#!/bin/sh\nnpx -y @jigyasudham/veto veto_session_save --auto_summarize=true`;
+
+      writeFileSync(join(hooksDir, 'post-file-write'), postFileWrite, { mode: 0o755 });
+      writeFileSync(join(hooksDir, 'pre-compact'), preCompact, { mode: 0o755 });
+
       // Wire hooks into .claude/settings.json if it exists or create it
       let projectSettings: Record<string, unknown> = {};
       if (existsSync(settingsPath)) {

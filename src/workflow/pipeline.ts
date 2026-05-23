@@ -159,7 +159,7 @@ export interface PipelineResult {
 }
 
 /** Execute a single step and return a StepResult (no retry — used by DAG helper). */
-async function executeStep(step: PipelineStep, globalProjectDir?: string): Promise<StepResult> {
+async function executeStep(step: PipelineStep, globalProjectDir?: string, elicitor?: (q: string) => Promise<string>): Promise<StepResult> {
   const result = await executeOne({
     id: step.id,
     agent: step.agent,
@@ -179,8 +179,17 @@ async function executeStep(step: PipelineStep, globalProjectDir?: string): Promi
     };
   }
 
-  const confidencePct = Math.round(result.output.confidence * 100);
-  const gateFailed = step.gate !== undefined && confidencePct < step.gate;
+  let confidencePct = Math.round(result.output.confidence * 100);
+  let gateFailed = step.gate !== undefined && confidencePct < step.gate;
+
+  // Phase 4.7: requestElicitation override
+  if (gateFailed && elicitor) {
+    const override = await elicitor(`Step "${step.id}" failed gate (${confidencePct}% < ${step.gate}%). Reason: ${result.output.recommendation}\n\nType "override" to proceed anyway, or provide extra context to retry.`);
+    if (override?.toLowerCase() === 'override') {
+      gateFailed = false;
+      confidencePct = step.gate!; // force pass
+    }
+  }
 
   return {
     id: step.id, agent: step.agent,
@@ -198,6 +207,7 @@ async function executeStep(step: PipelineStep, globalProjectDir?: string): Promi
 async function runPipelineDag(
   steps: PipelineStep[],
   globalProjectDir?: string,
+  elicitor?: (q: string) => Promise<string>,
 ): Promise<PipelineResult> {
   const start = Date.now();
   const stepMap = new Map<string, PipelineStep>(steps.map(s => [s.id, s]));
@@ -253,7 +263,7 @@ async function runPipelineDag(
     // Run independent steps in parallel
     if (toRun.length > 0) {
       const stepResults = await Promise.all(
-        toRun.map(id => executeStep(stepMap.get(id)!, globalProjectDir))
+        toRun.map(id => executeStep(stepMap.get(id)!, globalProjectDir, elicitor))
       );
       for (const sr of stepResults) {
         resultMap.set(sr.id, sr);
@@ -303,6 +313,7 @@ export async function runPipeline(
   steps: PipelineStep[],
   globalProjectDir?: string,
   mode: 'linear' | 'dag' = 'linear',
+  elicitor?: (q: string) => Promise<string>,
 ): Promise<PipelineResult> {
   if (mode === 'dag') {
     return runPipelineDag(steps, globalProjectDir);
@@ -355,6 +366,20 @@ export async function runPipeline(
 
     let confidencePct = Math.round(lastResult.output.confidence * 100);
     let gateFailed = step.gate !== undefined && confidencePct < step.gate;
+
+    // Phase 4.7: requestElicitation override
+    if (gateFailed && elicitor && maxRetries === 0) {
+      const override = await elicitor(`Step "${step.id}" failed gate (${confidencePct}% < ${step.gate}%). Reason: ${lastResult.output.recommendation}\n\nType "override" to proceed anyway, or provide extra context to retry.`);
+      if (override?.toLowerCase() === 'override') {
+        gateFailed = false;
+        confidencePct = step.gate!;
+      } else if (override) {
+        const retryResult = await executeOne({ id: step.id, agent: step.agent, task: step.task, context: override, project_dir: step.project_dir ?? globalProjectDir });
+        lastResult = retryResult;
+        confidencePct = Math.round(lastResult.output.confidence * 100);
+        gateFailed = step.gate !== undefined && confidencePct < step.gate;
+      }
+    }
 
     // Retry loop
     while (gateFailed && attempts <= maxRetries) {

@@ -49,15 +49,23 @@ function hardCompress(context: string, relevantFiles: string[]): string {
   return combined.join('\n');
 }
 
-export function compressContext(context: string, relevantFiles: string[] = []): CompressionResult {
+export function compressContext(context: string, relevantFiles: string[] = [], platform: string = 'claude'): CompressionResult {
   const original_tokens = estimateTokens(context);
   let strategy: CompressionStrategy;
   let content: string;
 
-  if (original_tokens < 2000) {
+  const budgets: Record<string, { passthrough: number, compress: number }> = {
+    gemini: { passthrough: 900000, compress: 950000 },
+    claude: { passthrough: 180000, compress: 190000 },
+    codex:  { passthrough: 100000, compress: 110000 }
+  };
+
+  const limits = budgets[platform] || budgets.claude;
+
+  if (original_tokens < limits.passthrough) {
     strategy = 'passthrough';
     content = context;
-  } else if (original_tokens < 8000) {
+  } else if (original_tokens < limits.compress) {
     strategy = 'compress';
     content = extractRelevantSections(context, relevantFiles);
   } else {

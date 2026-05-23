@@ -49,7 +49,7 @@ export function routeTask(task: string, options: RouteOptions = {}): RouteResult
   const rate_status = getRateStatus();
 
   const context_plan = options.context
-    ? compressContext(options.context, options.relevantFiles ?? [])
+    ? compressContext(options.context, options.relevantFiles ?? [], effective_platform)
     : undefined;
 
   const feedback_enabled = isFeedbackEnabled();

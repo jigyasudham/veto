@@ -205,3 +205,79 @@ export function buildAgenticAgentPrompt(task: AgentTask): AgenticAgentPrompt | n
     schema,
   };
 }
+
+export function parseAgenticAgentResponses(
+  tasks: AgentTask[],
+  responses: Record<string, unknown>
+): AgentResult[] {
+  const results: AgentResult[] = [];
+  const start = Date.now();
+
+  for (const task of tasks) {
+    const raw = responses[task.id] || responses[task.agent];
+    if (!raw) {
+      results.push({
+        id: task.id,
+        agent: task.agent,
+        output: { confidence: 0, severity: 'info', recommendation: 'Missing agent response', affected_files: [], line_refs: [] },
+        duration_ms: 0,
+        error: 'Missing response for this task in agent_outputs',
+      });
+      continue;
+    }
+
+    const entry = getManifestEntry(task.agent);
+    const isAnalysis = task.code !== undefined && entry?.output_type === 'analysis';
+
+    if (isAnalysis) {
+      const analysis = parseAnalysisResponse(typeof raw === 'string' ? raw : JSON.stringify(raw), task.agent);
+      results.push({
+        id: task.id,
+        agent: task.agent,
+        analysis: analysis || undefined,
+        output: deriveOutputFromAny(undefined, analysis || undefined),
+        duration_ms: Date.now() - start,
+        llm_backed: true,
+        error: !analysis ? 'Failed to parse agent analysis JSON' : undefined,
+      });
+    } else {
+      const plan = parsePlanResponse(typeof raw === 'string' ? raw : JSON.stringify(raw), task.agent, task.task);
+      results.push({
+        id: task.id,
+        agent: task.agent,
+        plan: plan || undefined,
+        output: deriveOutputFromAny(plan || undefined, undefined),
+        duration_ms: Date.now() - start,
+        llm_backed: true,
+        error: !plan ? 'Failed to parse agent plan JSON' : undefined,
+      });
+    }
+  }
+
+  return results;
+}
+
+function deriveOutputFromAny(plan?: AgentPlan, analysis?: AgentAnalysis): AgentOutput {
+  if (analysis) {
+    return {
+      confidence: Math.min(1, Math.max(0, analysis.score / 100)),
+      severity: analysis.critical_count > 0 ? 'critical' : analysis.high_count > 0 ? 'high' : 'medium',
+      recommendation: analysis.summary,
+      affected_files: [],
+      line_refs: analysis.findings
+        .filter(f => f.location)
+        .map(f => ({ file: f.location!, line: 0, description: f.description })),
+    };
+  }
+  if (plan) {
+    // simplified confidence for manual responses
+    return {
+      confidence: 0.9,
+      severity: 'info',
+      recommendation: plan.approach,
+      affected_files: [],
+      line_refs: [],
+    };
+  }
+  return { confidence: 0, severity: 'info', recommendation: '', affected_files: [], line_refs: [] };
+}

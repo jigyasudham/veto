@@ -176,8 +176,8 @@ export async function executeOne(task: AgentTask): Promise<AgentResult> {
     const enrichedContext = buildContextString(task.project_dir, task.context);
     const enrichedTask = enrichedContext ? { ...task, context: enrichedContext } : task;
 
-    // LLM-backed path: try first when server is available
-    if (_server) {
+    // LLM-backed path: opt-in via llm_backed flag
+    if (_server && task.llm_backed) {
       const llmResult = await runAgentLlm(_server, enrichedTask);
       if (llmResult) {
         return {

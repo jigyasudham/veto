@@ -310,7 +310,14 @@ export const TOOL_DEFINITIONS = [
         },
         task: { type: 'string', description: 'The task for the agent to plan.' },
         context: { type: 'string', description: 'Optional additional context.' },
-        project_dir: { type: 'string', description: 'Optional: absolute path to the project directory. Auto-injects package.json, git diff, and stack info into the agent context.' },
+        project_dir: {
+          type: 'string',
+          description: 'Optional: absolute path to the project directory. Auto-injects package.json, git diff, and stack info into the agent context.',
+        },
+        llm_backed: {
+          type: 'boolean',
+          description: 'If true, routes the task through the LLM runner for deep reasoning instead of using the deterministic pattern engine.',
+        },
       },
       required: ['agent', 'task'],
     },
@@ -349,6 +356,14 @@ export const TOOL_DEFINITIONS = [
         editor_model: {
           type: 'string',
           description: 'Optional: override model used for the editing/execution phase (e.g. claude-3-5-haiku).',
+        },
+        llm_backed: {
+          type: 'boolean',
+          description: 'If true, uses the agentic loop to run these agents via the host AI. Required for Phase 2 LLM-backed reasoning.',
+        },
+        agent_outputs: {
+          type: 'object',
+          description: 'Phase 2 responses from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
         },
       },
       required: ['tasks'],
@@ -485,13 +500,18 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'veto_memory_export',
-    description: 'Exports all local memory (sessions, knowledge, patterns, decisions, project maps) to a portable JSON file. Copy the file to another machine and run veto_memory_import there to resume work. No external services required.',
+    description: 'Exports all local memory (sessions, knowledge, patterns, decisions, project maps) to a portable JSON or Markdown file. Use markdown for a human-readable VETO_MEMORY.md file.',
     inputSchema: {
       type: 'object',
       properties: {
         output_path: {
           type: 'string',
-          description: 'Where to write the export file. Defaults to ~/.veto/veto-export.json. Use a path on shared storage (Dropbox, OneDrive, USB) to make transfer easy.',
+          description: 'Where to write the export file. Defaults to ~/.veto/veto-export.json or VETO_MEMORY.md in the project root.',
+        },
+        format: {
+          type: 'string',
+          enum: ['json', 'markdown'],
+          description: 'Export format: "json" for backup/transfer, "markdown" for human-readable documentation.',
         },
       },
       required: [],
@@ -1140,7 +1160,7 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
-        platform: { type: 'string', enum: ['claude', 'gemini', 'codex', 'copilot', 'jetbrains'], description: 'The platform to get setup instructions for.' },
+        platform: { type: 'string', enum: ['claude', 'gemini', 'codex', 'copilot', 'jetbrains', 'windsurf', 'zed', 'amazonq'], description: 'The platform to get setup instructions for.' },
         veto_server_path: { type: 'string', description: 'Absolute path to the built veto server (dist/server.js).' },
       },
       required: ['platform', 'veto_server_path'],
