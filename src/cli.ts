@@ -168,8 +168,21 @@ async function initCommand() {
     process.exit(1);
   }
 
-  // 3. Auto-scan current project and store project map
+  // 3. Auto-import VETO_MEMORY.md if present in cwd
   const cwd = resolve(process.cwd());
+  const vetoMemoryPath = join(cwd, 'VETO_MEMORY.md');
+  if (existsSync(vetoMemoryPath)) {
+    process.stdout.write('  · Importing VETO_MEMORY.md...');
+    try {
+      const { importMemoryMarkdown } = await import('./memory/sync.js');
+      const importResult = importMemoryMarkdown(vetoMemoryPath);
+      console.log(c.green(' ✓') + ` ${importResult.imported} knowledge entries imported`);
+    } catch {
+      console.log(c.dim(' skipped'));
+    }
+  }
+
+  // 4. Auto-scan current project and store project map
   const { updateProjectMap } = await import('./memory/local.js');
   const { discoverProject } = await import('./discover.js');
   try {
@@ -664,6 +677,53 @@ async function sessionsCommand() {
 
 async function memoryCommand() {
   const args = process.argv.slice(3);
+  const subcommand = args[0];
+
+  // veto memory export [--format=markdown] [--output=path]
+  if (subcommand === 'export') {
+    const formatArg = args.find(a => a.startsWith('--format='));
+    const outputArg = args.find(a => a.startsWith('--output='));
+    const format = formatArg?.split('=')[1] ?? 'json';
+    const outputPath = outputArg?.split('=')[1];
+    const { exportMemory, exportMemoryMarkdown } = await import('./memory/sync.js');
+    if (format === 'markdown') {
+      const cwd = resolve(process.cwd());
+      const result = exportMemoryMarkdown(cwd, outputPath);
+      if (result.success) {
+        console.log(c.green('  ✓') + ` VETO_MEMORY.md written to ${result.output_path}`);
+        console.log(c.dim(`  Sections: ${JSON.stringify(result.sections)}`));
+      } else {
+        console.error(c.red(`  ✗ Export failed: ${result.error}`));
+      }
+    } else {
+      const result = exportMemory(outputPath);
+      if (result.success) {
+        console.log(c.green('  ✓') + ` Exported to ${result.export_path}`);
+      } else {
+        console.error(c.red(`  ✗ Export failed: ${result.error}`));
+      }
+    }
+    return;
+  }
+
+  // veto memory import [--format=markdown] <path>
+  if (subcommand === 'import') {
+    const formatArg = args.find(a => a.startsWith('--format='));
+    const format = formatArg?.split('=')[1] ?? 'json';
+    const inputPath = args.find(a => !a.startsWith('--')) ?? '';
+    const { importMemory, importMemoryMarkdown } = await import('./memory/sync.js');
+    if (format === 'markdown') {
+      if (!inputPath) { console.error(c.red('  ✗ Provide a file path: veto memory import --format=markdown <path>')); return; }
+      const result = importMemoryMarkdown(inputPath);
+      console.log(result.success ? c.green('  ✓') + ` ${result.message}` : c.red(`  ✗ ${result.message}`));
+    } else {
+      const result = importMemory(inputPath || undefined);
+      console.log(result.success ? c.green('  ✓') + ` Import complete` : c.red(`  ✗ Import failed: ${result.error}`));
+    }
+    return;
+  }
+
+  // veto memory [query]
   const query = args.join(' ') || undefined;
   const { searchKnowledge } = await import('./memory/local.js');
   const results = searchKnowledge({ query, limit: 20 });

@@ -28,7 +28,8 @@ import {
   updateSession, resolveContextWindow, getMetrics,
   upsertContextUsage, getContextUsage,
 } from './memory/local.js';
-import { exportMemory, importMemory, getLocalDbSize } from './memory/sync.js';
+import { exportMemory, importMemory, getLocalDbSize, exportMemoryMarkdown, importMemoryMarkdown } from './memory/sync.js';
+import { buildRepoMap, repoMapToCompact } from './repo-map/index.js';
 import { runDebate } from './council/index.js';
 import { runLlmDebate, buildAgenticDebatePrompt, parseAgentResponses, runFromAgentResponses } from './council/llm-council.js';
 import { autoSummarizeSession } from './council/session-summarizer.js';
@@ -1024,9 +1025,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     case 'veto_project_map_update': {
       const project_dir = String(args?.project_dir ?? '').trim();
+      if (!project_dir) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
+      }
+
+      // auto_compute: build live repo-map instead of requiring manual structure
+      if (args?.auto_compute === true) {
+        try {
+          const computed = buildRepoMap({ projectDir: project_dir, maxTopModules: 30 });
+          const id = updateProjectMap({
+            project_dir,
+            structure: {
+              auto_computed: true,
+              generated_at: computed.generated_at,
+              total_files: computed.total_files,
+              symbol_count: computed.symbol_count,
+              top_modules: computed.top_modules.slice(0, 20).map(m => ({
+                file: m.file, rank: m.rank, refs: m.ref_count,
+                exports: m.symbols.slice(0, 5).map(s => s.name),
+              })),
+            },
+            key_modules: computed.top_modules.slice(0, 15).map(m => m.file),
+          });
+          return { content: [{ type: 'text', text: JSON.stringify({ success: true, id, auto_computed: true, total_files: computed.total_files, symbol_count: computed.symbol_count, top_modules_count: computed.top_modules.length }, null, 2) }] };
+        } catch (err) {
+          return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Repo-map failed: ${err instanceof Error ? err.message : String(err)}` }) }], isError: true };
+        }
+      }
+
       const structure = String(args?.structure ?? '').trim();
-      if (!project_dir || !structure) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir and structure are required.' }) }], isError: true };
+      if (!structure) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'Provide structure or set auto_compute: true to compute it automatically.' }) }], isError: true };
       }
       const id = updateProjectMap({
         project_dir,
@@ -1217,11 +1246,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     case 'veto_memory_export': {
+      const format = args?.format === 'markdown' ? 'markdown' : 'json';
+      if (format === 'markdown') {
+        const projectDir = args?.project_dir ? String(args.project_dir) : undefined;
+        const outputPath = args?.output_path ? String(args.output_path) : undefined;
+        const result = exportMemoryMarkdown(projectDir, outputPath);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
       const result = exportMemory(args?.output_path ? String(args.output_path) : undefined);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
 
     case 'veto_memory_import': {
+      const format = args?.format === 'markdown' ? 'markdown' : 'json';
+      if (format === 'markdown') {
+        const inputPath = String(args?.input_path ?? '').trim();
+        if (!inputPath) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'input_path is required for markdown import.' }) }], isError: true };
+        const result = importMemoryMarkdown(inputPath);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
       const result = importMemory(args?.input_path ? String(args.input_path) : undefined);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
@@ -1696,10 +1739,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       const result = discoverProject(discoverDir, discoverDepth);
 
+      // Build live repo-map for 'full' depth or when explicitly requested
+      let repoMap: ReturnType<typeof buildRepoMap> | null = null;
+      if (discoverDepth === 'full' || args?.include_repo_map === true) {
+        try { repoMap = buildRepoMap({ projectDir: discoverDir, maxTopModules: 20 }); } catch { /* non-fatal */ }
+      }
+
       if (discoverStore) {
         updateProjectMap({
           project_dir: result.project_dir,
-          structure: { ecosystems: result.ecosystems, key_files: result.key_files, file_count_by_ext: result.file_counts, total_files: result.total_files, scanned_at: result.scanned_at },
+          structure: {
+            ecosystems: result.ecosystems,
+            key_files: result.key_files,
+            file_count_by_ext: result.file_counts,
+            total_files: result.total_files,
+            scanned_at: result.scanned_at,
+            ...(repoMap ? { top_modules: repoMap.top_modules.slice(0, 10).map(m => ({ file: m.file, rank: m.rank, exports: m.symbols.slice(0, 4).map(s => s.name) })) } : {}),
+          },
           key_modules: result.key_files,
           tech_stack: result.tech_stack,
         });
@@ -1712,7 +1768,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
       }
 
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, stored: discoverStore, ...result }, null, 2) }] };
+      const discoverPayload: Record<string, unknown> = { success: true, stored: discoverStore, ...result };
+      if (repoMap) {
+        discoverPayload.repo_map = {
+          total_files: repoMap.total_files,
+          symbol_count: repoMap.symbol_count,
+          top_modules: repoMap.top_modules.slice(0, 15),
+          dep_graph: repoMap.dep_graph,
+        };
+      }
+
+      return { content: [{ type: 'text', text: JSON.stringify(discoverPayload, null, 2) }] };
     }
 
     case 'veto_summarize': {
@@ -1988,25 +2054,43 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => ({
     {
       uri: 'veto://sessions',
       name: 'Saved Sessions',
-      description: 'List of all saved Veto sessions across AI platforms.',
+      description: 'List of all saved Veto sessions. Append ?limit=N to control count.',
+      mimeType: 'application/json',
+    },
+    {
+      uri: 'veto://session/latest',
+      name: 'Latest Session',
+      description: 'The most recently saved session — summary, context, and task_state.',
       mimeType: 'application/json',
     },
     {
       uri: 'veto://project-map',
-      name: 'Project Map',
-      description: 'Stored project structure maps. Append ?dir=<absolute_path> to filter by project.',
+      name: 'Project Map (stored)',
+      description: 'Manually-maintained project structure. Append ?dir=<absolute_path> to get a specific project.',
+      mimeType: 'application/json',
+    },
+    {
+      uri: 'veto://repo-map',
+      name: 'Repo Map (live)',
+      description: 'Live structural index: symbol extraction + dependency graph + PageRank ranking. Append ?dir=<absolute_path>. More accurate than the stored project map.',
       mimeType: 'application/json',
     },
     {
       uri: 'veto://memory',
       name: 'Knowledge Base',
-      description: 'All stored knowledge entries. Append ?q=<query> to search.',
+      description: 'All stored knowledge entries. Append ?q=<query> to search, ?type=<type> to filter.',
+      mimeType: 'application/json',
+    },
+    {
+      uri: 'veto://memory/recent',
+      name: 'Recent Memory',
+      description: 'The 10 most recently stored knowledge entries — no query required.',
       mimeType: 'application/json',
     },
     {
       uri: 'veto://patterns',
       name: 'Learned Patterns',
-      description: 'Coding patterns Veto has learned from your sessions.',
+      description: 'Coding patterns Veto has learned from your sessions. Append ?prefix=<prefix> to filter by key prefix.',
       mimeType: 'application/json',
     },
   ],
@@ -2017,7 +2101,8 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   const url = new URL(uri);
 
   if (url.host === 'sessions') {
-    const sessions = listSessions(50);
+    const limit = Math.min(100, parseInt(url.searchParams.get('limit') ?? '50', 10) || 50);
+    const sessions = listSessions(limit);
     return {
       contents: [{
         uri,
@@ -2026,6 +2111,22 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
           id: s.id, platform: s.platform, summary: s.summary,
           project_dir: s.project_dir, started_at: s.started_at,
         })), null, 2),
+      }],
+    };
+  }
+
+  if (url.host === 'session' && url.pathname === '/latest') {
+    const sessions = listSessions(1);
+    const latest = sessions[0] ?? null;
+    return {
+      contents: [{
+        uri,
+        mimeType: 'application/json',
+        text: JSON.stringify(latest ? {
+          id: latest.id, platform: latest.platform, summary: latest.summary,
+          context: latest.context, task_state: latest.task_state,
+          project_dir: latest.project_dir, started_at: latest.started_at,
+        } : { found: false }, null, 2),
       }],
     };
   }
@@ -2045,9 +2146,51 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     return { contents: [{ uri, mimeType: 'application/json', text: '{"message":"Append ?dir=<absolute_path> to get a specific project map."}' }] };
   }
 
+  if (url.host === 'repo-map') {
+    const dir = url.searchParams.get('dir') ?? '';
+    if (!dir) {
+      return { contents: [{ uri, mimeType: 'application/json', text: '{"message":"Append ?dir=<absolute_path> to compute a live repo map."}' }] };
+    }
+    try {
+      const map = buildRepoMap({ projectDir: dir });
+      return {
+        contents: [{
+          uri,
+          mimeType: 'application/json',
+          text: JSON.stringify({
+            generated_at: map.generated_at,
+            total_files: map.total_files,
+            symbol_count: map.symbol_count,
+            top_modules: map.top_modules,
+            dep_graph: map.dep_graph,
+          }, null, 2),
+        }],
+      };
+    } catch (err) {
+      return { contents: [{ uri, mimeType: 'application/json', text: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }) }] };
+    }
+  }
+
   if (url.host === 'memory') {
+    const isRecent = url.pathname === '/recent';
+    if (isRecent) {
+      const results = searchKnowledge({ limit: 10 });
+      return {
+        contents: [{
+          uri,
+          mimeType: 'application/json',
+          text: JSON.stringify(results.map(r => ({
+            id: r.id, type: r.type, title: r.title,
+            content: r.content.slice(0, 300), tags: r.tags ? JSON.parse(r.tags) : [],
+          })), null, 2),
+        }],
+      };
+    }
     const q = url.searchParams.get('q') ?? undefined;
-    const results = searchKnowledge({ query: q, limit: 20 });
+    const typeRaw = url.searchParams.get('type') ?? undefined;
+    const knownTypes = ['solution', 'pattern', 'context', 'error', 'reference', 'decision'] as const;
+    const type = knownTypes.includes(typeRaw as typeof knownTypes[number]) ? typeRaw as typeof knownTypes[number] : undefined;
+    const results = searchKnowledge({ query: q, type, limit: 20 });
     return {
       contents: [{
         uri,
@@ -2061,7 +2204,8 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   }
 
   if (url.host === 'patterns') {
-    const patterns = getPatterns(undefined, 50);
+    const prefix = url.searchParams.get('prefix') ?? undefined;
+    const patterns = getPatterns(prefix, 50);
     return {
       contents: [{
         uri,

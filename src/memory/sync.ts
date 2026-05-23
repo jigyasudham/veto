@@ -258,6 +258,143 @@ export function importMemory(inputPath?: string): ImportResult {
   }
 }
 
+export interface MarkdownExportResult {
+  success: boolean;
+  output_path: string;
+  sections: Record<string, number>;
+  exported_at: string;
+  error?: string;
+}
+
+export function exportMemoryMarkdown(projectDir?: string, outputPath?: string): MarkdownExportResult {
+  const outPath = outputPath ?? (projectDir ? join(projectDir, 'VETO_MEMORY.md') : join(homedir(), '.veto', 'VETO_MEMORY.md'));
+  const db = getDb();
+  const now = new Date().toISOString();
+
+  try {
+    const knowledge = db.prepare(
+      `SELECT * FROM knowledge_base ORDER BY created_at DESC LIMIT 100${projectDir ? ' WHERE project_dir = ?' : ''}`
+    ).all(...(projectDir ? [projectDir] : [])) as Record<string, unknown>[];
+
+    const patterns = db.prepare(
+      'SELECT * FROM patterns ORDER BY confidence DESC LIMIT 50'
+    ).all() as Record<string, unknown>[];
+
+    const decisions = db.prepare(
+      'SELECT * FROM decisions ORDER BY made_at DESC LIMIT 30'
+    ).all() as Record<string, unknown>[];
+
+    const sessions = db.prepare(
+      `SELECT id, platform, summary, project_dir, started_at FROM sessions ORDER BY started_at DESC LIMIT 20${projectDir ? ' WHERE project_dir = ?' : ''}`
+    ).all(...(projectDir ? [projectDir] : [])) as Record<string, unknown>[];
+
+    const lines: string[] = [
+      `# Veto Memory Export`,
+      `> Generated: ${now}${projectDir ? ` | Project: ${projectDir}` : ''}`,
+      `> Import with: \`veto init\` (auto-detected) or \`veto memory import --format=markdown\``,
+      '',
+    ];
+
+    if (knowledge.length > 0) {
+      lines.push('## Knowledge Base', '');
+      for (const k of knowledge) {
+        lines.push(`### ${k['title'] ?? 'Untitled'}`);
+        lines.push(`**Type:** ${k['type']} | **Created:** ${k['created_at']}`);
+        if (k['tags']) lines.push(`**Tags:** ${k['tags']}`);
+        lines.push('');
+        lines.push(String(k['content'] ?? '').slice(0, 600));
+        lines.push('');
+      }
+    }
+
+    if (patterns.length > 0) {
+      lines.push('## Learned Patterns', '');
+      for (const p of patterns) {
+        lines.push(`- **${p['pattern_key']}** (confidence: ${p['confidence']}, seen: ${p['seen_count']})`);
+        lines.push(`  ${String(p['pattern_val'] ?? '').slice(0, 200)}`);
+        lines.push('');
+      }
+    }
+
+    if (decisions.length > 0) {
+      lines.push('## Architecture Decisions', '');
+      for (const d of decisions) {
+        lines.push(`### ${d['decision']}`);
+        lines.push(`**Made:** ${d['made_at']} | **Verdict:** ${d['council_verdict'] ?? 'manual'}`);
+        if (d['rationale']) lines.push('', String(d['rationale']).slice(0, 400));
+        lines.push('');
+      }
+    }
+
+    if (sessions.length > 0) {
+      lines.push('## Session History', '');
+      for (const s of sessions) {
+        lines.push(`- **[${s['platform']}]** ${s['started_at']} — ${String(s['summary'] ?? 'No summary').slice(0, 120)}`);
+      }
+      lines.push('');
+    }
+
+    const content = lines.join('\n');
+    writeFileSync(outPath, content, 'utf-8');
+
+    return {
+      success: true,
+      output_path: outPath,
+      sections: {
+        knowledge_base: knowledge.length,
+        patterns: patterns.length,
+        decisions: decisions.length,
+        sessions: sessions.length,
+      },
+      exported_at: now,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      output_path: outPath,
+      sections: {},
+      exported_at: now,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export function importMemoryMarkdown(inputPath: string): { success: boolean; message: string; imported: number } {
+  if (!existsSync(inputPath)) {
+    return { success: false, message: `File not found: ${inputPath}`, imported: 0 };
+  }
+  try {
+    const content = readFileSync(inputPath, 'utf-8');
+    const db = getDb();
+    let imported = 0;
+
+    // Parse ### heading blocks in Knowledge Base section
+    const kbSection = content.match(/## Knowledge Base([\s\S]*?)(?=## |$)/);
+    if (kbSection) {
+      const blocks = kbSection[1].split(/^### /m).slice(1);
+      for (const block of blocks) {
+        const titleLine = block.split('\n')[0]?.trim();
+        if (!titleLine) continue;
+        const bodyMatch = block.match(/\n\n([\s\S]+)$/);
+        const body = bodyMatch ? bodyMatch[1].trim() : '';
+        if (!titleLine || !body) continue;
+        const id = `md-import-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        try {
+          db.prepare(`
+            INSERT OR IGNORE INTO knowledge_base (id, type, title, content, created_at, updated_at)
+            VALUES (?, 'imported', ?, ?, ?, ?)
+          `).run(id, titleLine, body.slice(0, 2000), new Date().toISOString(), new Date().toISOString());
+          imported++;
+        } catch { /* ignore dup */ }
+      }
+    }
+
+    return { success: true, message: `Imported ${imported} knowledge entries from ${inputPath}`, imported };
+  } catch (err) {
+    return { success: false, message: err instanceof Error ? err.message : String(err), imported: 0 };
+  }
+}
+
 export function getLocalDbSize(): DbSizeResult {
   const db = getDb();
   const tables = ['sessions', 'decisions', 'council_outcomes', 'knowledge_base', 'patterns', 'project_map', 'learning_data'];
