@@ -1,7 +1,7 @@
 {
   "name": "@jigyasudham/veto",
   "version": "2.0.0",
-  "description": "50 agents. 49 tools. 3 AIs. Self-learning. Zero extra cost.",
+  "description": "62 agentic tools. 50+ specialists. 3 AIs. Self-learning. Zero cost.",
   "keywords": [
     "mcp",
     "ai",
@@ -17,7 +17,8 @@
     "self-learning",
     "router",
     "workflow",
-    "code-review"
+    "code-review",
+    "agentic"
   ],
   "author": "Jigyasu Dham <jigyasudham18@gmail.com>",
   "license": "MIT",
@@ -32,6 +33,7 @@
   "main": "./dist/server.js",
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "dev": "tsx src/cli.ts",
     "start": "node dist/server.js",
     "init": "tsx src/cli.ts init",
