@@ -113,6 +113,8 @@ SESSION & CONTEXT — veto_status, veto_session_save, veto_session_restore, veto
 
 CODE INTELLIGENCE — veto_code_review, veto_diff_review, veto_security_scan, veto_secrets_scan, veto_ci_gate, veto_pr_review. Pass code or a git diff; each tool returns scored findings with severity (critical/high/medium/low). veto_diff_review and veto_ci_gate run code review + security + secrets scans in parallel — use these before any merge or deploy.
 
+NAMED PIPELINES — veto_full_review, veto_pre_commit, veto_new_feature. Curated multi-tool compositions: veto_full_review runs code+security+secrets+quality in parallel (pre-ship); veto_pre_commit runs secrets+review on staged changes (pre-commit); veto_new_feature runs council+plan+tasks in sequence (new features). Each collapses 3–5 manual calls into 1.
+
 COUNCIL & ROUTING — veto_council_debate, veto_route_task, veto_agent_plan, veto_execute_parallel, veto_workflow, veto_benchmark. The council runs 7 specialist agents (Lead Dev, PM, Architect, UX, Devil's Advocate, Legal, Security) and returns a verdict.
 
 Two-phase council flow (LLM-backed, no API keys needed):
@@ -129,11 +131,13 @@ MEMORY & DISCOVERY — veto_memory_store, veto_memory_search, veto_memory_delete
 
 OBSERVABILITY — veto_usage_status, veto_audit_log, veto_health, veto_metrics, veto_rate_status, veto_learning_stats, veto_learning_apply. Monitor token budgets, council decision history, and auto-router performance. Call veto_learning_apply after 20+ outcomes to tune routing thresholds from real data.
 
+MCP PROMPTS (8) — slash-command-style workflow templates: code-review, security-audit, deploy-checklist, explain-file, full-review, new-feature, debug-incident, onboard. Select a prompt from the Prompts panel to launch a pre-built workflow.
+
 Recommended start sequence:
   1. veto_status — confirm server is running and check token usage
   2. veto_discover or veto_summarize — orient to the codebase before touching files
   3. veto_route_task — pick the right agent before heavy analysis
-  4. veto_diff_review or veto_council_debate — validate before shipping
+  4. veto_full_review or veto_diff_review — validate before shipping
   5. veto_session_save — checkpoint before context fills`,
   }
 );
@@ -2388,6 +2392,40 @@ const PROMPTS = [
       { name: 'depth', description: 'Explanation depth: overview | detailed | line-by-line.', required: false },
     ],
   },
+  // Phase 4.3 — Workflow Prompts
+  {
+    name: 'full-review',
+    description: 'Complete pre-ship review: code quality + security + secrets + quality in one call. Uses veto_full_review pipeline.',
+    arguments: [
+      { name: 'project_dir', description: 'Absolute path to the project to review.', required: false },
+      { name: 'diff',        description: 'Optional: git diff string to review directly.', required: false },
+      { name: 'context',     description: 'Optional: PR description or context.', required: false },
+    ],
+  },
+  {
+    name: 'new-feature',
+    description: 'New feature planning: council governance → execution plan → task DAG. Uses veto_new_feature pipeline.',
+    arguments: [
+      { name: 'description', description: 'Feature description or user story.', required: true },
+      { name: 'project_dir', description: 'Optional: absolute path to project for context.', required: false },
+      { name: 'context',     description: 'Optional: constraints, timeline, or architecture notes.', required: false },
+    ],
+  },
+  {
+    name: 'debug-incident',
+    description: 'Incident debugging workflow: recent-change blame → debugger plan → deep-dive explanation.',
+    arguments: [
+      { name: 'error',       description: 'Error message, stack trace, or incident description.', required: true },
+      { name: 'project_dir', description: 'Optional: absolute path to project for git blame context.', required: false },
+    ],
+  },
+  {
+    name: 'onboard',
+    description: 'New-developer onboarding: full project discovery → plain-English briefing → recommended starting agents.',
+    arguments: [
+      { name: 'project_dir', description: 'Absolute path to the project to onboard into.', required: true },
+    ],
+  },
 ];
 
 server.setRequestHandler(ListPromptsRequestSchema, async () => ({ prompts: PROMPTS }));
@@ -2440,6 +2478,92 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
         role: 'user',
         content: { type: 'text', text: `Read the file at "${filePath}" and use veto_agent_plan with the most appropriate agent (frontend for .tsx/.vue, database for .sql, backend for services, coder for general) to give a ${depth}-level explanation of what it does, how it works, and any concerns.` },
       }],
+    };
+  }
+
+  if (name === 'full-review') {
+    const projectDir = pArgs?.project_dir ? `\nproject_dir: ${pArgs.project_dir}` : '';
+    const diff = pArgs?.diff ? `\ndiff: (provided)` : '';
+    const ctx = pArgs?.context ? `\ncontext: ${pArgs.context}` : '';
+    const callArgs = [
+      pArgs?.project_dir ? `project_dir: "${pArgs.project_dir}"` : null,
+      pArgs?.diff        ? `diff: "<the diff provided above>"` : null,
+      pArgs?.context     ? `context: "${pArgs.context}"` : null,
+    ].filter(Boolean).join(', ') || 'project_dir: "<absolute path>"';
+    return {
+      description: PROMPTS.find(p => p.name === 'full-review')!.description,
+      messages: [{ role: 'user', content: { type: 'text', text:
+        `Run a complete pre-ship review using the veto_full_review pipeline.${projectDir}${diff}${ctx}\n\n` +
+        `Call veto_full_review with { ${callArgs} }.\n\n` +
+        `Review the combined verdict:\n` +
+        `- ❌ FAIL → address all critical findings before merging\n` +
+        `- ⚠️  WARN → review high-severity findings; proceed with care\n` +
+        `- ✅ PASS → safe to merge\n\n` +
+        `For any critical finding, call veto_memory_store to record it for future sessions.`,
+      } }],
+    };
+  }
+
+  if (name === 'new-feature') {
+    const desc = pArgs?.description ?? '<feature description or user story>';
+    const projectDir = pArgs?.project_dir ? `\nproject_dir: ${pArgs.project_dir}` : '';
+    const ctx = pArgs?.context ? `\ncontext: ${pArgs.context}` : '';
+    const callArgs = [
+      `description: "${desc}"`,
+      pArgs?.project_dir ? `project_dir: "${pArgs.project_dir}"` : null,
+      pArgs?.context     ? `context: "${pArgs.context}"` : null,
+    ].filter(Boolean).join(', ');
+    return {
+      description: PROMPTS.find(p => p.name === 'new-feature')!.description,
+      messages: [{ role: 'user', content: { type: 'text', text:
+        `Plan a new feature using the veto_new_feature pipeline (council governance + execution plan + task breakdown).${projectDir}${ctx}\n\n` +
+        `Feature: ${desc}\n\n` +
+        `Call veto_new_feature with { ${callArgs} }.\n\n` +
+        `Interpret the result:\n` +
+        `- verdict "blocked" (RED) → share the block_reasons with the team; do not proceed\n` +
+        `- verdict "approved_with_warnings" (YELLOW) → review warnings; address before shipping\n` +
+        `- verdict "approved" (GREEN) → use agent_plan.plan for execution; assign tasks from the task list\n\n` +
+        `If you need LLM-backed council reasoning, use the llm_upgrade.debate_prompt from the council result.`,
+      } }],
+    };
+  }
+
+  if (name === 'debug-incident') {
+    const error = pArgs?.error ?? '<error message, stack trace, or incident description>';
+    const projectDir = pArgs?.project_dir ?? '';
+    const blameStep = projectDir
+      ? `1. Call veto_git_blame with { project_dir: "${projectDir}" } to surface recent changes near the error.\n`
+      : `1. (No project_dir provided — skip git blame or call veto_git_blame once you know the repo path.)\n`;
+    return {
+      description: PROMPTS.find(p => p.name === 'debug-incident')!.description,
+      messages: [{ role: 'user', content: { type: 'text', text:
+        `Debug this incident using Veto's agents.\n\nError / incident:\n${error}\n\n` +
+        `Follow this workflow:\n` +
+        `${blameStep}` +
+        `2. Call veto_agent_plan with { agent: "debugger", task: "<error description above>"${projectDir ? `, project_dir: "${projectDir}"` : ''} } to get a structured root-cause analysis plan.\n` +
+        `3. For each likely file identified, call veto_explain with { file_path: "<path>", depth: "detailed" } to understand the code involved.\n` +
+        `4. Once root cause is identified, call veto_memory_store to record the finding so it's available in future sessions.\n`,
+      } }],
+    };
+  }
+
+  if (name === 'onboard') {
+    const projectDir = pArgs?.project_dir ?? '<absolute path to project>';
+    return {
+      description: PROMPTS.find(p => p.name === 'onboard')!.description,
+      messages: [{ role: 'user', content: { type: 'text', text:
+        `Onboard me to this project using Veto's discovery and summarization tools.\n\nproject_dir: ${projectDir}\n\n` +
+        `Follow this workflow:\n` +
+        `1. Call veto_discover with { project_dir: "${projectDir}", depth: "full" } — maps the full project structure, entry points, tech stack, and key files.\n` +
+        `2. Call veto_summarize with { project_dir: "${projectDir}" } — generates a plain-English briefing written for a developer joining the project today.\n` +
+        `3. Call veto_project_map_get with { project_dir: "${projectDir}" } — surfaces the stored structural map for quick reference.\n` +
+        `4. Call veto_route_task with { task: "common feature development", context: "new developer onboarding" } — see which agents and tier are recommended for typical tasks.\n\n` +
+        `Present the onboarding guide as:\n` +
+        `- Setup & architecture (from discover)\n` +
+        `- Key files and entry points\n` +
+        `- Recommended starting tasks and agents\n` +
+        `- Any warnings or risks flagged by the project map`,
+      } }],
     };
   }
 

@@ -819,6 +819,7 @@ function shortHelpCommand() {
   console.log(c.bold('  MCP Prompts'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
   console.log(`  ${c.cyan('code-review')} · ${c.cyan('security-audit')} · ${c.cyan('deploy-checklist')} · ${c.cyan('explain-file')}`);
+  console.log(`  ${c.cyan('full-review')} · ${c.cyan('new-feature')} · ${c.cyan('debug-incident')} · ${c.cyan('onboard')}`);
   console.log('');
   console.log(c.bold('  Docs & Support'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
