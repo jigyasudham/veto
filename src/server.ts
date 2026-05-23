@@ -35,7 +35,8 @@ import { autoSummarizeSession } from './council/session-summarizer.js';
 import { routeTask, getRateStatus, trackTokens, recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent } from './router/index.js';
 import { getConfig, setConfig } from './memory/config.js';
 import type { AgentType, Platform } from './router/index.js';
-import { executeParallel, executeOne } from './agents/executor.js';
+import { executeParallel, executeOne, initLlmRunner } from './agents/executor.js';
+import { buildAgenticAgentPrompt } from './agents/llm-runner.js';
 import type { AgentTask, WorkerAgentType } from './agents/types.js';
 import { handoff, continueSession, getPlatformSetup } from './adapters/index.js';
 import type { SetupPlatform } from './adapters/index.js';
@@ -921,17 +922,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         recordOutcome(tasks[i]?.task.slice(0, 50) ?? r.agent, 50, tier, r.agent, quality);
       }
 
+      const deterministicFallbacks = results
+        .map((r, i) => ({ r, t: tasks[i] }))
+        .filter(({ r }) => !r.error && r.llm_backed === false);
+
       const parallelPayload: Record<string, unknown> = {
         count: results.length,
         total_duration_ms: results.reduce((s, r) => s + r.duration_ms, 0),
+        llm_backed_count: results.filter(r => r.llm_backed === true).length,
         results: results.map(r => ({
           id: r.id,
           agent: r.agent,
           duration_ms: r.duration_ms,
+          llm_backed: r.llm_backed,
           error: r.error,
           output: { ...(r.plan ?? r.analysis), structured: r.output },
         })),
       };
+
+      if (deterministicFallbacks.length > 0) {
+        parallelPayload.llm_upgrade = {
+          available: true,
+          instruction: 'Some agents ran deterministically (MCP Sampling unavailable or failed). For LLM-backed output, reason as each agent using the prompts below, then pass results back via veto_execute_parallel with pre-filled output.',
+          agent_prompts: deterministicFallbacks.map(({ r, t }) =>
+            t ? buildAgenticAgentPrompt(t) : null
+          ).filter(Boolean),
+        };
+      }
 
       if (typeof args?.max_tokens === 'number') {
         const outputText = JSON.stringify(parallelPayload, null, 2);
@@ -2160,6 +2177,7 @@ async function main() {
   if (loadedPlugins.length > 0) {
     process.stderr.write(`[veto] Loaded ${loadedPlugins.length} plugin(s): ${loadedPlugins.join(', ')}\n`);
   }
+  initLlmRunner(server);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   process.stderr.write(`Veto MCP server v${VERSION} running (stdio)\n`);

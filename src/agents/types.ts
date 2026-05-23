@@ -78,5 +78,6 @@ export interface AgentResult {
   analysis?: AgentAnalysis;
   output: AgentOutput;          // always present — derived from plan or analysis
   duration_ms: number;
+  llm_backed?: boolean;         // true when result came from MCP Sampling, false when deterministic
   error?: string;
 }

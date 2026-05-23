@@ -2,6 +2,16 @@ import { AgentTask, AgentResult, AgentOutput, AgentPlan, AgentAnalysis, WorkerAg
 import { validateAgentPlan, validateAgentAnalysis } from './validate.js';
 import { buildContextString } from '../context/reader.js';
 import { getPlugin, isPlugin } from '../plugins/loader.js';
+import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { runAgentLlm } from './llm-runner.js';
+
+// Set once at server startup — enables LLM-backed execution for all agents.
+// When null, all agents run deterministically (always available, zero tokens).
+let _server: Server | undefined;
+
+export function initLlmRunner(server: Server): void {
+  _server = server;
+}
 
 // Development agents
 import * as coder from './development/coder.js';
@@ -163,9 +173,28 @@ function deriveOutput(plan?: AgentPlan, analysis?: AgentAnalysis): AgentOutput {
 export async function executeOne(task: AgentTask): Promise<AgentResult> {
   const start = Date.now();
   try {
+    const enrichedContext = buildContextString(task.project_dir, task.context);
+    const enrichedTask = enrichedContext ? { ...task, context: enrichedContext } : task;
+
+    // LLM-backed path: try first when server is available
+    if (_server) {
+      const llmResult = await runAgentLlm(_server, enrichedTask);
+      if (llmResult) {
+        return {
+          id: task.id,
+          agent: task.agent,
+          plan: llmResult.plan,
+          analysis: llmResult.analysis,
+          output: deriveOutput(llmResult.plan, llmResult.analysis),
+          duration_ms: Date.now() - start,
+          llm_backed: true,
+        };
+      }
+    }
+
+    // Deterministic fallback
     const agent = resolveAgent(task.agent);
     const useAnalyze = task.code !== undefined && ANALYZE_CAPABLE.has(task.agent);
-    const enrichedContext = buildContextString(task.project_dir, task.context);
 
     if (useAnalyze && agent.analyze) {
       const raw = agent.analyze(task.code!, enrichedContext || task.context);
@@ -176,6 +205,7 @@ export async function executeOne(task: AgentTask): Promise<AgentResult> {
         analysis,
         output: deriveOutput(undefined, analysis),
         duration_ms: Date.now() - start,
+        llm_backed: false,
       };
     } else {
       const raw = agent.plan(task.task, enrichedContext || task.context);
@@ -186,6 +216,7 @@ export async function executeOne(task: AgentTask): Promise<AgentResult> {
         plan,
         output: deriveOutput(plan, undefined),
         duration_ms: Date.now() - start,
+        llm_backed: false,
       };
     }
   } catch (err) {
