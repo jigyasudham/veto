@@ -236,6 +236,10 @@ const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint
   veto_a11y_advisor:      { readOnlyHint: true },
   veto_session_replay:    { readOnlyHint: true },
   veto_compose_agents:    { readOnlyHint: false, destructiveHint: false },
+  // Phase 8: Long-Horizon
+  veto_semantic_search:   { readOnlyHint: true },
+  veto_sdd_agent:         { readOnlyHint: false, destructiveHint: false },
+  veto_playwright:        { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
 };
 
 // ─── Tool Definitions ─────────────────────────────────────────────────────────
@@ -3441,6 +3445,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case 'veto_compose_agents': {
       const { name, agents } = args;
       return { content: [{ type: 'text', text: `veto_compose_agents: Created custom agent ${name} composed of [${agents?.join(',')}]. (Stub implementation)` }] };
+    }
+
+    // ── Phase 8: Long-Horizon ─────────────────────────────────────────────────
+    case 'veto_semantic_search': {
+      const { query, project_dir } = args;
+      return { content: [{ type: 'text', text: `veto_semantic_search: Performed vector search for "${query}" in ${project_dir}. (Stub implementation)` }] };
+    }
+    case 'veto_sdd_agent': {
+      const { spec_file, project_dir, action } = args;
+      return { content: [{ type: 'text', text: `veto_sdd_agent: Executed SDD action '${action}' using spec '${spec_file}' in ${project_dir}. (Stub implementation)` }] };
+    }
+    case 'veto_playwright': {
+      const { task, project_dir, url } = args;
+      return { content: [{ type: 'text', text: `veto_playwright: Coordinated browser session for task "${task}"${url ? ` starting at ${url}` : ''} in ${project_dir}. (Stub implementation)` }] };
     }
 
     default:

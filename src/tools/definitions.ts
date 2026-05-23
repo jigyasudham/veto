@@ -1330,4 +1330,56 @@ export const TOOL_DEFINITIONS = [
       required: ['session_id'],
     },
   },
+  {
+    name: 'veto_compose_agents',
+    description: 'Creates a custom meta-agent by composing existing agents into a specialized pipeline.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Name of the new composed agent.' },
+        agents: { type: 'array', items: { type: 'string' }, description: 'List of base agents to compose.' },
+        workflow: { type: 'string', description: 'Workflow logic or sequence for the composed agent.' }
+      },
+      required: ['name', 'agents', 'workflow'],
+    },
+  },
+  // ── Phase 8: Long-Horizon ─────────────────────────────────────────────────
+  {
+    name: 'veto_semantic_search',
+    description: 'Local vector index codebase search. Answers natural-language queries over code (e.g. "where is user authentication handled?").',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Natural-language search query.' },
+        project_dir: { type: 'string', description: 'Absolute path to project root.' }
+      },
+      required: ['query', 'project_dir'],
+    },
+  },
+  {
+    name: 'veto_sdd_agent',
+    description: 'Spec-Driven Development agent. Provides full SDD loop: spec validation, acceptance criteria generation, and BDD scenario authoring.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        spec_file: { type: 'string', description: 'Path to the specification file.' },
+        project_dir: { type: 'string', description: 'Absolute path to project root.' },
+        action: { type: 'string', enum: ['validate', 'generate_ac', 'author_bdd'], description: 'SDD action to perform.' }
+      },
+      required: ['spec_file', 'project_dir', 'action'],
+    },
+  },
+  {
+    name: 'veto_playwright',
+    description: 'Playwright MCP integration. Coordinates browser sessions for testing, a11y review, and security scanning of UI vulnerabilities.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task: { type: 'string', description: 'Description of the browser task or test scenario.' },
+        project_dir: { type: 'string', description: 'Absolute path to project root.' },
+        url: { type: 'string', description: 'Optional starting URL for the browser session.' }
+      },
+      required: ['task', 'project_dir'],
+    },
+  },
 ] as const;
