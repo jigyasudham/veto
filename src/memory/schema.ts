@@ -168,7 +168,23 @@ export const CREATE_TABLES = `
     updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS routing_feedback (
+    id           TEXT PRIMARY KEY,
+    task_hash    TEXT NOT NULL,
+    task_snippet TEXT NOT NULL,
+    complexity   INTEGER NOT NULL,
+    model_tier   INTEGER NOT NULL,
+    agent        TEXT,
+    outcome      TEXT NOT NULL DEFAULT 'pending',
+    quality      INTEGER,
+    session_id   TEXT,
+    recorded_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at   TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_scan_diag_file ON scan_diagnostics(file_path);
+  CREATE INDEX IF NOT EXISTS idx_routing_fb_hash ON routing_feedback(task_hash);
+  CREATE INDEX IF NOT EXISTS idx_routing_fb_exp  ON routing_feedback(expires_at);
 
   CREATE INDEX IF NOT EXISTS idx_sessions_platform    ON sessions(platform);
   CREATE INDEX IF NOT EXISTS idx_decisions_session    ON decisions(session_id);

@@ -4,14 +4,14 @@ import { scoreComplexity } from './complexity-scorer.js';
 import { selectModel } from './model-selector.js';
 import { getRateStatus, trackRequest, trackTokens, getRoutingAdvice } from './rate-monitor.js';
 import { compressContext, estimateTokens } from './context-compressor.js';
-import { recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent } from './learning-updater.js';
+import { recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent, isFeedbackEnabled, recordRoutingFeedback, getRoutingFeedbackStats, resetRoutingFeedback, listRoutingFeedback, setFeedbackEnabled } from './learning-updater.js';
 
 export type { ComplexityResult, ComplexityFactors } from './complexity-scorer.js';
 export type { AgentType, Tier, ModelRecommendation } from './model-selector.js';
 export type { Platform, RateLimitEntry, RateStatus } from './rate-monitor.js';
 export type { CompressionStrategy, CompressionResult } from './context-compressor.js';
-export type { LearningStats, LearnedThresholds, AgentPerformanceStat, TaskTypeBreakdown, CouncilInsight } from './learning-updater.js';
-export { estimateTokens, getRateStatus, trackRequest, trackTokens, recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent };
+export type { LearningStats, LearnedThresholds, AgentPerformanceStat, TaskTypeBreakdown, CouncilInsight, RoutingFeedbackStats, RoutingFeedbackEntry } from './learning-updater.js';
+export { estimateTokens, getRateStatus, trackRequest, trackTokens, recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent, isFeedbackEnabled, setFeedbackEnabled, recordRoutingFeedback, getRoutingFeedbackStats, resetRoutingFeedback, listRoutingFeedback };
 
 export type RouteOptions = {
   agentType?: import('./model-selector.js').AgentType;
@@ -20,6 +20,7 @@ export type RouteOptions = {
   context?: string;
   relevantFiles?: string[];
   preferredPlatform?: import('./rate-monitor.js').Platform;
+  sessionId?: string;
 };
 
 export type RouteResult = {
@@ -29,6 +30,8 @@ export type RouteResult = {
   context_plan?: import('./context-compressor.js').CompressionResult;
   effective_platform: import('./rate-monitor.js').Platform;
   routed_at: string;
+  feedback_enabled: boolean;
+  feedback_id?: string;
 };
 
 export function routeTask(task: string, options: RouteOptions = {}): RouteResult {
@@ -49,6 +52,18 @@ export function routeTask(task: string, options: RouteOptions = {}): RouteResult
     ? compressContext(options.context, options.relevantFiles ?? [])
     : undefined;
 
+  const feedback_enabled = isFeedbackEnabled();
+  let feedback_id: string | undefined;
+  if (feedback_enabled) {
+    feedback_id = recordRoutingFeedback({
+      task,
+      complexity: complexity.score,
+      model_tier: model.tier as 1 | 2 | 3,
+      agent: options.agentType,
+      session_id: options.sessionId,
+    });
+  }
+
   return {
     complexity,
     model,
@@ -56,5 +71,7 @@ export function routeTask(task: string, options: RouteOptions = {}): RouteResult
     context_plan,
     effective_platform,
     routed_at: new Date().toISOString(),
+    feedback_enabled,
+    feedback_id,
   };
 }

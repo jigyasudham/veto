@@ -778,6 +778,8 @@ function shortHelpCommand() {
   console.log(`  ${c.cyan('veto sessions')}                List last 20 saved sessions`);
   console.log(`  ${c.cyan('veto memory')} ${c.dim('[query]')}         Search knowledge base`);
   console.log(`  ${c.cyan('veto patterns')} ${c.dim('[prefix]')}      List learned agent/routing patterns`);
+  console.log(`  ${c.cyan('veto routing')} ${c.dim('[status|enable|disable|reset|log]')}`);
+  console.log(`                         Routing feedback loop (opt-in signal storage)`);
   console.log(`  ${c.cyan('veto version')}                 Show version (alias for status)`);
   console.log(`  ${c.cyan('veto hook install')}            Install pre-commit secrets scan hook`);
   console.log(`  ${c.cyan('veto hook remove')}             Remove the veto pre-commit hook`);
@@ -892,6 +894,91 @@ function troubleshootCommand() {
   console.log(`  ${c.dim('→')} Run ${c.cyan('npx @jigyasudham/veto init')} on the new machine — config is not transferred`);
   console.log(`  ${c.dim('→')} Each machine needs its own init run to register the MCP server`);
   console.log(`  ${c.dim('→')} Then restart the AI client on that machine`);
+  console.log('');
+}
+
+// ─── Routing Command ────────────────────────────────────────────────────────────
+
+async function routingCommand() {
+  const { getRoutingFeedbackStats, resetRoutingFeedback, listRoutingFeedback, isFeedbackEnabled, setFeedbackEnabled } = await import('./router/learning-updater.js');
+  const sub = process.argv[3];
+
+  if (sub === 'enable') {
+    setFeedbackEnabled(true);
+    console.log('');
+    console.log(c.green('  ✓ Routing feedback enabled.'));
+    console.log(c.dim('  Every veto_route_task call now records a routing signal (30-day TTL).'));
+    console.log(c.dim('  Disable with: veto routing disable  |  Clear with: veto routing reset'));
+    console.log('');
+    return;
+  }
+
+  if (sub === 'disable') {
+    setFeedbackEnabled(false);
+    console.log('');
+    console.log(c.yellow('  ✓ Routing feedback disabled.'));
+    console.log(c.dim('  No new signals will be recorded. Existing data is retained.'));
+    console.log(c.dim('  Re-enable with: veto routing enable'));
+    console.log('');
+    return;
+  }
+
+  if (sub === 'reset') {
+    const result = resetRoutingFeedback();
+    console.log('');
+    console.log(c.green('  ✓ Routing feedback reset.'));
+    console.log(`  ${c.dim('Deleted:')} ${c.cyan(String(result.deleted_feedback))} feedback signal${result.deleted_feedback !== 1 ? 's' : ''}`);
+    if (result.reset_thresholds) {
+      console.log(`  ${c.dim('Thresholds:')} reset to defaults (30/70)`);
+    }
+    console.log('');
+    return;
+  }
+
+  if (sub === 'log') {
+    const limit = parseInt(process.argv[4] ?? '20', 10);
+    const entries = listRoutingFeedback(isNaN(limit) ? 20 : limit);
+    console.log('');
+    console.log(c.bold('  Routing Feedback Log') + c.dim(` (${entries.length})`));
+    console.log(c.dim('  ─────────────────────────────────────────────────────────────'));
+    if (entries.length === 0) {
+      console.log(c.dim('  No feedback signals yet. Enable feedback: veto routing enable'));
+    } else {
+      for (const e of entries) {
+        const outcomeColor = e.outcome === 'accepted' ? c.green : e.outcome === 'overridden' ? c.yellow : c.dim;
+        const exp = new Date(e.expires_at).toLocaleDateString();
+        console.log(`  ${c.dim(e.recorded_at.slice(0, 10))}  T${e.model_tier}  ${outcomeColor(e.outcome.padEnd(10))}  ${c.dim(`q:${e.quality ?? '-'}`)}  ${e.task_snippet.slice(0, 55)}`);
+        console.log(`  ${c.dim(`  expires: ${exp}  agent: ${e.agent ?? 'dynamic'}`)}`);
+        console.log('');
+      }
+    }
+    return;
+  }
+
+  // Default: status
+  const stats = getRoutingFeedbackStats();
+  const enabled = isFeedbackEnabled();
+  const statusStr = enabled ? c.green('enabled') : c.dim('disabled');
+
+  console.log('');
+  console.log(c.bold('  Routing Feedback') + c.dim(' — loop status'));
+  console.log(c.dim('  ─────────────────────────────────────────────────────'));
+  console.log(`  Status      ${statusStr}`);
+  console.log(`  TTL         ${c.cyan(String(stats.ttl_days))} days`);
+  console.log(`  Signals     ${c.cyan(String(stats.active))} active · ${c.dim(String(stats.expired))} expired · ${String(stats.total)} total`);
+  if (Object.keys(stats.by_outcome).length > 0) {
+    const parts = Object.entries(stats.by_outcome).map(([k, v]) => `${k}: ${v}`).join(' · ');
+    console.log(`  Outcomes    ${c.dim(parts)}`);
+  }
+  if (Object.keys(stats.by_tier).length > 0) {
+    const parts = Object.entries(stats.by_tier).map(([tier, s]) => `T${tier}: ${s.count} (q${s.avg_quality ?? '-'})`).join(' · ');
+    console.log(`  By tier     ${c.dim(parts)}`);
+  }
+  if (stats.next_expiry) {
+    console.log(`  Next expiry ${c.dim(new Date(stats.next_expiry).toLocaleDateString())}`);
+  }
+  console.log('');
+  console.log(c.dim(`  Commands: veto routing enable · veto routing disable · veto routing reset · veto routing log`));
   console.log('');
 }
 
@@ -1063,6 +1150,13 @@ switch (command) {
 
   case 'doctor':
     doctorCommand().catch((err) => {
+      console.error(c.red(`Error: ${err.message}`));
+      process.exit(1);
+    });
+    break;
+
+  case 'routing':
+    routingCommand().catch((err) => {
       console.error(c.red(`Error: ${err.message}`));
       process.exit(1);
     });

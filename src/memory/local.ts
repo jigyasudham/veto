@@ -82,7 +82,29 @@ export function getDb(): DatabaseSync {
   migrateScanDiagnostics(_db);
   migrateSessionTags(_db);
   migrateContextUsage(_db);
+  migrateRoutingFeedback(_db);
   return _db;
+}
+
+// Creates routing_feedback table for opt-in routing signal storage (v1.4.8 migration)
+function migrateRoutingFeedback(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS routing_feedback (
+      id           TEXT PRIMARY KEY,
+      task_hash    TEXT NOT NULL,
+      task_snippet TEXT NOT NULL,
+      complexity   INTEGER NOT NULL,
+      model_tier   INTEGER NOT NULL,
+      agent        TEXT,
+      outcome      TEXT NOT NULL DEFAULT 'pending',
+      quality      INTEGER,
+      session_id   TEXT,
+      recorded_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      expires_at   TEXT NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_routing_fb_hash ON routing_feedback(task_hash)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_routing_fb_exp  ON routing_feedback(expires_at)`);
 }
 
 // Creates context_usage table for live VS Code extension polling (v1.4.4 migration)

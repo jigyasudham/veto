@@ -321,3 +321,116 @@ export function getLearnedThresholds(): LearnedThresholds {
 export function getSuggestedThresholds(): { tier1_max: number; tier2_max: number } {
   return getLearningStats().suggested_thresholds;
 }
+
+// ─── Routing Feedback Loop ────────────────────────────────────────────────────
+// Opt-in only. Must be explicitly enabled via setFeedbackEnabled(true).
+// Entries expire after FEEDBACK_TTL_DAYS — old signals are automatically ignored.
+
+const FEEDBACK_TTL_DAYS = 30;
+
+export function isFeedbackEnabled(): boolean {
+  const db = getDb();
+  const row = db.prepare('SELECT pattern_val FROM patterns WHERE pattern_key = ?').get('routing.feedback_enabled') as { pattern_val: string } | undefined;
+  return row?.pattern_val === 'true';
+}
+
+export function setFeedbackEnabled(enabled: boolean): void {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const val = enabled ? 'true' : 'false';
+  const existing = db.prepare('SELECT id FROM patterns WHERE pattern_key = ?').get('routing.feedback_enabled') as { id: string } | undefined;
+  if (existing) {
+    db.prepare('UPDATE patterns SET pattern_val = ?, updated_at = ? WHERE pattern_key = ?').run(val, now, 'routing.feedback_enabled');
+  } else {
+    db.prepare('INSERT INTO patterns (id, pattern_key, pattern_val, confidence, seen_count, updated_at) VALUES (?, ?, ?, 1, 1, ?)')
+      .run(randomUUID(), 'routing.feedback_enabled', val, now);
+  }
+}
+
+export type RoutingFeedbackEntry = {
+  id: string;
+  task_hash: string;
+  task_snippet: string;
+  complexity: number;
+  model_tier: number;
+  agent: string | null;
+  outcome: 'accepted' | 'overridden' | 'pending';
+  quality: number | null;
+  session_id: string | null;
+  recorded_at: string;
+  expires_at: string;
+};
+
+export function recordRoutingFeedback(opts: {
+  task: string;
+  complexity: number;
+  model_tier: 1 | 2 | 3;
+  agent?: string;
+  session_id?: string;
+}): string {
+  const db = getDb();
+  const id = randomUUID();
+  const now = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + FEEDBACK_TTL_DAYS * 86_400_000).toISOString();
+  const task_hash = opts.task.toLowerCase().replace(/\s+/g, '_').slice(0, 40);
+  db.prepare(`
+    INSERT INTO routing_feedback (id, task_hash, task_snippet, complexity, model_tier, agent, outcome, session_id, recorded_at, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+  `).run(id, task_hash, opts.task.slice(0, 100), opts.complexity, opts.model_tier, opts.agent ?? null, opts.session_id ?? null, now, expiresAt);
+  return id;
+}
+
+export type RoutingFeedbackStats = {
+  enabled: boolean;
+  total: number;
+  active: number;
+  expired: number;
+  by_outcome: Record<string, number>;
+  by_tier: Record<number, { count: number; avg_quality: number | null }>;
+  ttl_days: number;
+  next_expiry: string | null;
+};
+
+export function getRoutingFeedbackStats(): RoutingFeedbackStats {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const enabled = isFeedbackEnabled();
+
+  const total   = (db.prepare('SELECT COUNT(*) as n FROM routing_feedback').get() as { n: number }).n;
+  const active  = (db.prepare('SELECT COUNT(*) as n FROM routing_feedback WHERE expires_at > ?').get(now) as { n: number }).n;
+  const expired = total - active;
+
+  const outcomeRows = db.prepare(
+    'SELECT outcome, COUNT(*) as n FROM routing_feedback WHERE expires_at > ? GROUP BY outcome'
+  ).all(now) as Array<{ outcome: string; n: number }>;
+  const by_outcome = Object.fromEntries(outcomeRows.map(r => [r.outcome, r.n]));
+
+  const tierRows = db.prepare(
+    'SELECT model_tier, COUNT(*) as n, AVG(quality) as avg_q FROM routing_feedback WHERE expires_at > ? GROUP BY model_tier'
+  ).all(now) as Array<{ model_tier: number; n: number; avg_q: number | null }>;
+  const by_tier: Record<number, { count: number; avg_quality: number | null }> = {};
+  for (const r of tierRows) {
+    by_tier[r.model_tier] = { count: r.n, avg_quality: r.avg_q != null ? Math.round(r.avg_q) : null };
+  }
+
+  const nextRow = db.prepare(
+    'SELECT expires_at FROM routing_feedback WHERE expires_at > ? ORDER BY expires_at ASC LIMIT 1'
+  ).get(now) as { expires_at: string } | undefined;
+
+  return { enabled, total, active, expired, by_outcome, by_tier, ttl_days: FEEDBACK_TTL_DAYS, next_expiry: nextRow?.expires_at ?? null };
+}
+
+export function resetRoutingFeedback(): { deleted_feedback: number; reset_thresholds: boolean } {
+  const db = getDb();
+  const fbResult = db.prepare('DELETE FROM routing_feedback').run() as { changes: number };
+  const t1 = db.prepare("DELETE FROM patterns WHERE pattern_key = 'router.tier1_max'").run() as { changes: number };
+  const t2 = db.prepare("DELETE FROM patterns WHERE pattern_key = 'router.tier2_max'").run() as { changes: number };
+  return { deleted_feedback: fbResult.changes, reset_thresholds: t1.changes > 0 || t2.changes > 0 };
+}
+
+export function listRoutingFeedback(limit = 20): RoutingFeedbackEntry[] {
+  const db = getDb();
+  return db.prepare(
+    'SELECT * FROM routing_feedback ORDER BY recorded_at DESC LIMIT ?'
+  ).all(limit) as RoutingFeedbackEntry[];
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { recordOutcome, getLearningStats, applyLearnedThresholds, getLearnedThresholds, getRecommendedAgent } from '../../src/router/learning-updater.js';
+import { recordOutcome, getLearningStats, applyLearnedThresholds, getLearnedThresholds, getRecommendedAgent, isFeedbackEnabled, setFeedbackEnabled, recordRoutingFeedback, getRoutingFeedbackStats, resetRoutingFeedback, listRoutingFeedback } from '../../src/router/learning-updater.js';
 import { resetDb } from '../../src/memory/local.js';
 
 beforeEach(() => {
@@ -94,5 +94,55 @@ describe('getRecommendedAgent', () => {
     }
     const result = getRecommendedAgent('fix-bug', '.ts');
     expect(result).toBe('debugger');
+  });
+});
+
+describe('routing feedback loop', () => {
+  it('is disabled by default', () => {
+    expect(isFeedbackEnabled()).toBe(false);
+  });
+
+  it('can be enabled and disabled', () => {
+    setFeedbackEnabled(true);
+    expect(isFeedbackEnabled()).toBe(true);
+    setFeedbackEnabled(false);
+    expect(isFeedbackEnabled()).toBe(false);
+  });
+
+  it('recordRoutingFeedback stores a signal when enabled', () => {
+    setFeedbackEnabled(true);
+    const id = recordRoutingFeedback({ task: 'add login feature', complexity: 55, model_tier: 2 });
+    expect(id).toBeTruthy();
+    const stats = getRoutingFeedbackStats();
+    expect(stats.active).toBe(1);
+    expect(stats.by_tier[2]).toBeDefined();
+    expect(stats.by_tier[2].count).toBe(1);
+    expect(stats.by_tier[2].avg_quality).toBeNull();
+  });
+
+  it('listRoutingFeedback returns entries with pending outcome', () => {
+    setFeedbackEnabled(true);
+    recordRoutingFeedback({ task: 'refactor auth module', complexity: 70, model_tier: 3, agent: 'coder' });
+    const log = listRoutingFeedback(10);
+    expect(log.length).toBe(1);
+    expect(log[0].outcome).toBe('pending');
+    expect(log[0].task_snippet).toBe('refactor auth module');
+    expect(log[0].model_tier).toBe(3);
+  });
+
+  it('resetRoutingFeedback clears all signals', () => {
+    setFeedbackEnabled(true);
+    recordRoutingFeedback({ task: 'task-a', complexity: 30, model_tier: 1 });
+    recordRoutingFeedback({ task: 'task-b', complexity: 60, model_tier: 2 });
+    expect(getRoutingFeedbackStats().active).toBe(2);
+    const result = resetRoutingFeedback();
+    expect(result.deleted_feedback).toBe(2);
+    expect(getRoutingFeedbackStats().total).toBe(0);
+  });
+
+  it('stats show correct expired count', () => {
+    const stats = getRoutingFeedbackStats();
+    expect(stats.ttl_days).toBe(30);
+    expect(stats.expired).toBe(0);
   });
 });
