@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { version: VERSION } = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
-const TAGLINE = '50 agents. 49 tools. 3 AIs. Self-learning. Zero extra cost.';
+const TAGLINE = '50 agents. 62 tools. 3 AIs. Self-learning. Zero extra cost.';
 const VETO_DIR = join(homedir(), '.veto');
 const HOME = homedir();
 
@@ -311,7 +311,7 @@ Veto is active. 49 tools across 5 categories:
 **Session & Context** — veto_status · veto_session_save · veto_continue · veto_handoff
 Save work at 60–70% context capacity. veto_status triggers auto-save above 70%.
 
-**Code Intelligence** — veto_diff_review · veto_code_review · veto_security_scan · veto_secrets_scan · veto_ci_gate
+**Code Intelligence** — veto_diff_review · veto_full_review · veto_pr_review · veto_code_review · veto_security_scan · veto_secrets_scan · veto_ci_gate
 Run veto_diff_review before any merge — it runs all three scans in parallel.
 
 **Council & Routing** — veto_council_debate · veto_route_task · veto_execute_parallel
@@ -799,27 +799,27 @@ function shortHelpCommand() {
   console.log(`  ${c.cyan('veto help')}                    Show this help`);
   console.log(`  ${c.cyan('veto help --troubleshoot')}     Show troubleshooting guide`);
   console.log('');
-  console.log(c.bold('  MCP Tools (49)'));
+  console.log(c.bold('  MCP Tools (62)'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
-  console.log(`  ${c.dim('Session')}       veto_status · veto_autosave_status · veto_session_save · veto_session_restore · veto_sessions_list`);
+  console.log(`  ${c.dim('Session')}       veto_status · veto_autosave_status · veto_session_save · veto_session_restore · veto_sessions_list · veto_session_replay`);
   console.log(`  ${c.dim('Router')}        veto_route_task · veto_rate_status`);
-  console.log(`  ${c.dim('Council')}       veto_council_debate · veto_benchmark`);
-  console.log(`  ${c.dim('Agents')}        veto_agent_plan · veto_execute_parallel · veto_explain`);
+  console.log(`  ${c.dim('Council')}       veto_council_debate · veto_benchmark · veto_adr`);
+  console.log(`  ${c.dim('Agents')}        veto_agent_plan · veto_execute_parallel · veto_explain · veto_compose_agents · veto_delegate`);
   console.log(`  ${c.dim('Review')}        veto_code_review · veto_security_scan · veto_secrets_scan · veto_diff_review`);
   console.log(`  ${c.dim('Pipelines')}     veto_full_review · veto_pre_commit · veto_new_feature`);
-  console.log(`  ${c.dim('Workflow')}      veto_workflow`);
-  console.log(`  ${c.dim('Watch')}         veto_watch · veto_watch_poll · veto_watch_stop`);
-  console.log(`  ${c.dim('Memory')}        veto_memory_store · veto_memory_search · veto_memory_delete`);
+  console.log(`  ${c.dim('Workflow')}      veto_workflow · veto_task_parse · veto_docs_fetch · veto_context_status`);
+  console.log(`  ${c.dim('Watch')}         veto_watch · veto_watch_poll · veto_watch_stop · veto_local_llm · veto_semantic_search · veto_sdd_agent · veto_playwright · veto_notify_ide`);
+  console.log(`  ${c.dim('Memory')}        veto_memory_store · veto_memory_search · veto_memory_delete · veto_memory_export · veto_memory_import`);
   console.log(`                veto_project_map_update · veto_project_map_get`);
   console.log(`                veto_pattern_store · veto_patterns_list`);
   console.log(`                veto_memory_export · veto_memory_import`);
   console.log(`  ${c.dim('Learning')}      veto_record_outcome · veto_learning_stats · veto_learning_apply`);
   console.log(`  ${c.dim('Handoff')}       veto_handoff · veto_continue · veto_platform_setup`);
   console.log(`  ${c.dim('Intelligence')}  veto_docs_fetch · veto_context_status · veto_task_parse`);
-  console.log(`  ${c.dim('Observability')} veto_usage_status · veto_audit_log · veto_health · veto_metrics`);
+  console.log(`  ${c.dim('Observability')} veto_usage_status · veto_audit_log · veto_health · veto_metrics · veto_record_outcome · veto_learning_stats · veto_learning_apply`);
   console.log(`  ${c.dim('CI/CD')}         veto_ci_gate · veto_pr_review`);
-  console.log(`  ${c.dim('Discover')}      veto_discover · veto_summarize · veto_git_blame · veto_changelog`);
-  console.log(`  ${c.dim('Plugins')}       veto_plugins`);
+  console.log(`  ${c.dim('Discover')}      veto_discover · veto_summarize · veto_git_blame · veto_changelog · veto_onboard · veto_debt_register`);
+  console.log(`  ${c.dim('Plugins')}       veto_plugins · veto_openapi_gen · veto_flag_auditor · veto_env_setup · veto_commit_message · veto_pr_description · veto_pr_post · veto_prompt_optimizer · veto_sre_advisor · veto_diagram · veto_rca · veto_translate · veto_merge_conflict`);
   console.log('');
   console.log(c.bold('  MCP Resources'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
