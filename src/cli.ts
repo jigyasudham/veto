@@ -794,7 +794,8 @@ function shortHelpCommand() {
   console.log(`  ${c.dim('Council')}       veto_council_debate · veto_benchmark`);
   console.log(`  ${c.dim('Agents')}        veto_agent_plan · veto_execute_parallel · veto_explain`);
   console.log(`  ${c.dim('Review')}        veto_code_review · veto_security_scan · veto_secrets_scan · veto_diff_review`);
-  console.log(`  ${c.dim('Pipeline')}      veto_workflow`);
+  console.log(`  ${c.dim('Pipelines')}     veto_full_review · veto_pre_commit · veto_new_feature`);
+  console.log(`  ${c.dim('Workflow')}      veto_workflow`);
   console.log(`  ${c.dim('Watch')}         veto_watch · veto_watch_poll · veto_watch_stop`);
   console.log(`  ${c.dim('Memory')}        veto_memory_store · veto_memory_search · veto_memory_delete`);
   console.log(`                veto_project_map_update · veto_project_map_get`);

@@ -619,6 +619,45 @@ export const TOOL_DEFINITIONS = [
       required: ['session_id'],
     },
   },
+  // ── Named Pipelines — curated multi-tool compositions (Phase 4.2) ─────────────
+  {
+    name: 'veto_full_review',
+    description: 'Full pre-ship review: runs code review + security scan + secrets scan + quality analysis in parallel, then returns a combined verdict (pass/warn/fail). Use before any merge or deploy when you want richer output than veto_diff_review alone.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir: { type: 'string', description: 'Absolute path to project. Reads git diff HEAD automatically.' },
+        diff:        { type: 'string', description: 'Optional: pass a diff string directly instead of reading from project_dir.' },
+        context:     { type: 'string', description: 'Optional: PR description or review context.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'veto_pre_commit',
+    description: 'Pre-commit gate: runs secrets scan (hard block on any finding) + code review in parallel on staged changes. Faster than veto_full_review — tuned for commit-time validation. Returns a blocked/warn/pass verdict.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_dir: { type: 'string', description: 'Absolute path to project. Reads staged changes (git diff --cached) automatically.' },
+        context:     { type: 'string', description: 'Optional: branch name or additional context.' },
+      },
+      required: ['project_dir'],
+    },
+  },
+  {
+    name: 'veto_new_feature',
+    description: 'New feature planning pipeline: council governance → execution plan → task DAG, in sequence. Collapses 3 manual tool calls into 1. RED council verdict stops the pipeline early — do not plan what is blocked. Returns council verdict + agent plan + structured task list.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        description: { type: 'string', description: 'Feature description or user story.' },
+        project_dir: { type: 'string', description: 'Optional: absolute path to project for context injection.' },
+        context:     { type: 'string', description: 'Optional: constraints, team size, timeline, or architecture notes.' },
+      },
+      required: ['description'],
+    },
+  },
   // ── Workflow & CI ─────────────────────────────────────────────────────────────
   {
     name: 'veto_workflow',

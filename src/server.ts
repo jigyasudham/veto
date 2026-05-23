@@ -185,6 +185,9 @@ const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint
   veto_task_parse:        { readOnlyHint: false, destructiveHint: false },
   veto_watch:             { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   veto_watch_stop:        { readOnlyHint: false, destructiveHint: false },
+  veto_full_review:       { readOnlyHint: true },
+  veto_pre_commit:        { readOnlyHint: true },
+  veto_new_feature:       { readOnlyHint: false, destructiveHint: false },
   veto_workflow:          { readOnlyHint: false, destructiveHint: false },
   veto_ci_gate:           { readOnlyHint: false, destructiveHint: false },
   veto_usage_status:      { readOnlyHint: false, destructiveHint: false },
@@ -259,6 +262,60 @@ function autoStoreCritical(title: string, blockingIssues: string[], projectDir?:
     session_id: sessionId,
     relevance: 1.0,
   });
+}
+
+// ─── Shared Helpers ──────────────────────────────────────────────────────────
+
+// Task-parse helper reused by veto_task_parse and veto_new_feature.
+// Returns the structured plan + plan_id without the MCP response wrapper.
+async function buildTaskPlan(description: string, project_dir?: string, max_tasks = 20): Promise<{
+  plan_id: string;
+  cached: boolean;
+  summary: string;
+  total_tasks: number;
+  total_complexity: number;
+  critical_path: string[];
+  parallelisable_groups: string[][];
+  duration_estimate: string;
+  tasks: Array<{ id: string; title: string; complexity: number; priority: string; depends_on: string[]; suggested_agent: string; estimated_hours: number }>;
+}> {
+  const hash = createHash('sha256').update(description).digest('hex').slice(0, 16);
+  const cached = getTaskPlan(hash);
+  if (cached) return { plan_id: cached.id, cached: true, ...JSON.parse(cached.plan_json) };
+
+  const ctx = project_dir ? buildContextString(project_dir) : '';
+  const planResult = await executeOne({ id: 'task-parse-1', agent: 'task-planner', task: `Parse this project description into a structured task breakdown with dependencies and complexity scores (max ${max_tasks} tasks):\n\n${description}`, context: ctx || undefined, project_dir });
+
+  const agentKeywords: Array<{ keywords: RegExp; agent: string }> = [
+    { keywords: /test|spec|coverage|assert|unit|integration/i,            agent: 'tester' },
+    { keywords: /secur|auth|jwt|oauth|permission|role|encrypt|hash/i,     agent: 'auth' },
+    { keywords: /database|schema|migrat|sql|query|index|table/i,          agent: 'database' },
+    { keywords: /api|endpoint|rest|graphql|route|openapi/i,               agent: 'api' },
+    { keywords: /ui|component|frontend|react|vue|svelte|html|css|style/i, agent: 'frontend' },
+    { keywords: /docker|deploy|ci|cd|pipeline|container|k8s|infra/i,      agent: 'devops' },
+    { keywords: /refactor|clean|restructure|rename|extract/i,             agent: 'refactor' },
+    { keywords: /review|audit|quality|lint|check/i,                       agent: 'reviewer' },
+    { keywords: /debug|fix|bug|error|crash|trace|diagnos/i,               agent: 'debugger' },
+    { keywords: /document|readme|comment|jsdoc|wiki/i,                    agent: 'documentation' },
+    { keywords: /perform|optim|speed|cache|profil|latency/i,              agent: 'performance' },
+    { keywords: /migrat|upgrade|version|port|convert/i,                   agent: 'migration' },
+  ];
+  const pickAgent = (step: string) => { for (const { keywords, agent } of agentKeywords) if (keywords.test(step)) return agent; return 'coder'; };
+  const scoreStep = (step: string) => { const words = step.split(/\s+/).length; const hasComplex = /integrat|architect|design|implement|optim|migrat|refactor/i.test(step); return Math.min(10, Math.min(7, Math.max(2, Math.round(words / 3))) + (hasComplex ? 2 : 0)); };
+  const inferDeps = (step: string, idx: number) => { const lower = step.toLowerCase(); if (/^(deploy|test|release|publish|document)/i.test(step.trim()) && idx > 0) return [`task-${idx}`]; if (/after.{0,30}(setup|init|instal|creat|build)/i.test(lower) && idx > 0) return [`task-${idx}`]; return idx > 0 && /integrat|connect|wire|link/i.test(lower) ? [`task-${idx}`] : []; };
+
+  const steps: string[] = planResult.plan?.steps ?? [];
+  const tasks = steps.slice(0, max_tasks).map((step, i) => {
+    const complexity = scoreStep(step);
+    const agent = pickAgent(step);
+    const priority = i === 0 ? 'critical' : complexity >= 7 ? 'high' : complexity >= 5 ? 'medium' : 'low';
+    return { id: `task-${i + 1}`, title: step, complexity, priority, depends_on: inferDeps(step, i), suggested_agent: agent, estimated_hours: complexity <= 3 ? 1 : complexity <= 6 ? 2 : complexity <= 8 ? 4 : 8 };
+  });
+
+  const plan = { summary: description.slice(0, 100), total_tasks: tasks.length, total_complexity: tasks.reduce((s, t) => s + t.complexity, 0), critical_path: tasks.map(t => t.id), parallelisable_groups: tasks.length > 2 ? [tasks.slice(1, Math.ceil(tasks.length / 2)).map(t => t.id)] : [], tasks, duration_estimate: planResult.plan?.duration_estimate ?? 'unknown' };
+  autoRecord(description, 'task-planner', Math.round(planResult.output.confidence * 100));
+  const plan_id = saveTaskPlan(JSON.stringify(plan), hash, project_dir);
+  return { plan_id, cached: false, ...plan };
 }
 
 // ─── Tool Handlers ────────────────────────────────────────────────────────────
@@ -1405,90 +1462,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const description = String(args?.description ?? '').trim();
       const project_dir = args?.project_dir ? String(args.project_dir) : undefined;
       const max_tasks = typeof args?.max_tasks === 'number' ? Math.min(args.max_tasks, 50) : 20;
-
-      if (!description) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'description is required.' }) }], isError: true };
-      }
-
-      const hash = createHash('sha256').update(description).digest('hex').slice(0, 16);
-      const cached = getTaskPlan(hash);
-      if (cached) {
-        const plan = JSON.parse(cached.plan_json);
-        return { content: [{ type: 'text', text: JSON.stringify({ success: true, plan_id: cached.id, cached: true, ...plan }, null, 2) }] };
-      }
-
-      const ctx = project_dir ? buildContextString(project_dir) : '';
-      const planResult = await executeOne({ id: 'task-parse-1', agent: 'task-planner', task: `Parse this project description into a structured task breakdown with dependencies and complexity scores (max ${max_tasks} tasks):\n\n${description}`, context: ctx || undefined, project_dir });
-
-      // Build structured task DAG from planner output
-      const steps: string[] = planResult.plan?.steps ?? [];
-
-      // Agent keyword map — pick the most relevant agent based on step keywords
-      const agentKeywords: Array<{ keywords: RegExp; agent: string }> = [
-        { keywords: /test|spec|coverage|assert|unit|integration/i,           agent: 'tester' },
-        { keywords: /secur|auth|jwt|oauth|permission|role|encrypt|hash/i,    agent: 'auth' },
-        { keywords: /database|schema|migrat|sql|query|index|table/i,         agent: 'database' },
-        { keywords: /api|endpoint|rest|graphql|route|openapi/i,              agent: 'api' },
-        { keywords: /ui|component|frontend|react|vue|svelte|html|css|style/i,agent: 'frontend' },
-        { keywords: /docker|deploy|ci|cd|pipeline|container|k8s|infra/i,     agent: 'devops' },
-        { keywords: /refactor|clean|restructure|rename|extract/i,            agent: 'refactor' },
-        { keywords: /review|audit|quality|lint|check/i,                      agent: 'reviewer' },
-        { keywords: /debug|fix|bug|error|crash|trace|diagnos/i,              agent: 'debugger' },
-        { keywords: /document|readme|comment|jsdoc|wiki/i,                   agent: 'documentation' },
-        { keywords: /perform|optim|speed|cache|profil|latency/i,             agent: 'performance' },
-        { keywords: /migrat|upgrade|version|port|convert/i,                  agent: 'migration' },
-      ];
-
-      function pickAgent(step: string): string {
-        for (const { keywords, agent } of agentKeywords) {
-          if (keywords.test(step)) return agent;
-        }
-        return 'coder';
-      }
-
-      // Complexity scoring: longer, more-keyword-dense steps = higher complexity
-      function scoreStep(step: string): number {
-        const words = step.split(/\s+/).length;
-        const hasComplexWords = /integrat|architect|design|implement|optim|migrat|refactor/i.test(step);
-        const base = Math.min(7, Math.max(2, Math.round(words / 3)));
-        return hasComplexWords ? Math.min(10, base + 2) : base;
-      }
-
-      // Dependency inference: look for explicit "after", "before", "requires", "depends" keywords
-      function inferDeps(step: string, allSteps: string[], idx: number): string[] {
-        const lower = step.toLowerCase();
-        if (/^(deploy|test|release|publish|document)/i.test(step.trim()) && idx > 0) {
-          return [`task-${idx}`];
-        }
-        if (/after.{0,30}(setup|init|instal|creat|build)/i.test(lower) && idx > 0) {
-          return [`task-${idx}`];
-        }
-        return idx > 0 && /integrat|connect|wire|link/i.test(lower) ? [`task-${idx}`] : [];
-      }
-
-      const tasks = steps.slice(0, max_tasks).map((step, i) => {
-        const complexity = scoreStep(step);
-        const agent = pickAgent(step);
-        const deps = inferDeps(step, steps, i);
-        const priority = i === 0 ? 'critical' : complexity >= 7 ? 'high' : complexity >= 5 ? 'medium' : 'low';
-        const estimated_hours = complexity <= 3 ? 1 : complexity <= 6 ? 2 : complexity <= 8 ? 4 : 8;
-        return { id: `task-${i + 1}`, title: step, complexity, priority, depends_on: deps, suggested_agent: agent, estimated_hours };
-      });
-
-      const plan = {
-        summary: description.slice(0, 100),
-        total_tasks: tasks.length,
-        total_complexity: tasks.reduce((s, t) => s + t.complexity, 0),
-        critical_path: tasks.map(t => t.id),
-        parallelisable_groups: tasks.length > 2 ? [tasks.slice(1, Math.ceil(tasks.length / 2)).map(t => t.id)] : [],
-        tasks,
-        duration_estimate: planResult.plan?.duration_estimate ?? 'unknown',
-      };
-
-      autoRecord(description, 'task-planner', Math.round(planResult.output.confidence * 100));
-      const plan_id = saveTaskPlan(JSON.stringify(plan), hash, project_dir);
-
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, plan_id, ...plan }, null, 2) }] };
+      if (!description) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'description is required.' }) }], isError: true };
+      const plan = await buildTaskPlan(description, project_dir, max_tasks);
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...plan }, null, 2) }] };
     }
 
     // ── Phase 14: Observability & Safety ──────────────────────────────────────
@@ -2039,6 +2015,162 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         since_tag: lastTag || '(beginning of history)',
         total_commits: rawLog.split('\n').filter(Boolean).length,
         sections,
+      }, null, 2) }] };
+    }
+
+    // ── Named Pipelines (Phase 4.2) ──────────────────────────────────────────────
+
+    case 'veto_full_review': {
+      const projectDir = args?.project_dir ? String(args.project_dir) : undefined;
+      const userContext = args?.context ? String(args.context) : undefined;
+
+      let diff = args?.diff ? String(args.diff).trim() : '';
+      if (!diff && projectDir) {
+        try {
+          diff = execSyncTop('git diff HEAD --no-color', { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+          if (!diff) diff = execSyncTop('git diff --cached --no-color', { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+        } catch { /* not a git repo */ }
+      }
+      if (!diff) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No diff provided and no git changes detected. Pass diff or point to a project_dir with uncommitted changes.' }) }], isError: true };
+
+      const changedFiles = [...diff.matchAll(/^diff --git a\/.+ b\/(.+)$/gm)].map(m => m[1]);
+      const context = buildContextString(projectDir, userContext);
+
+      const [{ reviewResult, secResult, secretsResult, verdict: scanVerdict }, qualityResult] = await Promise.all([
+        runTripleScan(diff, context),
+        executeOne({ id: 'quality-1', agent: 'code-quality', task: 'Assess overall code quality and maintainability of these changes', code: diff.slice(0, 8000), context }),
+      ]);
+
+      const qualityScore = Math.round(qualityResult.output.confidence * 100);
+      const verdict = (scanVerdict === 'fail' || qualityScore < 40) ? 'fail'
+                    : (scanVerdict === 'warn' || qualityScore < 70) ? 'warn'
+                    : 'pass';
+      const verdictEmoji = verdict === 'pass' ? '✅ PASS' : verdict === 'warn' ? '⚠️  WARN' : '❌ FAIL';
+
+      if (verdict === 'fail') {
+        const issues: string[] = [];
+        if ((reviewResult.analysis?.critical_count ?? 0) > 0) issues.push(`Code: ${reviewResult.analysis?.summary ?? 'critical issues found'}`);
+        if ((secResult.analysis?.critical_count ?? 0) > 0) issues.push(`Security: ${secResult.analysis?.summary ?? 'vulnerabilities detected'}`);
+        if ((secretsResult.analysis?.findings?.length ?? 0) > 0) issues.push('Secrets: exposed credentials detected');
+        autoStoreCritical(`Full review failed: ${changedFiles.slice(0, 2).join(', ')}`, issues, projectDir, ['full-review']);
+      }
+      autoRecord('full-review', 'code-quality', qualityScore);
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        pipeline: 'full_review',
+        verdict,
+        verdict_label: verdictEmoji,
+        files_changed: changedFiles.length,
+        files: changedFiles,
+        code_review: { score: reviewResult.analysis?.score ?? null, verdict: reviewResult.analysis?.verdict ?? null, critical: reviewResult.analysis?.critical_count ?? 0, high: reviewResult.analysis?.high_count ?? 0, findings: reviewResult.analysis?.findings ?? [] },
+        security:    { score: secResult.analysis?.score ?? null, verdict: secResult.analysis?.verdict ?? null, critical: secResult.analysis?.critical_count ?? 0, high: secResult.analysis?.high_count ?? 0, findings: secResult.analysis?.findings ?? [] },
+        secrets:     { verdict: secretsResult.analysis?.verdict ?? null, findings: secretsResult.analysis?.findings ?? [] },
+        quality:     { score: qualityScore, recommendation: qualityResult.output.recommendation, plan: qualityResult.plan },
+        summary: [
+          `${verdictEmoji} — ${changedFiles.length} file(s) changed`,
+          `Code: ${reviewResult.analysis?.verdict ?? 'n/a'} (score ${reviewResult.analysis?.score ?? '?'}/100)`,
+          `Security: ${secResult.analysis?.verdict ?? 'n/a'} — ${secResult.analysis?.critical_count ?? 0} critical, ${secResult.analysis?.high_count ?? 0} high`,
+          `Secrets: ${(secretsResult.analysis?.findings?.length ?? 0) > 0 ? '🔴 Exposed credentials detected' : '✅ Clean'}`,
+          `Quality: ${qualityScore}/100`,
+        ].join('\n'),
+      }, null, 2) }] };
+    }
+
+    case 'veto_pre_commit': {
+      const projectDir = args?.project_dir ? String(args.project_dir) : undefined;
+      const userContext = args?.context ? String(args.context) : undefined;
+
+      if (!projectDir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
+
+      let diff = '';
+      try {
+        diff = execSyncTop('git diff --cached --no-color', { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+      } catch { /* not a git repo */ }
+      if (!diff) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No staged changes found. Stage files with git add before running veto_pre_commit.' }) }], isError: true };
+
+      const context = buildContextString(projectDir, userContext);
+      const [secretsResult, reviewResult] = await Promise.all([
+        executeOne({ id: 'pre-secrets', agent: 'secrets',  task: 'Scan staged changes for exposed secrets or credentials', code: diff }),
+        executeOne({ id: 'pre-review',  agent: 'reviewer', task: 'Review staged changes for critical code quality issues', code: diff, context }),
+      ]);
+
+      const hasSecrets = (secretsResult.analysis?.findings?.length ?? 0) > 0;
+      const hasCriticalCode = (reviewResult.analysis?.critical_count ?? 0) > 0;
+      const verdict = (hasSecrets || hasCriticalCode) ? 'fail' : (reviewResult.analysis?.high_count ?? 0) > 0 ? 'warn' : 'pass';
+      const verdictEmoji = verdict === 'pass' ? '✅ PASS' : verdict === 'warn' ? '⚠️  WARN' : '❌ FAIL';
+
+      if (verdict === 'fail') {
+        const issues: string[] = [];
+        if (hasSecrets) issues.push('Secrets: exposed credentials detected');
+        if (hasCriticalCode) issues.push(`Code: ${reviewResult.analysis?.summary ?? 'critical issues found'}`);
+        autoStoreCritical(`Pre-commit blocked: ${projectDir}`, issues, projectDir, ['pre-commit']);
+      }
+      autoRecord('pre-commit', 'secrets',  hasSecrets ? 0 : 100);
+      autoRecord('pre-commit', 'reviewer', reviewResult.analysis?.score ?? Math.round(reviewResult.output.confidence * 100));
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        pipeline: 'pre_commit',
+        verdict,
+        verdict_label: verdictEmoji,
+        blocked: verdict === 'fail',
+        secrets:     { found: hasSecrets, findings: secretsResult.analysis?.findings ?? [] },
+        code_review: { score: reviewResult.analysis?.score ?? null, critical: reviewResult.analysis?.critical_count ?? 0, high: reviewResult.analysis?.high_count ?? 0, findings: reviewResult.analysis?.findings ?? [] },
+        summary: [
+          `${verdictEmoji} — Pre-commit check`,
+          `Secrets: ${hasSecrets ? '🔴 Found — commit BLOCKED' : '✅ Clean'}`,
+          `Code: ${reviewResult.analysis?.verdict ?? 'n/a'} — ${reviewResult.analysis?.critical_count ?? 0} critical, ${reviewResult.analysis?.high_count ?? 0} high`,
+        ].join('\n'),
+      }, null, 2) }] };
+    }
+
+    case 'veto_new_feature': {
+      const description = String(args?.description ?? '').trim();
+      const projectDir = args?.project_dir ? String(args.project_dir) : undefined;
+      const userContext = args?.context ? String(args.context) : undefined;
+
+      if (!description) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'description is required.' }) }], isError: true };
+
+      const context = buildContextString(projectDir, userContext);
+
+      // Step 1 — governance first: council debate
+      const debateResult = await runLlmDebate(server, { task: description, context: userContext, project_dir: projectDir, strictness: 'standard' });
+      const outcomeId = saveCouncilOutcome({ task: description, verdict: debateResult.final_verdict, lead_dev: JSON.stringify(debateResult.votes.lead_dev), pm: JSON.stringify(debateResult.votes.pm), architect: JSON.stringify(debateResult.votes.architect), ux: JSON.stringify(debateResult.votes.ux), devil: JSON.stringify(debateResult.votes.devil), legal: JSON.stringify(debateResult.votes.legal), security: JSON.stringify(debateResult.votes.security), recommended: debateResult.recommended });
+      { const qMap: Record<string, number> = { GREEN: 90, YELLOW: 60, RED: 20, DEADLOCK: 50 }; const tMap: Record<string, 1|2|3> = { GREEN: 1, YELLOW: 2, RED: 3, DEADLOCK: 2 }; recordOutcome(description.slice(0, 50), 50, tMap[debateResult.final_verdict] ?? 2, 'council', qMap[debateResult.final_verdict] ?? 50); }
+
+      // RED verdict — block: do not plan what governance has rejected
+      if (debateResult.final_verdict === 'RED') {
+        return { content: [{ type: 'text', text: JSON.stringify({
+          pipeline: 'new_feature',
+          verdict: 'blocked',
+          council: { outcome_id: outcomeId, verdict: 'RED', block_reasons: debateResult.block_reasons, warnings: debateResult.warnings, recommended: debateResult.recommended },
+          agent_plan: null, tasks: null,
+          summary: `❌ BLOCKED — Council RED verdict. Resolve block_reasons before planning.\n${debateResult.block_reasons.map((r: string) => `  - ${r}`).join('\n')}`,
+        }, null, 2) }] };
+      }
+
+      // Steps 2+3 — approved: plan + decompose in parallel
+      const VALID_AGENTS = ['coder','tester','reviewer','debugger','refactor','database','api','frontend','backend','devops','performance','auth','security-scanner','documentation'];
+      const rawAgent = (debateResult.recommended ?? '').toLowerCase().split(/[\s,;]/)[0];
+      const planAgent: WorkerAgentType = (VALID_AGENTS.includes(rawAgent) ? rawAgent : 'coder') as WorkerAgentType;
+
+      const [planResult, taskPlan] = await Promise.all([
+        executeOne({ id: 'plan-1', agent: planAgent, task: description, context, project_dir: projectDir }),
+        buildTaskPlan(description, projectDir),
+      ]);
+      autoRecord('new-feature', planAgent, Math.round(planResult.output.confidence * 100));
+
+      return { content: [{ type: 'text', text: JSON.stringify({
+        pipeline: 'new_feature',
+        verdict: debateResult.final_verdict === 'GREEN' ? 'approved' : 'approved_with_warnings',
+        council: { outcome_id: outcomeId, verdict: debateResult.final_verdict, block_reasons: debateResult.block_reasons, warnings: debateResult.warnings, recommended: debateResult.recommended },
+        agent_plan: { agent: planAgent, plan: planResult.plan, output: planResult.output },
+        tasks: taskPlan,
+        summary: [
+          `${debateResult.final_verdict === 'GREEN' ? '✅' : '⚠️'} Council: ${debateResult.final_verdict}`,
+          debateResult.warnings.length > 0 ? `Warnings: ${debateResult.warnings.join('; ')}` : null,
+          `Recommended agent: ${planAgent}`,
+          `Tasks: ${taskPlan.total_tasks} (est. ${taskPlan.duration_estimate})`,
+        ].filter(Boolean).join('\n'),
       }, null, 2) }] };
     }
 
