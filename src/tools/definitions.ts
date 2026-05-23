@@ -1402,4 +1402,18 @@ export const TOOL_DEFINITIONS = [
       required: ['task', 'project_dir'],
     },
   },
+  {
+    name: 'veto_notify_ide',
+    description: 'Sends a notification or instruction back to the IDE/client. Useful for opening files, showing alerts, or requesting UI actions in bidirectional MCP setups (JetBrains, Zed).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['open_file', 'show_message', 'set_status'], description: 'Action to request from the IDE.' },
+        path: { type: 'string', description: 'File path (for open_file).' },
+        message: { type: 'string', description: 'Message text (for show_message/set_status).' },
+        level: { type: 'string', enum: ['info', 'warning', 'error'], description: 'Message severity level.' }
+      },
+      required: ['action'],
+    },
+  },
 ] as const;

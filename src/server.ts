@@ -239,7 +239,7 @@ const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint
   // Phase 8: Long-Horizon
   veto_semantic_search:   { readOnlyHint: true },
   veto_sdd_agent:         { readOnlyHint: false, destructiveHint: false },
-  veto_playwright:        { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  veto_notify_ide:        { readOnlyHint: true },
 };
 
 // ─── Tool Definitions ─────────────────────────────────────────────────────────
@@ -3590,9 +3590,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
       return { content: [{ type: 'text', text: JSON.stringify({ success: !result.error, task, url, script: result.plan?.approach ?? result.output.recommendation }, null, 2) }] };
     }
+    case 'veto_notify_ide': {
+      const { action, path, message, level } = args;
+      // In bidirectional MCP, some clients listen for logging or custom notifications
+      if (action === 'show_message' && message) {
+        await server.sendLoggingMessage({
+          level: level === 'error' ? 'error' : level === 'warning' ? 'warn' : 'info',
+          data: message,
+        });
+      }
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, action, message: `Action ${action} sent to IDE client.` }, null, 2) }] };
+    }
 
-        default:
-          throw new Error(`Unknown tool: ${name}`);
+    default:          throw new Error(`Unknown tool: ${name}`);
       }
     })();
 

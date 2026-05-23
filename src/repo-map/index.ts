@@ -44,54 +44,55 @@ function isSourceFile(file: string): boolean {
 
 // ─── Symbol extraction ────────────────────────────────────────────────────────
 
-const EXPORT_PATTERNS: Array<{ re: RegExp; kind: SymbolEntry['kind'] }> = [
-  { re: /export\s+(?:abstract\s+)?class\s+(\w+)/g,       kind: 'class' },
-  { re: /export\s+(?:async\s+)?function\s+(\w+)/g,       kind: 'function' },
-  { re: /export\s+interface\s+(\w+)/g,                    kind: 'interface' },
-  { re: /export\s+type\s+(\w+)\s*[=<{]/g,                kind: 'type' },
-  { re: /export\s+enum\s+(\w+)/g,                        kind: 'enum' },
-  { re: /export\s+const\s+(\w+)/g,                       kind: 'const' },
-  { re: /export\s+default\s+(?:class|function)\s+(\w+)/g, kind: 'other' },
+const EXPORT_PATTERNS: Array<{ re: RegExp; kind: SymbolEntry['kind']; langs: string[] }> = [
+  { re: /export\s+(?:abstract\s+)?class\s+(\w+)/g,       kind: 'class', langs: ['ts', 'js'] },
+  { re: /export\s+(?:async\s+)?function\s+(\w+)/g,       kind: 'function', langs: ['ts', 'js'] },
+  { re: /export\s+interface\s+(\w+)/g,                    kind: 'interface', langs: ['ts', 'js'] },
+  { re: /export\s+type\s+(\w+)\s*[=<{]/g,                kind: 'type', langs: ['ts', 'js'] },
+  { re: /export\s+enum\s+(\w+)/g,                        kind: 'enum', langs: ['ts', 'js'] },
+  { re: /export\s+const\s+(\w+)/g,                       kind: 'const', langs: ['ts', 'js'] },
   // Python
-  { re: /^class\s+(\w+)/gm,                              kind: 'class' },
-  { re: /^def\s+(\w+)/gm,                                kind: 'function' },
+  { re: /^class\s+(\w+)/gm,                              kind: 'class', langs: ['py'] },
+  { re: /^def\s+(\w+)/gm,                                kind: 'function', langs: ['py'] },
+  // Rust
+  { re: /^pub\s+(?:async\s+)?fn\s+(\w+)/gm,              kind: 'function', langs: ['rs'] },
+  { re: /^pub\s+struct\s+(\w+)/gm,                        kind: 'class', langs: ['rs'] },
+  { re: /^pub\s+enum\s+(\w+)/gm,                          kind: 'enum', langs: ['rs'] },
+  { re: /^pub\s+trait\s+(\w+)/gm,                         kind: 'interface', langs: ['rs'] },
+  // Go
+  { re: /^func\s+(\w+)/gm,                               kind: 'function', langs: ['go'] },
+  { re: /^type\s+(\w+)\s+struct/gm,                      kind: 'class', langs: ['go'] },
+  { re: /^type\s+(\w+)\s+interface/gm,                   kind: 'interface', langs: ['go'] },
 ];
 
 function extractSymbols(content: string, ext: string): SymbolEntry[] {
   const symbols: SymbolEntry[] = [];
   const seen = new Set<string>();
+  const lang = ext.slice(1);
 
-  const isTs = ['.ts', '.tsx', '.js', '.jsx', '.mjs'].includes(ext);
-  const isPy = ext === '.py';
+  for (const { re, kind, langs } of EXPORT_PATTERNS) {
+    if (!langs.includes(lang) && !(lang === 'tsx' && langs.includes('ts'))) continue;
+    let m: RegExpExecArray | null;
+    re.lastIndex = 0;
+    while ((m = re.exec(content)) !== null) {
+      const name = m[1];
+      if (name && !seen.has(name)) {
+        // Simple structural check: is it top-level?
+        const index = m.index;
+        const before = content.slice(0, index);
+        const openBraces = (before.match(/{/g) || []).length;
+        const closeBraces = (before.match(/}/g) || []).length;
+        const isTopLevel = openBraces === closeBraces;
 
-  if (isTs) {
-    for (const { re, kind } of EXPORT_PATTERNS.slice(0, 7)) {
-      let m: RegExpExecArray | null;
-      re.lastIndex = 0;
-      while ((m = re.exec(content)) !== null) {
-        const name = m[1];
-        if (name && !seen.has(name)) {
+        if (isTopLevel || lang === 'py' || lang === 'go') {
           seen.add(name);
           symbols.push({ name, kind, exported: true });
         }
       }
     }
-  } else if (isPy) {
-    for (const { re, kind } of EXPORT_PATTERNS.slice(7)) {
-      let m: RegExpExecArray | null;
-      re.lastIndex = 0;
-      while ((m = re.exec(content)) !== null) {
-        const name = m[1];
-        if (name && !seen.has(name) && name !== '__init__') {
-          seen.add(name);
-          const exported = !name.startsWith('_');
-          symbols.push({ name, kind, exported });
-        }
-      }
-    }
   }
 
-  return symbols.slice(0, 20); // cap per file
+  return symbols.slice(0, 30);
 }
 
 // ─── Import extraction ────────────────────────────────────────────────────────
