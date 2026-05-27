@@ -479,6 +479,29 @@ Recommended start sequence:
     console.log(c.dim('  Tip: run `veto init` again anytime to install newly-added AI tools.'));
     console.log('');
   }
+
+  // ── Billing mode detection ──────────────────────────────────────────────────
+  // Check for API key env vars as a signal the user may be on pay-per-token billing.
+  const apiKeyEnvVars = ['ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OPENAI_API_KEY'];
+  const detectedKeys = apiKeyEnvVars.filter(k => !!process.env[k]);
+  const { setConfig: setVetoConfig } = await import('./memory/config.js');
+
+  if (detectedKeys.length > 0) {
+    setVetoConfig({ billing_mode: 'api' });
+    console.log(c.yellow('  ⚠  API key environment variables detected:') + c.dim(` ${detectedKeys.join(', ')}`));
+    console.log(c.yellow('     Veto has set billing_mode = api in ~/.veto/config.json.'));
+    console.log('');
+    console.log('  ' + c.bold('Important — cost warning:'));
+    console.log('  Veto\'s "zero cost" claim applies to subscription plans (Claude Max, Gemini');
+    console.log('  Advanced, etc.). On API/pay-per-token billing, any MCP Sampling calls made');
+    console.log('  by Veto agents will count toward your token usage and be billed accordingly.');
+    console.log('');
+    console.log(c.dim('  To silence this warning if you are on a subscription:'));
+    console.log(c.dim('  Edit ~/.veto/config.json and set "billing_mode": "subscription"'));
+    console.log('');
+  } else {
+    setVetoConfig({ billing_mode: 'subscription' });
+  }
 }
 
 
@@ -623,6 +646,24 @@ async function doctorCommand() {
       console.log(`  ${c.dim('    fix: veto init')}`);
       issues++;
     }
+  }
+
+  // Billing mode
+  console.log('');
+  console.log('  ' + c.bold('Billing'));
+  console.log(c.dim('  ─────────────────────────────────────────────────────'));
+  const { getConfig: getVetoConfig } = await import('./memory/config.js');
+  const vetoConfig = getVetoConfig();
+  const apiKeyEnvVarsDoctor = ['ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'OPENAI_API_KEY'];
+  const detectedKeysDoctor = apiKeyEnvVarsDoctor.filter(k => !!process.env[k]);
+
+  if (vetoConfig.billing_mode === 'api' || detectedKeysDoctor.length > 0) {
+    console.log(`  ${c.yellow('⚠')} billing_mode: ${c.yellow('api')} — MCP Sampling calls count toward your token usage`);
+    console.log(`  ${c.dim('  Veto\'s "zero cost" claim applies to subscription plans only.')}`);
+    console.log(`  ${c.dim('  To update: edit ~/.veto/config.json → "billing_mode": "subscription"')}`);
+    issues++;
+  } else {
+    console.log(`  ${c.green('✓')} billing_mode: subscription — zero extra cost`);
   }
 
   console.log('');

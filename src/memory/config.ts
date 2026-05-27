@@ -9,6 +9,7 @@ export type VetoConfig = {
     codex: number;
     antigravity: number;
   };
+  billing_mode: 'subscription' | 'api';
 };
 
 const CONFIG_PATH = join(homedir(), '.veto', 'config.json');
@@ -22,7 +23,7 @@ export const DEFAULT_BUDGETS: VetoConfig['dailyTokenBudget'] = {
 
 export function getConfig(): VetoConfig {
   if (!existsSync(CONFIG_PATH)) {
-    return { dailyTokenBudget: { ...DEFAULT_BUDGETS } };
+    return { dailyTokenBudget: { ...DEFAULT_BUDGETS }, billing_mode: 'subscription' };
   }
   try {
     const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')) as Partial<VetoConfig>;
@@ -33,9 +34,10 @@ export function getConfig(): VetoConfig {
         codex:   raw.dailyTokenBudget?.codex   ?? DEFAULT_BUDGETS.codex,
         antigravity: raw.dailyTokenBudget?.antigravity ?? DEFAULT_BUDGETS.antigravity,
       },
+      billing_mode: raw.billing_mode === 'api' ? 'api' : 'subscription',
     };
   } catch {
-    return { dailyTokenBudget: { ...DEFAULT_BUDGETS } };
+    return { dailyTokenBudget: { ...DEFAULT_BUDGETS }, billing_mode: 'subscription' };
   }
 }
 

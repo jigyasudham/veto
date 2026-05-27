@@ -330,6 +330,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 db_path: getDbPath(),
                 uptime_ms: process.uptime() * 1000,
                 timestamp: new Date().toISOString(),
+                billing_mode: getConfig().billing_mode,
+                ...(getConfig().billing_mode === 'api' ? { billing_warning: 'API billing detected — MCP Sampling calls count toward your token usage. Zero extra cost applies to subscription plans only.' } : {}),
                 ...(autoSaveResult?.triggered ? { auto_save: { triggered: true, session_id: autoSaveResult.session_id, usage_pct: autoSaveResult.usage_pct } } : {}),
               },
               null,

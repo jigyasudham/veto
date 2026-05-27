@@ -4,6 +4,8 @@
 
 An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, Gemini CLI, Antigravity CLI, Cursor, Windsurf, Zed, and JetBrains using your existing subscriptions — giving every AI a council of specialist agents, local LLM support, SDD agents, playwright automation, persistent cross-platform memory, a self-learning router, CI/CD gates, workspace discovery, and bidirectional IDE communication.
 
+> **Billing note:** "Zero cost" applies to subscription plans (Claude Max, Gemini Advanced, etc.). If you are on API/pay-per-token billing, MCP Sampling calls made by Veto agents will count toward your token usage. `veto init` detects API key environment variables and warns you automatically.
+
 ---
 
 ## How the Agents Work
