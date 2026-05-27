@@ -29,7 +29,7 @@ Veto provides a council of 7 senior governance agents plus 55+ domain-specific w
 
 ### All 62 Tools are now 100% Agentic
 
-> Pattern matching, domain heuristics, and structured templates compiled into code. Offline capable. No LLM calls.
+Every worker agent supports two modes: **LLM-backed** (via MCP Sampling, opt-in per task) and **deterministic fallback** (instant, offline, zero tokens). When multiple agents run, they execute in parallel. No extra API keys or billing — LLM calls delegate back to the AI you're already using.
 
 **Development (12)**
 `Coder` · `Code Reviewer` · `Tester` · `Debugger` · `Refactor` · `Database` · `API` · `Frontend` · `Backend` · `DevOps` · `Performance` · `Migration`
@@ -138,7 +138,7 @@ veto doctor
 
 ## Council Debate
 
-Two-phase flow — works on Claude Code, Gemini CLI, and Codex CLI with no API keys:
+Two-phase flow — works on Claude Code, Gemini CLI, Antigravity CLI, and Codex CLI with no API keys:
 
 ```
 # Phase 1 — call with task, get instant deterministic result + LLM upgrade prompt
@@ -258,11 +258,11 @@ Updated by both `veto_session_save` and `veto_status` whenever `token_count > 0`
 
 ## New in v1.4.3
 
-### Council debate + session save — work on Gemini CLI and Codex CLI
+### Council debate + session save — work on Gemini CLI, Antigravity CLI, and Codex CLI
 
-MCP Sampling (`server.createMessage`) is not yet implemented by any of the three CLI hosts. Previously this meant the council always used deterministic fallbacks and `auto_summarize` never ran on any platform.
+MCP Sampling (`server.createMessage`) is not yet implemented by any of the four CLI hosts. Previously this meant the council always used deterministic fallbacks and `auto_summarize` never ran on any platform.
 
-**v1.4.3 introduces the agentic loop pattern** — no API keys, no sampling dependency, works on all three platforms identically.
+**v1.4.3 introduces the agentic loop pattern** — no API keys, no sampling dependency, works on all four platforms identically.
 
 #### Council debate — two-phase LLM upgrade
 
@@ -569,10 +569,13 @@ Open Gemini    →  veto_continue { resuming_as: "gemini" }
 Full context restored. Continue exactly where you stopped.
 ```
 
+Token usage is manually reported — pass `token_count` to `veto_status` or `veto_session_save` and Veto stores it per platform per day. `veto_rate_status` shows what you've reported; nothing is counted automatically. Platform switching is also manual — Veto surfaces which platform has budget remaining, you decide when to switch.
+
 | Platform | Support |
 |---|---|
 | Claude Code | ✅ Native MCP |
 | Gemini CLI | ✅ MCP support |
+| Antigravity CLI | ✅ MCP support |
 | Codex CLI | ✅ MCP support |
 | Cursor | ✅ MCP support |
 | Windsurf | ✅ MCP support |
