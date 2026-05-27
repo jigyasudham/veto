@@ -312,7 +312,7 @@ async function initCommand() {
 
   const VETO_GUIDE = `# Veto MCP Server
 
-Veto is active. 49 tools across 5 categories:
+Veto is active. 62 tools across 6 categories:
 
 **Session & Context** — veto_status · veto_session_save · veto_continue · veto_handoff
 Save work at 60–70% context capacity. veto_status triggers auto-save above 70%.
@@ -464,7 +464,7 @@ Recommended start sequence:
 
   if (configured === 0 && skipped === 0) {
     console.log(c.yellow('  ⚠  No AI tools detected.'));
-    console.log('  Install Claude Code, Gemini CLI, or Codex CLI and run veto init again.');
+    console.log('  Install Claude Code, Gemini CLI, Antigravity CLI, or Codex CLI and run veto init again.');
     console.log('');
   } else {
     console.log('');
@@ -889,10 +889,10 @@ function troubleshootCommand() {
   console.log(`  ${c.dim('→')} Use ${c.cyan('veto_rate_status')} tool to check current usage`);
   console.log(`  ${c.dim('→')} Wait a moment, then retry — limits reset per minute`);
   console.log('');
-  console.log(`  ${c.yellow('veto init fails / API key not found')}`);
-  console.log(`  ${c.dim('→')} Set key in your shell: ${c.cyan('export ANTHROPIC_API_KEY=sk-...')}`);
-  console.log(`  ${c.dim('→')} Windows: ${c.cyan('$env:ANTHROPIC_API_KEY="sk-..."')}`);
-  console.log(`  ${c.dim('→')} Re-run ${c.cyan('veto init')} after setting the key`);
+  console.log(`  ${c.yellow('veto init fails on first run')}`);
+  console.log(`  ${c.dim('→')} Veto does not require an API key — it uses your existing AI subscriptions via MCP`);
+  console.log(`  ${c.dim('→')} Ensure Node.js >= 22 and run ${c.cyan('veto init')} from your project directory`);
+  console.log(`  ${c.dim('→')} Check that your AI client (Claude Code / Gemini / Codex / Antigravity) is installed`);
   console.log('');
   console.log(`  ${c.yellow('veto_health shows degraded / components failing')}`);
   console.log(`  ${c.dim('→')} Run ${c.cyan('veto status')} for a summary of all components`);
