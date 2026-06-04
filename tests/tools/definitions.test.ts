@@ -1,14 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { TOOL_DEFINITIONS } from '../../src/tools/definitions.js';
+import { workerHandlers } from '../../src/server/handlers/workers.js';
 
 // NOTE: src/server.ts calls main() (server.connect over stdio) at import time, so it
-// must never be imported in a test. We cross-reference its handler `case` labels by
-// reading the source as text instead.
+// must never be imported in a test. Tools are handled by one of two paths during the
+// incremental decomposition: migrated handlers in the registry (importable maps) or
+// the remaining switch in server.ts (cross-referenced by reading source as text).
 const serverSource = readFileSync(new URL('../../src/server.ts', import.meta.url), 'utf8');
-const handledTools = new Set(
-  [...serverSource.matchAll(/case '(veto_[a-z0-9_]+)'/g)].map(m => m[1]),
-);
+const handledTools = new Set([
+  ...[...serverSource.matchAll(/case '(veto_[a-z0-9_]+)'/g)].map(m => m[1]),
+  ...Object.keys(workerHandlers),
+]);
 
 describe('TOOL_DEFINITIONS — shape', () => {
   it('exposes the expected number of tools', () => {

@@ -18,6 +18,8 @@ import { buildContextString, readProjectContext } from './context/reader.js';
 import { TOOL_DEFINITIONS } from './tools/definitions.js';
 import { log, errMsg } from './log.js';
 import { readGitDiff, runTripleScan, handleAgenticWorker } from './server/scan-core.js';
+import type { HandlerMap } from './server/registry.js';
+import { workerHandlers } from './server/handlers/workers.js';
 import {
   saveSession, restoreSession, listSessions, closeSession, getDbPath, saveCouncilOutcome,
   storeKnowledge, searchKnowledge, deleteKnowledge,
@@ -222,7 +224,13 @@ async function buildTaskPlan(description: string, project_dir?: string, max_task
   return parsePrdIntoTasks(description, result.plan!, max_tasks);
 }
 
-// ─── Shared Scan Utility ──────────────────────────────────────────────────────
+// ─── Tool handler registry ────────────────────────────────────────────────────
+// Migrated, per-domain handlers live in src/server/handlers/*. Anything not yet
+// in the registry falls through to the switch below. Both paths share the
+// dispatch wrapper (trace logging, error handling) untouched.
+const TOOL_REGISTRY: HandlerMap = {
+  ...workerHandlers,
+};
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
@@ -232,6 +240,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     const response = await (async () => {
+      const registered = TOOL_REGISTRY[name];
+      if (registered) return await registered({ request, args: request.params.arguments || {} });
       switch (name) {
     case 'veto_status': {
       const args = (request.params.arguments || {}) as any;
@@ -711,10 +721,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return await handleAgenticWorker('veto_agent_plan', args, agentType, task);
     }
 
-    case 'veto_code_review': {
-      const args = (request.params.arguments || {}) as any;
-      return await handleAgenticWorker('veto_code_review', args, 'reviewer', 'Review the following code.');
-    }
 
     case 'veto_diff_review': {
       const args = (request.params.arguments || {}) as any;
@@ -794,15 +800,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    case 'veto_security_scan': {
-      const args = (request.params.arguments || {}) as any;
-      return await handleAgenticWorker('veto_security_scan', args, 'security-scanner', 'Scan the following code for vulnerabilities.');
-    }
 
-    case 'veto_secrets_scan': {
-      const args = (request.params.arguments || {}) as any;
-      return await handleAgenticWorker('veto_secrets_scan', args, 'secrets', 'Scan for exposed secrets.');
-    }
 
     case 'veto_execute_parallel': {
       const args = (request.params.arguments || {}) as any;
@@ -1288,10 +1286,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
 
-    case 'veto_explain': {
-      const args = (request.params.arguments || {}) as any;
-      return await handleAgenticWorker('veto_explain', args as any, args?.file_path ? 'coder' : 'debugger' as any, String(args?.text || 'Explain this.'));
-    }
 
     case 'veto_plugins': {
       const args = (request.params.arguments || {}) as any;
@@ -1669,10 +1663,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: 'text', text: JSON.stringify(discoverPayload, null, 2) }] };
     }
 
-    case 'veto_summarize': {
-      const args = (request.params.arguments || {}) as any;
-      return await handleAgenticWorker('veto_summarize', args, 'documentation', 'Summarize this project/file.');
-    }
 
     case 'veto_benchmark': {
       const args = (request.params.arguments || {}) as any;
@@ -2754,15 +2744,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }, null, 2) }] };
     }
 
-    case 'veto_type_coverage': {
-      const args = (request.params.arguments || {}) as any;
-      return await handleAgenticWorker('veto_type_coverage', args, 'reviewer', 'Analyze TypeScript type coverage and suggest improvements.');
-    }
 
-    case 'veto_test_gaps': {
-      const args = (request.params.arguments || {}) as any;
-      return await handleAgenticWorker('veto_test_gaps', args, 'tester', 'Identify untested paths and suggest test cases.');
-    }
 
     case 'veto_onboard': {
       const args = (request.params.arguments || {}) as any;
@@ -3155,26 +3137,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const findings = await detectClones({ project_dir: projectDir, extensions, min_lines: minLines });
       return { content: [{ type: 'text', text: JSON.stringify({ success: true, clones_found: findings.length, findings }, null, 2) }] };
     }
-    case 'veto_lint_rules': {
-      const args = (request.params.arguments || {}) as any;
-      return await handleAgenticWorker('veto_lint_rules', args, 'reviewer', 'Analyze and generate lint rules.');
-    }
-    case 'veto_api_contract': {
-      const args = (request.params.arguments || {}) as any;
-      return await handleAgenticWorker('veto_api_contract', args, 'api', 'Analyze or generate API contracts.');
-    }
-    case 'veto_merge_conflict': {
-      const args = (request.params.arguments || {}) as any;
-      return await handleAgenticWorker('veto_merge_conflict', args, 'debugger', 'Resolve git merge conflicts.');
-    }
-    case 'veto_translate': {
-      const args = (request.params.arguments || {}) as any;
-      return await handleAgenticWorker('veto_translate', args, 'documentation', 'Translate text.');
-    }
-    case 'veto_a11y_advisor': {
-      const args = (request.params.arguments || {}) as any;
-      return await handleAgenticWorker('veto_a11y_advisor', args, 'accessibility' as any, 'Analyze accessibility.');
-    }
     case 'veto_session_replay': {
       const args = (request.params.arguments || {}) as any;
       const sessionId = String(args?.session_id ?? '').trim();
@@ -3190,18 +3152,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     // ── Phase 8: Long-Horizon ─────────────────────────────────────────────────
-    case 'veto_semantic_search': {
-      const args = (request.params.arguments || {}) as any;
-      return await handleAgenticWorker('veto_semantic_search', args, 'search-agent' as any, 'Perform semantic search.');
-    }
-    case 'veto_sdd_agent': {
-      const args = (request.params.arguments || {}) as any;
-      return await handleAgenticWorker('veto_sdd_agent', args, 'task-planner', 'Execute SDD actions.');
-    }
-    case 'veto_playwright': {
-      const args = (request.params.arguments || {}) as any;
-      return await handleAgenticWorker('veto_playwright', args, 'tester', 'Coordinate Playwright browser session.');
-    }
     case 'veto_notify_ide': {
       const args = (request.params.arguments || {}) as any;
       const { action, path, message, level } = args;
