@@ -54,7 +54,7 @@ import { discoverProject } from './discover.js';
 import { readFileSync, statSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
 import { extname, basename, join, dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execSync as execSyncTop } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -232,7 +232,9 @@ const TOOL_REGISTRY: HandlerMap = {
   ...workerHandlers,
 };
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+// Exported so the dispatch can be unit-tested without connecting stdio. Registered
+// on the server below; tests call callTool() directly with a synthetic request.
+export async function callTool(request: any) {
   const { name, arguments: args } = request.params;
   const callStart = Date.now();
   let resultStatus: 'success' | 'error' = 'success';
@@ -3198,7 +3200,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
   }
-});
+}
+
+server.setRequestHandler(CallToolRequestSchema, callTool);
 
 // ─── MCP Resources ─────────────────────────────────────────────────────────────
 
@@ -3600,7 +3604,12 @@ async function main() {
   process.stderr.write(`Veto MCP server v${VERSION} running (stdio)\n`);
 }
 
-main().catch((err) => {
-  log.error('fatal: server failed to start', { error: errMsg(err) });
-  process.exit(1);
-});
+// Only connect stdio when run as the entrypoint — importing this module (e.g. in
+// tests) registers handlers without starting the transport.
+const isEntrypoint = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isEntrypoint) {
+  main().catch((err) => {
+    log.error('fatal: server failed to start', { error: errMsg(err) });
+    process.exit(1);
+  });
+}
