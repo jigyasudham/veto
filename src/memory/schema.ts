@@ -110,6 +110,7 @@ export const CREATE_TABLES = `
     platform      TEXT NOT NULL,
     date_key      TEXT NOT NULL,
     request_count INTEGER DEFAULT 0,
+    token_count   INTEGER DEFAULT 0,
     updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(platform, date_key)
   );
