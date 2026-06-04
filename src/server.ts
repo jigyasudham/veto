@@ -222,6 +222,24 @@ async function buildTaskPlan(description: string, project_dir?: string, max_task
 
 // ─── Shared Scan Utility ──────────────────────────────────────────────────────
 
+/**
+ * Reads a git diff for the review tools. Default: working-tree vs HEAD, falling
+ * back to staged changes. With stagedOnly=true (pre-commit / commit-message
+ * semantics) it returns staged changes only. Returns '' on any failure or when
+ * there are no changes — callers decide how to report "nothing to review".
+ */
+function readGitDiff(projectDir: string | undefined, stagedOnly = false): string {
+  if (!projectDir) return '';
+  const run = (cmd: string) => execSyncTop(cmd, { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+  try {
+    if (stagedOnly) return run('git diff --cached --no-color');
+    const head = run('git diff HEAD --no-color');
+    return head || run('git diff --cached --no-color');
+  } catch {
+    return '';
+  }
+}
+
 async function runTripleScan(diff: string, context: string, llm_backed = true, agent_outputs?: Record<string, unknown>) {
   const tasks: AgentTask[] = [
     { id: 'scan-review',  agent: 'reviewer',         task: 'Review this git diff for code quality issues', code: diff, context, llm_backed },
@@ -263,11 +281,15 @@ async function handleAgenticWorker(name: string, args: any, agentType: WorkerAge
   if (llmResponse && typeof llmResponse === 'object') {
     const results = parseAgenticAgentResponses([task], { [task.id]: llmResponse });
     const r = results[0];
-    return { content: [{ type: 'text', text: JSON.stringify(r.analysis || r.plan || r.output, null, 2) }] };
+    const payload = r.analysis || r.plan || r.output;
+    return { content: [{ type: 'text', text: JSON.stringify({ mode: 'agentic_fallback', llm_backed: true, ...payload }, null, 2) }] };
   }
   try {
     const result = await executeOne(task);
-    if (result.llm_backed && !result.error) return { content: [{ type: 'text', text: JSON.stringify(result.analysis || result.plan || result.output, null, 2) }] };
+    if (result.llm_backed && !result.error) {
+      const payload = result.analysis || result.plan || result.output;
+      return { content: [{ type: 'text', text: JSON.stringify({ mode: 'sampling', llm_backed: true, ...payload }, null, 2) }] };
+    }
   } catch { /* fallback */ }
 
   const prompt = buildAgenticAgentPrompt(task);
@@ -774,18 +796,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // Resolve diff — use provided or read from git
       let diff = args?.diff ? String(args.diff).trim() : '';
-      if (!diff && projectDir) {
-        try {
-          diff = execSyncTop('git diff HEAD --no-color', {
-            cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'],
-          }).toString().trim();
-          if (!diff) {
-            diff = execSyncTop('git diff --cached --no-color', {
-              cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'],
-            }).toString().trim();
-          }
-        } catch { /* not a git repo or no changes */ }
-      }
+      if (!diff) diff = readGitDiff(projectDir);
 
       if (!diff) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No diff provided and no git changes detected. Pass diff or point to a project_dir with uncommitted changes.' }) }], isError: true };
@@ -1938,12 +1949,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const userContext = args?.context ? String(args.context) : undefined;
 
       let diff = args?.diff ? String(args.diff).trim() : '';
-      if (!diff && projectDir) {
-        try {
-          diff = execSyncTop('git diff HEAD --no-color', { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
-          if (!diff) diff = execSyncTop('git diff --cached --no-color', { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
-        } catch { /* ignore */ }
-      }
+      if (!diff) diff = readGitDiff(projectDir);
       if (!diff) return { content: [{ type: 'text', text: 'No diff provided and git diff failed. Provide a diff or project_dir.' }], isError: true };
 
       const changedFiles = [...diff.matchAll(/^diff --git a\/.+ b\/(.+)$/gm)].map(m => m[1]);
@@ -2000,10 +2006,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       if (!projectDir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
 
-      let diff = '';
-      try {
-        diff = execSyncTop('git diff --cached --no-color', { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
-      } catch { /* not a git repo */ }
+      const diff = readGitDiff(projectDir, true);
       if (!diff) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No staged changes found. Stage files with git add before running veto_pre_commit.' }) }], isError: true };
 
       const context = buildContextString(projectDir, userContext);
@@ -2134,10 +2137,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       if (!projectDir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
 
-      let diff = '';
-      try {
-        diff = execSyncTop('git diff --cached --no-color', { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
-      } catch { /* not a git repo */ }
+      const diff = readGitDiff(projectDir, true);
       if (!diff) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No staged changes. Run git add first.' }) }], isError: true };
 
       const truncatedDiff = diff.slice(0, 6000);
