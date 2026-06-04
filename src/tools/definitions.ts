@@ -589,7 +589,7 @@ export const TOOL_DEFINITIONS = [
   // ── Learning ──────────────────────────────────────────────────────────────────
   {
     name: 'veto_record_outcome',
-    description: 'Records a task outcome (quality score) to feed the self-learning router. Call after completing any task. After 20+ outcomes, call veto_learning_apply to update tier thresholds.',
+    description: 'Records a task outcome (quality score) to feed the self-learning router. Call after completing any task. The router auto-applies learned tier thresholds every 20 recorded outcomes (disable via config auto_apply_learning=false); veto_learning_apply forces an update on demand.',
     inputSchema: {
       type: 'object',
       properties: {

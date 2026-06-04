@@ -1203,9 +1203,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!task_type) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'task_type is required.' }) }], isError: true };
       }
-      recordOutcome(task_type, complexity, model_tier, args?.agent ? String(args.agent) : 'dynamic', output_quality, typeof args?.tokens_used === 'number' ? args.tokens_used : 0, args?.file_ext ? String(args.file_ext) : undefined);
+      const rec = recordOutcome(task_type, complexity, model_tier, args?.agent ? String(args.agent) : 'dynamic', output_quality, typeof args?.tokens_used === 'number' ? args.tokens_used : 0, args?.file_ext ? String(args.file_ext) : undefined);
       const stats = getLearningStats();
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Outcome recorded.', total_outcomes: stats.total_tasks, next_step: stats.total_tasks >= 20 ? 'You have 20+ outcomes. Call veto_learning_apply to update router thresholds.' : `Need ${20 - stats.total_tasks} more outcomes before veto_learning_apply can adjust thresholds.` }, null, 2) }] };
+      const nextStep = rec.auto_applied
+        ? `Router thresholds auto-updated from ${rec.total} recorded outcomes.`
+        : stats.total_tasks >= 20
+          ? 'Thresholds auto-apply every 20 outcomes; call veto_learning_apply to force an update now.'
+          : `${20 - stats.total_tasks} more outcome(s) until the router auto-applies learned thresholds.`;
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Outcome recorded.', total_outcomes: stats.total_tasks, auto_applied: rec.auto_applied, next_step: nextStep }, null, 2) }] };
     }
 
     case 'veto_learning_stats': {
@@ -1226,7 +1231,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           data_points: learned.data_points,
           note: learned.source === 'learned'
             ? `Learned from ${learned.data_points} outcomes.`
-            : 'Using defaults — call veto_learning_apply after 20+ outcomes to update from data.',
+            : 'Using defaults — the router auto-applies learned thresholds every 20 recorded outcomes (or call veto_learning_apply to force it).',
         },
         suggested_thresholds: stats.suggested_thresholds,
         ready_to_apply: stats.total_tasks >= 20,
