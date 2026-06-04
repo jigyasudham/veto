@@ -73,6 +73,46 @@ Every worker agent supports both modes. When multiple agents run, they execute i
 | **DevTools** | `veto_docs_fetch` · `veto_context_status` · `veto_openapi_gen` · `veto_flag_auditor` · `veto_env_setup` · `veto_commit_message` · `veto_pr_description` · `veto_pr_post` · `veto_prompt_optimizer` · `veto_sre_advisor` · `veto_diagram` · `veto_rca` · `veto_translate` · `veto_merge_conflict` |
 | **Plugins** | `veto_plugins` |
 
+## Which tool do I use?
+
+Several tools overlap by design (different granularity or entry point). Quick guide:
+
+**Reviewing code**
+
+| You have… | Use | Note |
+|---|---|---|
+| A snippet or single file in hand | `veto_code_review` | not `veto_diff_review`, which reads a git diff |
+| Uncommitted/changed files (git diff) | `veto_diff_review` | code + security + secrets scans in parallel |
+| To gate a commit (hard-block on secrets) | `veto_pre_commit` | tuned for commit-time |
+| To gate CI (exit code + pass/warn/fail) | `veto_ci_gate` | for GitHub Actions / GitLab CI |
+| A deeper pre-merge/pre-ship pass (+ quality) | `veto_full_review` | richer than `veto_diff_review` |
+| A GitHub PR by number/URL | `veto_pr_review` | fetches the diff, returns postable comments |
+
+**Remembering things**
+
+| Want to… | Use |
+|---|---|
+| Save/recall a solution, decision, or reference | `veto_memory_store` / `veto_memory_search` |
+| Track a recurring code convention | `veto_pattern_store` / `veto_patterns_list` |
+| Navigate the codebase without scanning the filesystem | `veto_project_map_get` (refresh via `veto_project_map_update`) |
+
+**Running multi-step work**
+
+| Want to… | Use |
+|---|---|
+| Run several agents at once on one task | `veto_execute_parallel` |
+| Run a sequential pipeline with pass/fail gates | `veto_workflow` |
+| Turn a PRD / plain English into a task DAG | `veto_task_parse` (feeds `veto_workflow`) |
+| Plan a new feature end-to-end (council → plan → tasks) | `veto_new_feature` |
+
+**Sessions**
+
+| Want to… | Use |
+|---|---|
+| Resume work with full saved context | `veto_session_restore` (or `veto_continue` for the latest) |
+| See the event / tool-call timeline of a session | `veto_session_replay` |
+| Move work to another AI tool | `veto_handoff` → `veto_continue` |
+
 ## MCP Resources
 
 | URI | What it returns |

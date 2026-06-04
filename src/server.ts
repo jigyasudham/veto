@@ -271,7 +271,7 @@ async function handleAgenticWorker(name: string, args: any, agentType: WorkerAge
   } catch { /* fallback */ }
 
   const prompt = buildAgenticAgentPrompt(task);
-  return { content: [{ type: 'text', text: JSON.stringify({ llm_backed: false, llm_upgrade: { available: true, instruction: `Reason as the ${agentType} specialist and return the JSON response in the agent_response field.`, prompt } }, null, 2) }] };
+  return { content: [{ type: 'text', text: JSON.stringify({ mode: 'agentic_fallback', llm_backed: false, llm_upgrade: { available: true, instruction: `MCP Sampling is unavailable on this client. Reason as the ${agentType} specialist, produce the output yourself, then call this tool again with your JSON in the agent_response field.`, prompt } }, null, 2) }] };
 }
 
 
