@@ -6,6 +6,7 @@ import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { getManifestEntry } from './manifest.js';
 import type { AgentTask, AgentResult, AgentPlan, AgentAnalysis, WorkerAgentType, AgentOutput } from './types.js';
 import { validateAgentPlan, validateAgentAnalysis } from './validate.js';
+import { log, errMsg } from '../log.js';
 
 // ─── System prompt builders ───────────────────────────────────────────────────
 
@@ -171,7 +172,10 @@ export async function runAgentLlm(
       const plan = parsePlanResponse(responseText, task.agent, task.task);
       return plan ? { plan } : null;
     }
-  } catch {
+  } catch (err) {
+    // Sampling unavailable/failed is an expected path (host may not support it) —
+    // log at debug and let the caller fall back to the agentic prompt.
+    log.debug('mcp sampling failed; falling back', { agent: task.agent, error: errMsg(err) });
     return null;
   }
 }

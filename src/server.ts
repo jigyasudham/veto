@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Veto MCP Server — 49 tools, 23 phases complete, LLM council + auto-learning router
+// Veto MCP Server — 89 tools, LLM council + auto-learning router
 
 // Suppress node:sqlite experimental warning — it would corrupt the MCP stdio protocol
 process.removeAllListeners('warning');
@@ -16,6 +16,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { buildContextString, readProjectContext } from './context/reader.js';
 import { TOOL_DEFINITIONS } from './tools/definitions.js';
+import { log, errMsg } from './log.js';
 import {
   saveSession, restoreSession, listSessions, closeSession, getDbPath, saveCouncilOutcome,
   storeKnowledge, searchKnowledge, deleteKnowledge,
@@ -3295,11 +3296,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (response && typeof response === 'object' && 'isError' in response && (response as any).isError) {
       resultStatus = 'error';
       errorMessage = (response as any).content?.[0]?.text || 'Unknown MCP error';
+      log.warn('tool returned an error result', { tool: name, error: errorMessage });
     }
     return response;
   } catch (err: any) {
     resultStatus = 'error';
-    errorMessage = err.message;
+    errorMessage = errMsg(err);
+    log.error('tool call threw', { tool: name, error: errorMessage });
     throw err;
   } finally {
     const duration_ms = Date.now() - callStart;
@@ -3315,7 +3318,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           duration_ms,
         });
       } catch (logErr) {
-        process.stderr.write(`Failed to record tool call trace: ${logErr instanceof Error ? logErr.message : String(logErr)}\n`);
+        log.warn('failed to record tool call trace', { tool: name, error: errMsg(logErr) });
       }
     }
   }
@@ -3722,6 +3725,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  process.stderr.write(`Fatal: ${err.message}\n`);
+  log.error('fatal: server failed to start', { error: errMsg(err) });
   process.exit(1);
 });

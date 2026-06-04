@@ -4,6 +4,7 @@ import { buildContextString } from '../context/reader.js';
 import { getPlugin, isPlugin } from '../plugins/loader.js';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { runAgentLlm, buildAgenticAgentPrompt } from './llm-runner.js';
+import { log, errMsg } from '../log.js';
 
 // Set once at server startup — enables LLM-backed execution for all agents.
 // When null, all agents run deterministically (always available, zero tokens).
@@ -237,12 +238,13 @@ export async function executeOne(task: AgentTask): Promise<AgentResult> {
       };
     }
   } catch (err) {
+    log.warn('agent execution failed', { agent: task.agent, task_id: task.id, error: errMsg(err) });
     return {
       id: task.id,
       agent: task.agent,
       output: { confidence: 0, severity: 'info', recommendation: '', affected_files: [], line_refs: [] },
       duration_ms: Date.now() - start,
-      error: err instanceof Error ? err.message : String(err),
+      error: errMsg(err),
     };
   }
 }
