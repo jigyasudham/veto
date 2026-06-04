@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { version: VERSION } = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
-const TAGLINE = '89 tools. 50+ specialists. 4 AIs. Self-learning. Zero extra cost on subscriptions.';
+const TAGLINE = '89 tools. 49 specialists. 4 AIs. Self-learning. Zero extra cost on subscriptions.';
 const VETO_DIR = join(homedir(), '.veto');
 const HOME = homedir();
 
@@ -867,7 +867,7 @@ async function patternsCommand() {
 
 function shortHelpCommand() {
   console.log('');
-  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(` — 89 agentic tools. 50+ specialists. Zero extra cost on subscriptions.`));
+  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(` — 89 agentic tools. 49 specialists. Zero extra cost on subscriptions.`));
   console.log('');
   console.log(c.bold('  CLI Commands'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
