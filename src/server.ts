@@ -21,6 +21,10 @@ import { readGitDiff, runTripleScan, handleAgenticWorker } from './server/scan-c
 import type { HandlerMap } from './server/registry.js';
 import { workerHandlers } from './server/handlers/workers.js';
 import {
+  getActiveProjectDir, setActiveProjectDir, serverHealth,
+  autoSave, maybeAutoSave, autoStoreCritical, parsePrdIntoTasks, buildTaskPlan,
+} from './server/runtime.js';
+import {
   saveSession, restoreSession, listSessions, closeSession, getDbPath, saveCouncilOutcome,
   storeKnowledge, searchKnowledge, deleteKnowledge,
   updateProjectMap, getProjectMap,
@@ -59,42 +63,6 @@ import { execSync as execSyncTop } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { version: VERSION } = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
-
-let activeProjectDir: string | null = null;
-const SERVER_START_TIME = Date.now();
-let serverErrorCount = 0;
-let lastServerError: string | null = null;
-
-interface AutoSaveCache {
-  summary: string;
-  context: string;
-  task_state?: string;
-  platform: string;
-  project_dir?: string;
-  context_window?: number;
-}
-const autoSave = {
-  threshold_pct: 70,
-  cooldown_ms: 5 * 60 * 1000,
-  last_save_at: null as string | null,
-  last_session_id: null as string | null,
-  cached: null as AutoSaveCache | null,
-};
-
-function maybeAutoSave(token_count: number, platform: string, model?: string): { triggered: boolean; session_id?: string; usage_pct?: number } {
-  if (!autoSave.cached) return { triggered: false };
-  const window_size = autoSave.cached.context_window ?? resolveContextWindow(platform, model);
-  const usage_pct = Math.round((token_count / window_size) * 100);
-  if (usage_pct < autoSave.threshold_pct) return { triggered: false };
-  if (autoSave.last_save_at) {
-    const elapsed = Date.now() - new Date(autoSave.last_save_at).getTime();
-    if (elapsed < autoSave.cooldown_ms) return { triggered: false };
-  }
-  const result = saveSession({ ...autoSave.cached, token_count, platform, save_type: 'auto' });
-  autoSave.last_save_at = result.saved_at;
-  autoSave.last_session_id = result.session_id;
-  return { triggered: true, session_id: result.session_id, usage_pct };
-}
 
 const server = new Server({ name: 'veto', version: VERSION }, { capabilities: { tools: {}, resources: {}, prompts: {} } });
 
@@ -190,39 +158,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   return { tools: tools.map(t => ({ ...t, annotations: TOOL_ANNOTATIONS[t.name] ?? {} })) };
 });
 
-function parsePrdIntoTasks(prd: string, plan: AgentPlan, maxTasks: number) {
-  const lines = plan.steps;
-  const tasks = lines.slice(0, maxTasks).map((line, i) => ({
-    id: `task-${i + 1}`,
-    agent: 'coder' as const,
-    task: line,
-    dependencies: i > 0 ? [`task-${i}`] : [],
-  }));
-  return { description: prd, tasks };
-}
-
-
-function autoStoreCritical(title: string, issues: string[], projectDir?: string, tags: string[] = []) {
-  storeKnowledge({
-    type: 'error',
-    title,
-    content: issues.join('\n'),
-    tags: ['critical', 'failure', ...tags],
-    project_dir: projectDir,
-    relevance: 1.0,
-  });
-}
-
-
-async function buildTaskPlan(description: string, project_dir?: string, max_tasks = 10) {
-  const result = await executeOne({
-    id: 'planner-1',
-    agent: 'task-planner',
-    task: description,
-    project_dir,
-  });
-  return parsePrdIntoTasks(description, result.plan!, max_tasks);
-}
 
 // ─── Tool handler registry ────────────────────────────────────────────────────
 // Migrated, per-domain handlers live in src/server/handlers/*. Anything not yet
@@ -326,7 +261,7 @@ export async function callTool(request: any) {
     case 'veto_session_save': {
       const args = (request.params.arguments || {}) as any;
       const sessionProjectDir = args?.project_dir ? String(args.project_dir) : undefined;
-      if (sessionProjectDir) activeProjectDir = sessionProjectDir;
+      if (sessionProjectDir) setActiveProjectDir(sessionProjectDir);
       const savePlatform = args?.platform ? String(args.platform) : 'claude';
       const shouldAutoSummarize = args?.auto_summarize === true;
 
@@ -461,7 +396,7 @@ export async function callTool(request: any) {
       }
 
       const s = result.session!;
-      if (s.project_dir) activeProjectDir = s.project_dir;
+      if (s.project_dir) setActiveProjectDir(s.project_dir);
 
       const parsedTaskState = s.task_state ? (() => { try { return JSON.parse(s.task_state!); } catch { return s.task_state; } })() : null;
       const nextAction = (typeof parsedTaskState === 'object' && parsedTaskState !== null)
@@ -911,7 +846,7 @@ export async function callTool(request: any) {
         content,
         type: args?.type ? String(args.type) as import('./memory/schema.js').KnowledgeType : 'solution',
         tags: Array.isArray(args?.tags) ? args.tags.map(String) : undefined,
-        project_dir: args?.project_dir ? String(args.project_dir) : (activeProjectDir ?? undefined),
+        project_dir: args?.project_dir ? String(args.project_dir) : (getActiveProjectDir() ?? undefined),
         session_id: args?.session_id ? String(args.session_id) : undefined,
         relevance: typeof args?.relevance === 'number' ? args.relevance : 1.0,
       });
@@ -923,7 +858,7 @@ export async function callTool(request: any) {
       const results = searchKnowledge({
         query: args?.query ? String(args.query) : undefined,
         type: args?.type ? String(args.type) as import('./memory/schema.js').KnowledgeType : undefined,
-        project_dir: args?.project_dir ? String(args.project_dir) : (activeProjectDir ?? undefined),
+        project_dir: args?.project_dir ? String(args.project_dir) : (getActiveProjectDir() ?? undefined),
         limit: typeof args?.limit === 'number' ? args.limit : 10,
       });
       return {
@@ -1087,7 +1022,7 @@ export async function callTool(request: any) {
       autoSave.last_save_at = result.saved_at;
       autoSave.last_session_id = result.session_id;
       // Close the current session so ended_at is recorded
-      if (activeProjectDir) {
+      if (getActiveProjectDir()) {
         const sessions = listSessions(1);
         if (sessions[0] && sessions[0].id !== result.session_id) closeSession(sessions[0].id);
       }
@@ -1101,7 +1036,7 @@ export async function callTool(request: any) {
       if (!result.found) {
         return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: result.message }, null, 2) }], isError: true };
       }
-      if (result.project_dir) activeProjectDir = result.project_dir;
+      if (result.project_dir) setActiveProjectDir(result.project_dir);
       return {
         content: [{
           type: 'text',
@@ -1439,13 +1374,13 @@ export async function callTool(request: any) {
           text: JSON.stringify({
             success: true,
             version: VERSION,
-            status: serverErrorCount > 10 ? 'degraded' : 'healthy',
-            uptime_seconds: Math.round((Date.now() - SERVER_START_TIME) / 1000),
+            status: serverHealth.errorCount > 10 ? 'degraded' : 'healthy',
+            uptime_seconds: Math.round((Date.now() - serverHealth.startTime) / 1000),
             db_path: getDbPath(),
             db_size_bytes,
             db_size_human,
-            error_count_since_start: serverErrorCount,
-            last_error: lastServerError,
+            error_count_since_start: serverHealth.errorCount,
+            last_error: serverHealth.lastError,
             context_windows: CONTEXT_WINDOWS,
             ...stats,
           }, null, 2),
@@ -1810,7 +1745,7 @@ export async function callTool(request: any) {
 
     case 'veto_changelog': {
       const args = (request.params.arguments || {}) as any;
-      const changelogDir = args?.project_dir ? String(args.project_dir).trim() : activeProjectDir ?? process.cwd();
+      const changelogDir = args?.project_dir ? String(args.project_dir).trim() : getActiveProjectDir() ?? process.cwd();
       const maxEntries   = typeof args?.max_entries === 'number' ? Math.min(args.max_entries, 200) : 50;
 
       const resolvedDir = resolve(changelogDir);
