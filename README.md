@@ -345,6 +345,37 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 
 ---
 
+## Project Structure
+
+Veto is a single MCP server (`src/server.ts`) that registers 89 tools, MCP Resources, and Prompts, then dispatches every tool call through a per-domain **handler registry** — there is no monolithic switch. Each domain owns a `HandlerMap` module under `src/server/handlers/`:
+
+| Module | Tools | Domain |
+|---|---|---|
+| `workers.ts` | 15 | single-agent worker delegations (code_review, security_scan, explain, …) |
+| `generators.ts` | 11 | single-agent artifact generators (adr, diagram, rca, doc_gen, onboard, …) |
+| `memory.ts` | 9 | knowledge base, patterns, project map |
+| `observability.ts` | 7 | health, metrics, usage, audit, context/rate status |
+| `advisors.ts` | 7 | project scanners (dep, query, bundle, dead-code, flag, openapi, HITL) |
+| `session.ts` | 6 | save · restore · list · handoff · continue · replay |
+| `review.ts` | 5 | diff · ci · pr · full review + pre-commit pipelines |
+| `git.ts` | 5 | blame · changelog · commit message · PR description/post |
+| `core.ts` | 5 | status · routing · platform setup · docs fetch · discover |
+| `agents.ts` | 5 | agent_plan · execute_parallel · delegate · workflow · task_parse |
+| `devtools.ts` | 5 | plugins · local LLM · clone detector · compose · notify IDE |
+| `council.ts` | 3 | council_debate · benchmark · new_feature |
+| `learning.ts` | 3 | record_outcome · learning_stats · learning_apply |
+| `watch.ts` | 3 | watch · poll · stop |
+
+Shared, independently testable internals live in `src/server/`:
+
+- `registry.ts` — the `ToolContext` (`{ request, args, server }`) and `HandlerMap` types
+- `runtime.ts` — shared mutable state (active project dir, auto-save, server health, `VERSION`)
+- `scan-core.ts` — git-diff reader, triple-scan, and the agentic worker loop (unit-tested)
+
+Every handler module is importable in isolation, so behaviour is covered by `tests/server/dispatch.test.ts` (the `callTool` behavioral net) and `tests/tools/definitions.test.ts` (the 89-tool registry-coverage check).
+
+---
+
 ## Tech Stack
 
 - **Language:** TypeScript (strict mode)
