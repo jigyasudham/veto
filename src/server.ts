@@ -23,6 +23,7 @@ import { workerHandlers } from './server/handlers/workers.js';
 import { memoryHandlers } from './server/handlers/memory.js';
 import { observabilityHandlers } from './server/handlers/observability.js';
 import { sessionHandlers } from './server/handlers/session.js';
+import { learningHandlers } from './server/handlers/learning.js';
 import {
   VERSION, getActiveProjectDir, setActiveProjectDir, serverHealth,
   autoSave, maybeAutoSave, autoStoreCritical, parsePrdIntoTasks, buildTaskPlan,
@@ -44,7 +45,7 @@ import { buildRepoMap, repoMapToCompact } from './repo-map/index.js';
 import { runDebate } from './council/index.js';
 import { runLlmDebate, buildAgenticDebatePrompt, parseAgentResponses, runFromAgentResponses } from './council/llm-council.js';
 import { autoSummarizeSession } from './council/session-summarizer.js';
-import { routeTask, getRateStatus, trackTokens, recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds, getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights, getRecommendedAgent } from './router/index.js';
+import { routeTask, getRateStatus, trackTokens, recordOutcome, getRecommendedAgent } from './router/index.js';
 import { getConfig, setConfig } from './memory/config.js';
 import type { AgentType, Platform } from './router/index.js';
 import { executeParallel, executeOne, initLlmRunner } from './agents/executor.js';
@@ -168,6 +169,7 @@ const TOOL_REGISTRY: HandlerMap = {
   ...memoryHandlers,
   ...observabilityHandlers,
   ...sessionHandlers,
+  ...learningHandlers,
 };
 
 // Exported so the dispatch can be unit-tested without connecting stdio. Registered
@@ -608,69 +610,6 @@ export async function callTool(request: any) {
       const setup = getPlatformSetup(platform, vetoServerPath);
       return { content: [{ type: 'text', text: JSON.stringify(setup, null, 2) }] };
     }
-
-    case 'veto_record_outcome': {
-      const args = (request.params.arguments || {}) as any;
-      const task_type = String(args?.task_type ?? '').trim();
-      const complexity = typeof args?.complexity === 'number' ? args.complexity : 50;
-      const model_tier = (typeof args?.model_tier === 'number' ? args.model_tier : 2) as 1 | 2 | 3;
-      const output_quality = typeof args?.output_quality === 'number' ? args.output_quality : 70;
-      if (!task_type) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'task_type is required.' }) }], isError: true };
-      }
-      const rec = recordOutcome(task_type, complexity, model_tier, args?.agent ? String(args.agent) : 'dynamic', output_quality, typeof args?.tokens_used === 'number' ? args.tokens_used : 0, args?.file_ext ? String(args.file_ext) : undefined);
-      const stats = getLearningStats();
-      const nextStep = rec.auto_applied
-        ? `Router thresholds auto-updated from ${rec.total} recorded outcomes.`
-        : stats.total_tasks >= 20
-          ? 'Thresholds auto-apply every 20 outcomes; call veto_learning_apply to force an update now.'
-          : `${20 - stats.total_tasks} more outcome(s) until the router auto-applies learned thresholds.`;
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Outcome recorded.', total_outcomes: stats.total_tasks, auto_applied: rec.auto_applied, next_step: nextStep }, null, 2) }] };
-    }
-
-    case 'veto_learning_stats': {
-      const args = (request.params.arguments || {}) as any;
-      const includeAgentStats = args?.include_agent_stats !== false;
-      const includeTaskTypes = args?.include_task_types === true;
-      const includeCouncil = args?.include_council_insights === true;
-
-      const stats = getLearningStats();
-      const learned = getLearnedThresholds();
-      const result: Record<string, unknown> = {
-        total_outcomes: stats.total_tasks,
-        tier_breakdown: stats.tier_breakdown,
-        current_thresholds: {
-          tier1_max: learned.tier1_max,
-          tier2_max: learned.tier2_max,
-          source: learned.source,
-          data_points: learned.data_points,
-          note: learned.source === 'learned'
-            ? `Learned from ${learned.data_points} outcomes.`
-            : 'Using defaults — the router auto-applies learned thresholds every 20 recorded outcomes (or call veto_learning_apply to force it).',
-        },
-        suggested_thresholds: stats.suggested_thresholds,
-        ready_to_apply: stats.total_tasks >= 20,
-      };
-
-      if (includeAgentStats) {
-        result['agent_performance'] = getAgentPerformanceStats();
-      }
-      if (includeTaskTypes) {
-        result['task_type_breakdown'] = getTaskTypeBreakdown();
-      }
-      if (includeCouncil) {
-        result['council_insights'] = getCouncilInsights();
-      }
-
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-    }
-
-    case 'veto_learning_apply': {
-      const args = (request.params.arguments || {}) as any;
-      const result = applyLearnedThresholds();
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-    }
-
 
     case 'veto_watch': {
       const args = (request.params.arguments || {}) as any;
