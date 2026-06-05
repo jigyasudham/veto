@@ -25,6 +25,7 @@ import { observabilityHandlers } from './server/handlers/observability.js';
 import { sessionHandlers } from './server/handlers/session.js';
 import { learningHandlers } from './server/handlers/learning.js';
 import { watchHandlers } from './server/handlers/watch.js';
+import { devtoolsHandlers } from './server/handlers/devtools.js';
 import {
   VERSION, getActiveProjectDir, setActiveProjectDir, serverHealth,
   autoSave, maybeAutoSave, autoStoreCritical, parsePrdIntoTasks, buildTaskPlan,
@@ -56,7 +57,7 @@ import { handoff, continueSession, getPlatformSetup } from './adapters/index.js'
 import type { SetupPlatform } from './adapters/index.js';
 import { runPipeline } from './workflow/pipeline.js';
 import type { PipelineStep } from './workflow/pipeline.js';
-import { loadPlugins, listPlugins } from './plugins/loader.js';
+import { loadPlugins } from './plugins/loader.js';
 import { fetchPrDiff } from './github/pr-fetcher.js';
 import { discoverProject } from './discover.js';
 import { readFileSync, statSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
@@ -171,6 +172,7 @@ const TOOL_REGISTRY: HandlerMap = {
   ...sessionHandlers,
   ...learningHandlers,
   ...watchHandlers,
+  ...devtoolsHandlers,
 };
 
 // Exported so the dispatch can be unit-tested without connecting stdio. Registered
@@ -655,11 +657,6 @@ export async function callTool(request: any) {
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
 
-
-    case 'veto_plugins': {
-      const args = (request.params.arguments || {}) as any;
-      return { content: [{ type: 'text', text: JSON.stringify({ plugins: listPlugins(), plugin_dir: `${process.env.HOME ?? process.env.USERPROFILE}/.veto/agents/`, instructions: 'Drop a .js file exporting plan(task, context?) to register a custom agent.' }, null, 2) }] };
-    }
 
     // ── Phase 13: Developer Intelligence ──────────────────────────────────────
 
@@ -2387,43 +2384,6 @@ export async function callTool(request: any) {
     }
 
     // ── Phase 7: Intelligence & Advanced ──────────────────────────────────────
-    case 'veto_local_llm': {
-      const args = (request.params.arguments || {}) as any;
-      const { task, model, provider } = args;
-      const { callLocalLlm } = await import('./agents/local-llm.js');
-      const result = await callLocalLlm({ task: String(task), model: model ? String(model) : undefined, provider: provider as any });
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-    }
-    case 'veto_clone_detector': {
-      const args = (request.params.arguments || {}) as any;
-      const projectDir = String(args?.project_dir ?? '').trim();
-      const extensions = Array.isArray(args?.extensions) ? args.extensions.map(String) : undefined;
-      const minLines = typeof args?.min_lines === 'number' ? args.min_lines : undefined;
-      const { detectClones } = await import('./agents/quality/clone-detector.js');
-      const findings = await detectClones({ project_dir: projectDir, extensions, min_lines: minLines });
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, clones_found: findings.length, findings }, null, 2) }] };
-    }
-    case 'veto_compose_agents': {
-      const args = (request.params.arguments || {}) as any;
-      const { name, agents, workflow } = args;
-      // Register custom meta-agent in memory (Stub persistence, but functional for the current session)
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: `Custom agent ${name} composed and registered.`, definition: { name, base_agents: agents, workflow } }, null, 2) }] };
-    }
-
-    // ── Phase 8: Long-Horizon ─────────────────────────────────────────────────
-    case 'veto_notify_ide': {
-      const args = (request.params.arguments || {}) as any;
-      const { action, path, message, level } = args;
-      // In bidirectional MCP, some clients listen for logging or custom notifications
-      if (action === 'show_message' && message) {
-        await server.sendLoggingMessage({
-          level: level === 'error' ? 'error' : level === 'warning' ? 'warning' : 'info',
-          data: message,
-        });
-      }
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, action, message: `Action ${action} sent to IDE client.` }, null, 2) }] };
-    }
-
     default:          throw new Error(`Unknown tool: ${name}`);
       }
     })();
