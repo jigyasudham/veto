@@ -11,6 +11,8 @@ export interface ToolContext {
   request: any;
   /** request.params.arguments, defaulted to {}. */
   args: any;
+  /** The MCP Server instance — only needed by handlers that use MCP Sampling. */
+  server: any;
 }
 
 // Returns an MCP tool result ({ content: [...] }, optionally isError). Typed as

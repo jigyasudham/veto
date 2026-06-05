@@ -55,6 +55,31 @@ describe('dispatch — learning', () => {
   });
 });
 
+describe('dispatch — session round-trip', () => {
+  it('saves then restores a session by id', async () => {
+    const saved = body(await call('veto_session_save', { summary: 'mid-migration', context: 'registry work', platform: 'claude' }));
+    expect(saved.success).toBe(true);
+    expect(typeof saved.session_id).toBe('string');
+    const restored = body(await call('veto_session_restore', { session_id: saved.session_id }));
+    expect(restored.success).toBe(true);
+    expect(restored.summary).toBe('mid-migration');
+  });
+
+  it('veto_continue restores the most recent session', async () => {
+    await call('veto_session_save', { summary: 'latest one', context: 'ctx', platform: 'claude' });
+    // veto_continue prefixes a human message before the JSON payload, so parse the JSON tail.
+    const res = await call('veto_continue', {});
+    const cont = JSON.parse(res.content[0].text.slice(res.content[0].text.indexOf('{')));
+    expect(cont.summary).toBe('latest one');
+  });
+
+  it('veto_sessions_list returns saved sessions', async () => {
+    await call('veto_session_save', { summary: 'listed', context: 'ctx' });
+    const list = body(await call('veto_sessions_list', {}));
+    expect(list.count).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe('dispatch — migrated worker tools route through the registry', () => {
   it('veto_code_review returns the agentic_fallback envelope', async () => {
     const b = body(await call('veto_code_review', { task: 'review', code: 'const x = 1' }));
