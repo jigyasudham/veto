@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { TOOL_DEFINITIONS } from '../../src/tools/definitions.js';
 import { workerHandlers } from '../../src/server/handlers/workers.js';
 import { memoryHandlers } from '../../src/server/handlers/memory.js';
@@ -12,14 +11,15 @@ import { advisorHandlers } from '../../src/server/handlers/advisors.js';
 import { generatorHandlers } from '../../src/server/handlers/generators.js';
 import { gitHandlers } from '../../src/server/handlers/git.js';
 import { reviewHandlers } from '../../src/server/handlers/review.js';
+import { coreHandlers } from '../../src/server/handlers/core.js';
+import { agentHandlers } from '../../src/server/handlers/agents.js';
+import { councilHandlers } from '../../src/server/handlers/council.js';
 
 // NOTE: src/server.ts calls main() (server.connect over stdio) at import time, so it
-// must never be imported in a test. Tools are handled by one of two paths during the
-// incremental decomposition: migrated handlers in the registry (importable maps) or
-// the remaining switch in server.ts (cross-referenced by reading source as text).
-const serverSource = readFileSync(new URL('../../src/server.ts', import.meta.url), 'utf8');
+// must never be imported in a test. Every tool is now dispatched through the handler
+// registry (the server.ts switch is gone), so coverage is the union of the per-domain
+// handler maps — each new domain module MUST be added here.
 const handledTools = new Set([
-  ...[...serverSource.matchAll(/case '(veto_[a-z0-9_]+)'/g)].map(m => m[1]),
   ...Object.keys(workerHandlers),
   ...Object.keys(memoryHandlers),
   ...Object.keys(observabilityHandlers),
@@ -31,6 +31,9 @@ const handledTools = new Set([
   ...Object.keys(generatorHandlers),
   ...Object.keys(gitHandlers),
   ...Object.keys(reviewHandlers),
+  ...Object.keys(coreHandlers),
+  ...Object.keys(agentHandlers),
+  ...Object.keys(councilHandlers),
 ]);
 
 describe('TOOL_DEFINITIONS — shape', () => {
