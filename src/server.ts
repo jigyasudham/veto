@@ -20,6 +20,7 @@ import { log, errMsg } from './log.js';
 import { readGitDiff, runTripleScan, handleAgenticWorker } from './server/scan-core.js';
 import type { HandlerMap } from './server/registry.js';
 import { workerHandlers } from './server/handlers/workers.js';
+import { memoryHandlers } from './server/handlers/memory.js';
 import {
   getActiveProjectDir, setActiveProjectDir, serverHealth,
   autoSave, maybeAutoSave, autoStoreCritical, parsePrdIntoTasks, buildTaskPlan,
@@ -165,6 +166,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 // dispatch wrapper (trace logging, error handling) untouched.
 const TOOL_REGISTRY: HandlerMap = {
   ...workerHandlers,
+  ...memoryHandlers,
 };
 
 // Exported so the dispatch can be unit-tested without connecting stdio. Registered
@@ -834,169 +836,6 @@ export async function callTool(request: any) {
       };
     }
 
-    case 'veto_memory_store': {
-      const args = (request.params.arguments || {}) as any;
-      const title = String(args?.title ?? '').trim();
-      const content = String(args?.content ?? '').trim();
-      if (!title || !content) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'title and content are required.' }) }], isError: true };
-      }
-      const id = storeKnowledge({
-        title,
-        content,
-        type: args?.type ? String(args.type) as import('./memory/schema.js').KnowledgeType : 'solution',
-        tags: Array.isArray(args?.tags) ? args.tags.map(String) : undefined,
-        project_dir: args?.project_dir ? String(args.project_dir) : (getActiveProjectDir() ?? undefined),
-        session_id: args?.session_id ? String(args.session_id) : undefined,
-        relevance: typeof args?.relevance === 'number' ? args.relevance : 1.0,
-      });
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, id, message: 'Knowledge stored.' }, null, 2) }] };
-    }
-
-    case 'veto_memory_search': {
-      const args = (request.params.arguments || {}) as any;
-      const results = searchKnowledge({
-        query: args?.query ? String(args.query) : undefined,
-        type: args?.type ? String(args.type) as import('./memory/schema.js').KnowledgeType : undefined,
-        project_dir: args?.project_dir ? String(args.project_dir) : (getActiveProjectDir() ?? undefined),
-        limit: typeof args?.limit === 'number' ? args.limit : 10,
-      });
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            count: results.length,
-            results: results.map(r => ({
-              id: r.id,
-              type: r.type,
-              title: r.title,
-              content: r.content,
-              tags: r.tags ? JSON.parse(r.tags) : [],
-              project_dir: r.project_dir,
-              relevance: r.relevance,
-              accessed_count: r.accessed_count,
-              created_at: r.created_at,
-            })),
-          }, null, 2),
-        }],
-      };
-    }
-
-    case 'veto_memory_delete': {
-      const args = (request.params.arguments || {}) as any;
-      const id = String(args?.id ?? '').trim();
-      if (!id) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'id is required.' }) }], isError: true };
-      }
-      const deleted = deleteKnowledge(id);
-      return { content: [{ type: 'text', text: JSON.stringify({ success: deleted, message: deleted ? 'Entry deleted.' : 'Entry not found.' }, null, 2) }] };
-    }
-
-    case 'veto_project_map_update': {
-      const args = (request.params.arguments || {}) as any;
-      const project_dir = String(args?.project_dir ?? '').trim();
-      if (!project_dir) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
-      }
-
-      // auto_compute: build live repo-map instead of requiring manual structure
-      if (args?.auto_compute === true) {
-        try {
-          const computed = buildRepoMap({ projectDir: project_dir, maxTopModules: 30 });
-          const id = updateProjectMap({
-            project_dir,
-            structure: {
-              auto_computed: true,
-              generated_at: computed.generated_at,
-              total_files: computed.total_files,
-              symbol_count: computed.symbol_count,
-              top_modules: computed.top_modules.slice(0, 20).map(m => ({
-                file: m.file, rank: m.rank, refs: m.ref_count,
-                exports: m.symbols.slice(0, 5).map(s => s.name),
-              })),
-            },
-            key_modules: computed.top_modules.slice(0, 15).map(m => m.file),
-          });
-          return { content: [{ type: 'text', text: JSON.stringify({ success: true, id, auto_computed: true, total_files: computed.total_files, symbol_count: computed.symbol_count, top_modules_count: computed.top_modules.length }, null, 2) }] };
-        } catch (err) {
-          return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Repo-map failed: ${err instanceof Error ? err.message : String(err)}` }) }], isError: true };
-        }
-      }
-
-      const structure = String(args?.structure ?? '').trim();
-      if (!structure) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'Provide structure or set auto_compute: true to compute it automatically.' }) }], isError: true };
-      }
-      const id = updateProjectMap({
-        project_dir,
-        structure,
-        key_modules: Array.isArray(args?.key_modules) ? args.key_modules.map(String) : undefined,
-        tech_stack: Array.isArray(args?.tech_stack) ? args.tech_stack.map(String) : undefined,
-      });
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, id, message: 'Project map updated.' }, null, 2) }] };
-    }
-
-    case 'veto_project_map_get': {
-      const args = (request.params.arguments || {}) as any;
-      const project_dir = String(args?.project_dir ?? '').trim();
-      if (!project_dir) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
-      }
-      const row = getProjectMap(project_dir);
-      if (!row) {
-        return { content: [{ type: 'text', text: JSON.stringify({ found: false, message: 'No project map found. Call veto_project_map_update to create one.' }, null, 2) }] };
-      }
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            found: true,
-            project_dir: row.project_dir,
-            structure: JSON.parse(row.structure),
-            key_modules: row.key_modules ? JSON.parse(row.key_modules) : [],
-            tech_stack: row.tech_stack ? JSON.parse(row.tech_stack) : [],
-            updated_at: row.updated_at,
-          }, null, 2),
-        }],
-      };
-    }
-
-    case 'veto_pattern_store': {
-      const args = (request.params.arguments || {}) as any;
-      const pattern_key = String(args?.pattern_key ?? '').trim();
-      const pattern_val = String(args?.pattern_val ?? '').trim();
-      if (!pattern_key || !pattern_val) {
-        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'pattern_key and pattern_val are required.' }) }], isError: true };
-      }
-      upsertPattern({
-        pattern_key,
-        pattern_val,
-        confidence: typeof args?.confidence === 'number' ? args.confidence : 1.0,
-      });
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Pattern stored.' }, null, 2) }] };
-    }
-
-    case 'veto_patterns_list': {
-      const args = (request.params.arguments || {}) as any;
-      const prefix = args?.prefix ? String(args.prefix) : undefined;
-      const limit = typeof args?.limit === 'number' ? args.limit : 20;
-      const patterns = getPatterns(prefix, limit);
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            count: patterns.length,
-            patterns: patterns.map(p => ({
-              key: p.pattern_key,
-              val: p.pattern_val,
-              confidence: p.confidence,
-              seen_count: p.seen_count,
-              updated_at: p.updated_at,
-            })),
-          }, null, 2),
-        }],
-      };
-    }
 
     case 'veto_handoff': {
       const args = (request.params.arguments || {}) as any;
@@ -1129,31 +968,6 @@ export async function callTool(request: any) {
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
 
-    case 'veto_memory_export': {
-      const args = (request.params.arguments || {}) as any;
-      const format = args?.format === 'markdown' ? 'markdown' : 'json';
-      if (format === 'markdown') {
-        const projectDir = args?.project_dir ? String(args.project_dir) : undefined;
-        const outputPath = args?.output_path ? String(args.output_path) : undefined;
-        const result = exportMemoryMarkdown(projectDir, outputPath);
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-      }
-      const result = exportMemory(args?.output_path ? String(args.output_path) : undefined);
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-    }
-
-    case 'veto_memory_import': {
-      const args = (request.params.arguments || {}) as any;
-      const format = args?.format === 'markdown' ? 'markdown' : 'json';
-      if (format === 'markdown') {
-        const inputPath = String(args?.input_path ?? '').trim();
-        if (!inputPath) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'input_path is required for markdown import.' }) }], isError: true };
-        const result = importMemoryMarkdown(inputPath);
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-      }
-      const result = importMemory(args?.input_path ? String(args.input_path) : undefined);
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-    }
 
     case 'veto_watch': {
       const args = (request.params.arguments || {}) as any;
