@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { TOOL_DEFINITIONS } from '../../src/tools/definitions.js';
 import { workerHandlers } from '../../src/server/handlers/workers.js';
 import { memoryHandlers } from '../../src/server/handlers/memory.js';
+import { observabilityHandlers } from '../../src/server/handlers/observability.js';
 
 // NOTE: src/server.ts calls main() (server.connect over stdio) at import time, so it
 // must never be imported in a test. Tools are handled by one of two paths during the
@@ -13,6 +14,7 @@ const handledTools = new Set([
   ...[...serverSource.matchAll(/case '(veto_[a-z0-9_]+)'/g)].map(m => m[1]),
   ...Object.keys(workerHandlers),
   ...Object.keys(memoryHandlers),
+  ...Object.keys(observabilityHandlers),
 ]);
 
 describe('TOOL_DEFINITIONS — shape', () => {

@@ -5,9 +5,17 @@
 // own files now). Behaviour is unchanged: these are the exact definitions that
 // used to be module-locals in server.ts.
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { saveSession, storeKnowledge, resolveContextWindow } from '../memory/local.js';
 import { executeOne } from '../agents/executor.js';
 import type { AgentPlan } from '../agents/types.js';
+
+// Package version, read once. Lives here so handler modules can import it without
+// reaching into server.ts.
+const _here = dirname(fileURLToPath(import.meta.url));
+export const VERSION = (JSON.parse(readFileSync(join(_here, '../../package.json'), 'utf8')) as { version: string }).version;
 
 // ── Active project directory (set by session/handoff tools, read by others) ──
 let activeProjectDir: string | null = null;
