@@ -87,6 +87,53 @@ describe('dispatch — migrated worker tools route through the registry', () => 
   });
 });
 
+// Some handlers prefix a human-readable message before their JSON payload.
+function tailJson(res: any): any {
+  const text = res.content[0].text as string;
+  return JSON.parse(text.slice(text.indexOf('{')));
+}
+
+describe('dispatch — council', () => {
+  it('veto_council_debate returns a deterministic verdict + llm_upgrade path', async () => {
+    // No MCP sampling transport in tests, so the 7-agent debate falls back to deterministic.
+    const b = tailJson(await call('veto_council_debate', { task: 'Add a caching layer in front of the user service' }));
+    expect(b.llm_backed).toBe(false);
+    expect(['GREEN', 'YELLOW', 'RED', 'DEADLOCK']).toContain(b.final_verdict);
+    expect(b.llm_upgrade?.available).toBe(true);
+    expect(typeof b.outcome_id).toBe('string'); // persisted council_outcomes row id (UUID)
+  });
+
+  it('veto_council_debate requires a task', async () => {
+    const b = body(await call('veto_council_debate', {}));
+    expect(b.success).toBe(false);
+  });
+});
+
+describe('dispatch — review pipelines', () => {
+  it('veto_ci_gate short-circuits to pass when there are no changes', async () => {
+    const b = body(await call('veto_ci_gate', { project_dir: process.cwd(), diff: '   ' }));
+    expect(b.verdict).toBe('pass');
+    expect(b.exit_code).toBe(0);
+  });
+
+  it('veto_ci_gate runs the triple scan over a provided diff', async () => {
+    // Without sampling the scan returns the agentic-loop envelope rather than a verdict.
+    const b = body(await call('veto_ci_gate', { project_dir: process.cwd(), diff: 'diff --git a/x.ts b/x.ts\n+const x = 1' }));
+    expect(b.mode).toBe('agentic_loop');
+    expect(Array.isArray(b.prompts)).toBe(true);
+  });
+
+  it('veto_diff_review reads a provided diff and dispatches the scan', async () => {
+    const b = body(await call('veto_diff_review', { diff: 'diff --git a/y.ts b/y.ts\n+const y = 2' }));
+    expect(b.mode).toBe('agentic_loop');
+  });
+
+  it('veto_diff_review errors when no diff is available', async () => {
+    const b = body(await call('veto_diff_review', {}));
+    expect(b.success).toBe(false);
+  });
+});
+
 describe('dispatch — error handling', () => {
   it('throws on an unknown tool name', async () => {
     await expect(call('veto_not_a_tool')).rejects.toThrow(/unknown tool/i);
