@@ -11,6 +11,7 @@ import { devtoolsHandlers } from '../../src/server/handlers/devtools.js';
 import { advisorHandlers } from '../../src/server/handlers/advisors.js';
 import { generatorHandlers } from '../../src/server/handlers/generators.js';
 import { gitHandlers } from '../../src/server/handlers/git.js';
+import { reviewHandlers } from '../../src/server/handlers/review.js';
 
 // NOTE: src/server.ts calls main() (server.connect over stdio) at import time, so it
 // must never be imported in a test. Tools are handled by one of two paths during the
@@ -29,6 +30,7 @@ const handledTools = new Set([
   ...Object.keys(advisorHandlers),
   ...Object.keys(generatorHandlers),
   ...Object.keys(gitHandlers),
+  ...Object.keys(reviewHandlers),
 ]);
 
 describe('TOOL_DEFINITIONS — shape', () => {
