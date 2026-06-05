@@ -207,7 +207,9 @@ function migrateSessionSaveType(db: DatabaseSync): void {
   if (!names.has('save_type')) db.exec("ALTER TABLE sessions ADD COLUMN save_type TEXT NOT NULL DEFAULT 'manual'");
 }
 
-// Adds token_count column to rate_usage if it doesn't exist (v1.2.13 migration)
+// Backfills token_count on rate_usage for DBs created before it was added to the
+// canonical CREATE in schema.ts (v1.2.13 migration). New DBs already have the column;
+// this is a no-op for them. schema.ts is the source of truth — keep the two in sync.
 function migrateRateUsageTokens(db: DatabaseSync): void {
   const cols = db.prepare('PRAGMA table_info(rate_usage)').all() as Array<{ name: string }>;
   const names = new Set(cols.map(c => c.name));

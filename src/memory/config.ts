@@ -10,6 +10,9 @@ export type VetoConfig = {
     antigravity: number;
   };
   billing_mode: 'subscription' | 'api';
+  // When true (default), the router auto-applies learned tier thresholds every
+  // 20 recorded outcomes — no manual veto_learning_apply needed.
+  auto_apply_learning: boolean;
 };
 
 const CONFIG_PATH = join(homedir(), '.veto', 'config.json');
@@ -23,7 +26,7 @@ export const DEFAULT_BUDGETS: VetoConfig['dailyTokenBudget'] = {
 
 export function getConfig(): VetoConfig {
   if (!existsSync(CONFIG_PATH)) {
-    return { dailyTokenBudget: { ...DEFAULT_BUDGETS }, billing_mode: 'subscription' };
+    return { dailyTokenBudget: { ...DEFAULT_BUDGETS }, billing_mode: 'subscription', auto_apply_learning: true };
   }
   try {
     const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')) as Partial<VetoConfig>;
@@ -35,9 +38,10 @@ export function getConfig(): VetoConfig {
         antigravity: raw.dailyTokenBudget?.antigravity ?? DEFAULT_BUDGETS.antigravity,
       },
       billing_mode: raw.billing_mode === 'api' ? 'api' : 'subscription',
+      auto_apply_learning: raw.auto_apply_learning !== false, // default true
     };
   } catch {
-    return { dailyTokenBudget: { ...DEFAULT_BUDGETS }, billing_mode: 'subscription' };
+    return { dailyTokenBudget: { ...DEFAULT_BUDGETS }, billing_mode: 'subscription', auto_apply_learning: true };
   }
 }
 

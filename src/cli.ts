@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { version: VERSION } = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
-const TAGLINE = '50 agents. 62 tools. 4 AIs. Self-learning. Zero extra cost.';
+const TAGLINE = '89 tools. 49 specialists. 4 AIs. Self-learning. Zero extra cost on subscriptions.';
 const VETO_DIR = join(homedir(), '.veto');
 const HOME = homedir();
 
@@ -312,7 +312,7 @@ async function initCommand() {
 
   const VETO_GUIDE = `# Veto MCP Server
 
-Veto is active. 62 tools across 6 categories:
+Veto is active. 89 tools across 6 categories:
 
 **Session & Context** — veto_status · veto_session_save · veto_continue · veto_handoff
 Save work at 60–70% context capacity. veto_status triggers auto-save above 70%.
@@ -501,6 +501,45 @@ Recommended start sequence:
     console.log('');
   } else {
     setVetoConfig({ billing_mode: 'subscription' });
+  }
+
+  // ── Post-install health check ───────────────────────────────────────────────
+  // Confirm the server can actually run before the user discovers a failure inside
+  // their AI client. The one real runtime risk is node:sqlite (needs Node >= 22.5).
+  console.log('  ' + c.bold('Post-install check'));
+  console.log(c.dim('  ─────────────────────────────────────────────────────'));
+  let healthOk = true;
+
+  const initNodeMajor = parseInt(process.version.slice(1).split('.')[0], 10);
+  const initNodeMinor = parseInt(process.version.slice(1).split('.')[1] || '0', 10);
+  if (initNodeMajor > 22 || (initNodeMajor === 22 && initNodeMinor >= 5)) {
+    console.log(`  ${c.green('✓')} Node.js ${process.version}`);
+  } else {
+    console.log(`  ${c.red('✗')} Node.js ${process.version} — Veto needs >= 22.5 (node:sqlite); the server will not start`);
+    healthOk = false;
+  }
+
+  try {
+    const { getDb } = await import('./memory/local.js');
+    getDb(); // exercises node:sqlite + schema/migration init
+    console.log(`  ${c.green('✓')} Local database initialised`);
+  } catch (err: unknown) {
+    console.log(`  ${c.red('✗')} Database failed to initialise: ${err instanceof Error ? err.message : String(err)}`);
+    healthOk = false;
+  }
+  console.log('');
+
+  // MCP Sampling support is client-dependent and can't be probed from the CLI —
+  // surface the honest guidance so the fallback path isn't a surprise.
+  console.log('  ' + c.bold('MCP Sampling') + c.dim(' (powers zero-extra-cost agent reasoning)'));
+  console.log(c.dim('  Clients with Sampling (Claude Code, Cursor, Windsurf, VS Code) run agents'));
+  console.log(c.dim('  directly. Clients without it get an agentic-fallback prompt to reason instead.'));
+  console.log(c.dim('  Run `veto doctor` anytime for the full health + registration report.'));
+  console.log('');
+
+  if (!healthOk) {
+    console.log(c.yellow('  ⚠  Resolve the issues above before using Veto in your AI client.'));
+    console.log('');
   }
 }
 
@@ -828,7 +867,7 @@ async function patternsCommand() {
 
 function shortHelpCommand() {
   console.log('');
-  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(` — 62 agentic tools. 50+ specialists. Zero cost.`));
+  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(` — 89 agentic tools. 49 specialists. Zero extra cost on subscriptions.`));
   console.log('');
   console.log(c.bold('  CLI Commands'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
@@ -847,7 +886,7 @@ function shortHelpCommand() {
   console.log(`  ${c.cyan('veto help')}                    Show this help`);
   console.log(`  ${c.cyan('veto help --troubleshoot')}     Show troubleshooting guide`);
   console.log('');
-  console.log(c.bold('  MCP Tools (62 Agentic Tools)'));
+  console.log(c.bold('  MCP Tools (89 Agentic Tools)'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
   console.log(`  ${c.dim('Session')}       veto_status · veto_session_save · veto_session_restore · veto_sessions_list · veto_session_replay · veto_autosave_status`);
   console.log(`  ${c.dim('Council')}       veto_council_debate · veto_benchmark · veto_adr`);

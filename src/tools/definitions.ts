@@ -115,7 +115,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'veto_session_restore',
     description:
-      'Restores a previously saved session by ID. Use veto_sessions_list to find IDs.',
+      'Restores the saved context snapshot of a previous session by ID so you can resume work where it left off. Use veto_sessions_list to find IDs. For the chronological event timeline instead of the working context, use veto_session_replay.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -390,7 +390,7 @@ export const TOOL_DEFINITIONS = [
   // ── Review & Security ────────────────────────────────────────────────────────
   {
     name: 'veto_code_review',
-    description: 'Runs the Code Reviewer agent on provided code. Returns scored findings (complexity, error handling, magic numbers, nesting, dead code) with severity and fixes. Pass file_path to surface findings as VS Code inline diagnostics (squiggles).',
+    description: 'Runs the Code Reviewer agent on a single snippet or file you pass directly. Returns scored findings (complexity, error handling, magic numbers, nesting, dead code) with severity and fixes. Pass file_path to surface findings as VS Code inline diagnostics (squiggles). For reviewing changed files across a git diff, use veto_diff_review instead.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -589,7 +589,7 @@ export const TOOL_DEFINITIONS = [
   // ── Learning ──────────────────────────────────────────────────────────────────
   {
     name: 'veto_record_outcome',
-    description: 'Records a task outcome (quality score) to feed the self-learning router. Call after completing any task. After 20+ outcomes, call veto_learning_apply to update tier thresholds.',
+    description: 'Records a task outcome (quality score) to feed the self-learning router. Call after completing any task. The router auto-applies learned tier thresholds every 20 recorded outcomes (disable via config auto_apply_learning=false); veto_learning_apply forces an update on demand.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1403,7 +1403,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'veto_session_replay',
-    description: 'Replays an event stream session to restore full conversational context from a past interaction.',
+    description: 'Returns the chronological event/tool-call trace for a past session — the timeline of operations that occurred, for auditing or reconstructing what happened. Unlike veto_session_restore (which loads the saved context snapshot to resume work), this returns the sequence of events, not the working context.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -75,6 +75,27 @@ describe('getLearnedThresholds', () => {
   });
 });
 
+describe('auto-apply learned thresholds (3.4b)', () => {
+  it('recordOutcome returns the running total and an auto_applied flag', () => {
+    const r = recordOutcome('task', 40, 2, 'coder', 80);
+    expect(r.total).toBe(1);
+    expect(r.auto_applied).toBe(false);
+  });
+
+  it('does not auto-apply before 20 outcomes (thresholds stay default)', () => {
+    for (let i = 0; i < 19; i++) recordOutcome(`task-${i}`, 50, 2, 'coder', 88);
+    expect(getLearnedThresholds().source).toBe('default');
+  });
+
+  it('auto-applies learned thresholds when the 20th outcome is recorded', () => {
+    let last = { auto_applied: false, total: 0 };
+    for (let i = 0; i < 20; i++) last = recordOutcome(`task-${i}`, 50, 2, 'coder', 88);
+    expect(last.total).toBe(20);
+    expect(last.auto_applied).toBe(true);
+    expect(getLearnedThresholds().source).toBe('learned');
+  });
+});
+
 describe('getRecommendedAgent', () => {
   it('returns null when no patterns exist', () => {
     const result = getRecommendedAgent('fix-bug', '.ts');

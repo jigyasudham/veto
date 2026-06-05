@@ -1,8 +1,8 @@
 # veto
 
-> **62 agentic tools. 50+ specialists. 4 AIs. Self-learning. Zero cost.**
+> **89 agentic tools. 49 specialists. 4 AIs. Self-learning. Zero extra cost on subscriptions.**
 
-An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, Gemini CLI, Antigravity CLI, Cursor, Windsurf, Zed, and JetBrains using your existing subscriptions — giving every AI a council of specialist agents, local LLM support, SDD agents, playwright automation, persistent cross-platform memory, a self-learning router, CI/CD gates, workspace discovery, and bidirectional IDE communication.
+An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, Gemini CLI, Antigravity CLI, Cursor, Windsurf, Zed, and JetBrains using your existing subscriptions — giving every AI a council of specialist agents, local LLM support, SDD agents, playwright automation, persistent cross-platform memory, a self-learning router that re-tunes its tier thresholds automatically every 20 recorded task outcomes (reviews record outcomes for you; configurable via `auto_apply_learning`), CI/CD gates, workspace discovery, and bidirectional IDE communication.
 
 > **Billing note:** "Zero cost" applies to subscription plans (Claude Max, Gemini Advanced, etc.). If you are on API/pay-per-token billing, MCP Sampling calls made by Veto agents will count toward your token usage. `veto init` detects API key environment variables and warns you automatically.
 
@@ -52,7 +52,7 @@ Every worker agent supports both modes. When multiple agents run, they execute i
 
 ---
 
-## MCP Tools (62)
+## MCP Tools (89)
 
 | Category | Tools |
 |---|---|
@@ -72,6 +72,46 @@ Every worker agent supports both modes. When multiple agents run, they execute i
 | **Discover** | `veto_discover` · `veto_summarize` · `veto_git_blame` · `veto_changelog` · `veto_onboard` · `veto_debt_register` |
 | **DevTools** | `veto_docs_fetch` · `veto_context_status` · `veto_openapi_gen` · `veto_flag_auditor` · `veto_env_setup` · `veto_commit_message` · `veto_pr_description` · `veto_pr_post` · `veto_prompt_optimizer` · `veto_sre_advisor` · `veto_diagram` · `veto_rca` · `veto_translate` · `veto_merge_conflict` |
 | **Plugins** | `veto_plugins` |
+
+## Which tool do I use?
+
+Several tools overlap by design (different granularity or entry point). Quick guide:
+
+**Reviewing code**
+
+| You have… | Use | Note |
+|---|---|---|
+| A snippet or single file in hand | `veto_code_review` | not `veto_diff_review`, which reads a git diff |
+| Uncommitted/changed files (git diff) | `veto_diff_review` | code + security + secrets scans in parallel |
+| To gate a commit (hard-block on secrets) | `veto_pre_commit` | tuned for commit-time |
+| To gate CI (exit code + pass/warn/fail) | `veto_ci_gate` | for GitHub Actions / GitLab CI |
+| A deeper pre-merge/pre-ship pass (+ quality) | `veto_full_review` | richer than `veto_diff_review` |
+| A GitHub PR by number/URL | `veto_pr_review` | fetches the diff, returns postable comments |
+
+**Remembering things**
+
+| Want to… | Use |
+|---|---|
+| Save/recall a solution, decision, or reference | `veto_memory_store` / `veto_memory_search` |
+| Track a recurring code convention | `veto_pattern_store` / `veto_patterns_list` |
+| Navigate the codebase without scanning the filesystem | `veto_project_map_get` (refresh via `veto_project_map_update`) |
+
+**Running multi-step work**
+
+| Want to… | Use |
+|---|---|
+| Run several agents at once on one task | `veto_execute_parallel` |
+| Run a sequential pipeline with pass/fail gates | `veto_workflow` |
+| Turn a PRD / plain English into a task DAG | `veto_task_parse` (feeds `veto_workflow`) |
+| Plan a new feature end-to-end (council → plan → tasks) | `veto_new_feature` |
+
+**Sessions**
+
+| Want to… | Use |
+|---|---|
+| Resume work with full saved context | `veto_session_restore` (or `veto_continue` for the latest) |
+| See the event / tool-call timeline of a session | `veto_session_replay` |
+| Move work to another AI tool | `veto_handoff` → `veto_continue` |
 
 ## MCP Resources
 

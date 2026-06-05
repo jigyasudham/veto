@@ -2,6 +2,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { getDb } from '../memory/local.js';
+import { getConfig } from '../memory/config.js';
 
 export type LearningStats = {
   total_tasks: number;
@@ -52,7 +53,7 @@ export function recordOutcome(
   outputQuality: number,
   tokensUsed = 0,
   fileExt?: string,
-): void {
+): { auto_applied: boolean; total: number } {
   const db = getDb();
   db.prepare(
     `INSERT INTO learning_data (id, task_type, complexity, model_tier, output_quality, tokens_used, agent)
@@ -80,6 +81,16 @@ export function recordOutcome(
     const keyword = taskType.toLowerCase().split(/[\s_-]/)[0];
     if (keyword) upsert(`task_agent:${keyword}:${agent}`);
   }
+
+  // Auto-apply learned thresholds every 20 outcomes (default on; disable via
+  // config auto_apply_learning=false). Closes the learning loop so no manual
+  // veto_learning_apply is required.
+  const total = (db.prepare('SELECT COUNT(*) as c FROM learning_data').get() as { c: number }).c;
+  let auto_applied = false;
+  if (total >= 20 && total % 20 === 0 && getConfig().auto_apply_learning !== false) {
+    auto_applied = applyLearnedThresholds().applied;
+  }
+  return { auto_applied, total };
 }
 
 // ─── Predictive Agent Recommendation ─────────────────────────────────────────
