@@ -24,6 +24,7 @@ import { memoryHandlers } from './server/handlers/memory.js';
 import { observabilityHandlers } from './server/handlers/observability.js';
 import { sessionHandlers } from './server/handlers/session.js';
 import { learningHandlers } from './server/handlers/learning.js';
+import { watchHandlers } from './server/handlers/watch.js';
 import {
   VERSION, getActiveProjectDir, setActiveProjectDir, serverHealth,
   autoSave, maybeAutoSave, autoStoreCritical, parsePrdIntoTasks, buildTaskPlan,
@@ -53,7 +54,6 @@ import { buildAgenticAgentPrompt, parseAgenticAgentResponses } from './agents/ll
 import type { AgentPlan, AgentResult, AgentTask, WorkerAgentType, AgenticAgentPrompt } from './agents/types.js';
 import { handoff, continueSession, getPlatformSetup } from './adapters/index.js';
 import type { SetupPlatform } from './adapters/index.js';
-import { startWatch, pollWatch, stopWatch, listWatches } from './watcher/index.js';
 import { runPipeline } from './workflow/pipeline.js';
 import type { PipelineStep } from './workflow/pipeline.js';
 import { loadPlugins, listPlugins } from './plugins/loader.js';
@@ -170,6 +170,7 @@ const TOOL_REGISTRY: HandlerMap = {
   ...observabilityHandlers,
   ...sessionHandlers,
   ...learningHandlers,
+  ...watchHandlers,
 };
 
 // Exported so the dispatch can be unit-tested without connecting stdio. Registered
@@ -609,31 +610,6 @@ export async function callTool(request: any) {
       }
       const setup = getPlatformSetup(platform, vetoServerPath);
       return { content: [{ type: 'text', text: JSON.stringify(setup, null, 2) }] };
-    }
-
-    case 'veto_watch': {
-      const args = (request.params.arguments || {}) as any;
-      const dir = String(args?.project_dir ?? '').trim();
-      if (!dir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
-      const watch_id = startWatch(dir);
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, watch_id, project_dir: dir, message: `Watching "${dir}". Call veto_watch_poll with watch_id to collect events.` }, null, 2) }] };
-    }
-
-    case 'veto_watch_poll': {
-      const args = (request.params.arguments || {}) as any;
-      const watch_id = String(args?.watch_id ?? '').trim();
-      if (!watch_id) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'watch_id is required.' }) }], isError: true };
-      const result = pollWatch(watch_id);
-      if (!result.found) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `No active watcher with id: ${watch_id}` }) }], isError: true };
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, watch_id, project_dir: result.project_dir, event_count: result.events.length, events: result.events }, null, 2) }] };
-    }
-
-    case 'veto_watch_stop': {
-      const args = (request.params.arguments || {}) as any;
-      const watch_id = String(args?.watch_id ?? '').trim();
-      if (!watch_id) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'watch_id is required.' }) }], isError: true };
-      const stopped = stopWatch(watch_id);
-      return { content: [{ type: 'text', text: JSON.stringify({ success: stopped, message: stopped ? `Watcher ${watch_id} stopped.` : `No watcher found with id: ${watch_id}` }, null, 2) }] };
     }
 
     case 'veto_workflow': {
