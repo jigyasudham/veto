@@ -9,8 +9,10 @@ import { readGitDiff, runTripleScan } from '../scan-core.js';
 import { autoStoreCritical } from '../runtime.js';
 import { buildContextString } from '../../context/reader.js';
 import { executeOne } from '../../agents/executor.js';
+import { parseAgenticAgentResponses } from '../../agents/llm-runner.js';
 import { recordOutcome } from '../../router/index.js';
 import { fetchPrDiff } from '../../github/pr-fetcher.js';
+import type { AgentTask } from '../../agents/types.js';
 import type { HandlerMap } from '../registry.js';
 
 export const reviewHandlers: HandlerMap = {
@@ -115,7 +117,7 @@ export const reviewHandlers: HandlerMap = {
     const projectCtx = (() => { try { return buildContextString(project_dir); } catch { return ''; } })();
     const fullContext = [context, projectCtx].filter(Boolean).join('\n\n');
 
-    const scanResult = await runTripleScan(diff, fullContext);
+    const scanResult = await runTripleScan(diff, fullContext, true, args?.agent_outputs as any);
     if ('mode' in scanResult) return { content: [{ type: 'text', text: JSON.stringify(scanResult, null, 2) }] };
     const { reviewResult: codeResult, secResult, secretsResult, verdict } = scanResult;
     const exit_code = verdict === 'fail' || (verdict === 'warn' && fail_on === 'warn') ? 1 : 0;
@@ -184,7 +186,7 @@ export const reviewHandlers: HandlerMap = {
       context,
     ].filter(Boolean).join('\n');
 
-    const scanResult = await runTripleScan(diff, prContext);
+    const scanResult = await runTripleScan(diff, prContext, true, args?.agent_outputs as any);
     if ('mode' in scanResult) return { content: [{ type: 'text', text: JSON.stringify(scanResult, null, 2) }] };
     const { reviewResult, secResult, secretsResult, verdict } = scanResult;
     const exit_code = verdict === 'fail' || (verdict === 'warn' && fail_on === 'warn') ? 1 : 0;
@@ -249,7 +251,7 @@ export const reviewHandlers: HandlerMap = {
     const context = buildContextString(projectDir, userContext);
 
     const [scanResult, qualityResult] = await Promise.all([
-      runTripleScan(diff, context) as any,
+      runTripleScan(diff, context, true, args?.agent_outputs as any) as any,
       executeOne({ id: 'quality-1', agent: 'code-quality', task: 'Assess overall code quality and maintainability of these changes', code: diff.slice(0, 8000), context }),
     ]);
 
@@ -295,17 +297,23 @@ export const reviewHandlers: HandlerMap = {
   veto_pre_commit: async ({ args }) => {
     const projectDir = args?.project_dir ? String(args.project_dir) : undefined;
     const userContext = args?.context ? String(args.context) : undefined;
+    const agentOutputs = args?.agent_outputs as Record<string, unknown> | undefined;
 
     if (!projectDir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
 
-    const diff = readGitDiff(projectDir, true);
-    if (!diff) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No staged changes found. Stage files with git add before running veto_pre_commit.' }) }], isError: true };
+    // With agent_outputs the host AI has already produced the analyses (Phase 2 of
+    // the agentic loop), so the staged diff is irrelevant — skip the git read.
+    const diff = agentOutputs ? '' : readGitDiff(projectDir, true);
+    if (!agentOutputs && !diff) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No staged changes found. Stage files with git add before running veto_pre_commit.' }) }], isError: true };
 
     const context = buildContextString(projectDir, userContext);
-    const [secretsResult, reviewResult] = await Promise.all([
-      executeOne({ id: 'pre-secrets', agent: 'secrets',  task: 'Scan staged changes for exposed secrets or credentials', code: diff }),
-      executeOne({ id: 'pre-review',  agent: 'reviewer', task: 'Review staged changes for critical code quality issues', code: diff, context }),
-    ]);
+    // Tasks are keyed to the shared triple-scan ids (scan-secrets/scan-review) so a
+    // single agent_outputs payload drives pre-commit and the other review pipelines alike.
+    const secretsTask: AgentTask = { id: 'scan-secrets', agent: 'secrets',  task: 'Scan staged changes for exposed secrets or credentials', code: diff, llm_backed: true };
+    const reviewTask:  AgentTask = { id: 'scan-review',  agent: 'reviewer', task: 'Review staged changes for critical code quality issues', code: diff, context, llm_backed: true };
+    const [secretsResult, reviewResult] = agentOutputs
+      ? parseAgenticAgentResponses([secretsTask, reviewTask], agentOutputs)
+      : await Promise.all([executeOne(secretsTask), executeOne(reviewTask)]);
 
     const hasSecrets = (secretsResult.analysis?.findings?.length ?? 0) > 0;
     const hasCriticalCode = (reviewResult.analysis?.critical_count ?? 0) > 0;
