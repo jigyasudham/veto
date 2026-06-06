@@ -10,27 +10,27 @@ An MCP server that runs locally on your machine, plugs into Claude Code, Codex C
 
 ## How the Agents Work
 
-**Every tool uses a 2-phase agentic loop — no API keys required, zero extra cost.**
+**No API keys, zero extra cost.** Every worker agent is a deterministic expert module at its core, with two optional layers of LLM reasoning on top — all of it delegated to the AI you're already paying for.
 
-### Phase 1 — MCP Sampling
-The tool attempts real LLM reasoning via MCP Sampling (`server.createMessage`). If your client supports it, the agent reasons deeply and returns a structured plan or analysis.
+### Default — Deterministic expert modules
+Out of the box, each of the 42 worker agents runs as a hand-written expert module (`plan()` / `analyze()` in `src/agents/`) — real heuristics like regex/AST secret detection, OWASP/CWE rules, and complexity metrics, **not** an LLM. They always run, work offline, and cost zero tokens.
 
-### Phase 2 — Agentic Fallback
-If Sampling is unavailable, Veto returns an `llm_upgrade` prompt. The host AI reads the specialist's role, performs the reasoning itself, and passes the JSON response back to complete the operation.
+### Phase 1 — LLM upgrade via MCP Sampling
+When a tool is called with `llm_backed` and your client supports MCP Sampling (`server.createMessage`), the agent upgrades to real LLM reasoning for a richer plan or analysis. The call runs on your existing subscription — no separate billing.
 
-Every worker agent supports both modes. When multiple agents run, they execute in parallel. LLM calls delegate back to the AI you're already using — no extra billing.
+### Phase 2 — Agentic fallback
+If Sampling is unavailable, Veto returns an `llm_upgrade` prompt instead. The host AI reads the specialist's role, reasons itself, and passes the JSON back to complete the operation.
+
+The 7-agent **Council** is LLM-first — its value is the multi-agent debate — but it too falls back to a deterministic verdict when Sampling is unavailable. When multiple agents run, they execute in parallel.
 
 ---
 
 ## Specialist Roles
 
-| Agent Group | Specialist Roles |
-|---|---|
-| **Council** | Lead Dev · PM · Architect · UX · Devil's Advocate · Legal · Security |
-| **Development** | Coder · Reviewer · Tester · Debugger · Refactor · Database · API · Frontend · Backend · DevOps · Performance · Migration |
-| **Advanced** | Local LLM (Ollama) · Semantic Search · SDD Agent · Playwright · i18n Translate · a11y Advisor |
-| **Intelligence** | Task Planner · Researcher · Tech Advisor · Risk Assessor · Cost Analyzer · Ethics/Bias |
-| **Workflow** | File Manager · Git Agent · Search Agent · Reporter · Automation |
+**49 specialists: 42 deterministic worker agents across 6 domains + a 7-agent Council.** The Council debates trade-offs before you build; the worker agents do the hands-on analysis and planning. Each is a deterministic expert module that can upgrade to LLM reasoning — see [How the Agents Work](#how-the-agents-work). List them anytime with `veto agents`.
+
+**Council (7)**
+`Lead Dev` · `PM` · `Architect` · `UX` · `Devil's Advocate` · `Legal` · `Security`
 
 **Development (12)**
 `Coder` · `Code Reviewer` · `Tester` · `Debugger` · `Refactor` · `Database` · `API` · `Frontend` · `Backend` · `DevOps` · `Performance` · `Migration`
@@ -61,16 +61,17 @@ Every worker agent supports both modes. When multiple agents run, they execute i
 | **Council** | `veto_council_debate` · `veto_benchmark` · `veto_adr` |
 | **Agents** | `veto_agent_plan` · `veto_execute_parallel` · `veto_explain` · `veto_compose_agents` · `veto_delegate` |
 | **Review** | `veto_code_review` · `veto_security_scan` · `veto_secrets_scan` · `veto_diff_review` · `veto_full_review` · `veto_pr_review` |
-| **Pipelines** | `veto_pre_commit` · `veto_new_feature` · `veto_workflow` · `veto_task_parse` |
+| **Pipelines** | `veto_ci_gate` · `veto_pre_commit` · `veto_new_feature` · `veto_workflow` · `veto_task_parse` |
 | **Advanced** | `veto_local_llm` · `veto_semantic_search` · `veto_sdd_agent` · `veto_playwright` · `veto_notify_ide` |
 | **Quality** | `veto_clone_detector` · `veto_lint_rules` · `veto_api_contract` · `veto_a11y_advisor` · `veto_type_coverage` · `veto_test_gaps` |
+| **Advisors** | `veto_dep_advisor` · `veto_query_advisor` · `veto_bundle_advisor` · `veto_dead_code` · `veto_hitl_checkpoint` |
 | **Watching** | `veto_watch` · `veto_watch_poll` · `veto_watch_stop` |
 | **Memory** | `veto_memory_store` · `veto_memory_search` · `veto_memory_delete` · `veto_project_map_update` · `veto_project_map_get` · `veto_pattern_store` · `veto_patterns_list` · `veto_memory_export` · `veto_memory_import` |
 | **Learning** | `veto_record_outcome` · `veto_learning_stats` · `veto_learning_apply` |
 | **Handoff** | `veto_handoff` · `veto_continue` · `veto_platform_setup` |
 | **Observability** | `veto_usage_status` · `veto_audit_log` · `veto_health` · `veto_metrics` |
 | **Discover** | `veto_discover` · `veto_summarize` · `veto_git_blame` · `veto_changelog` · `veto_onboard` · `veto_debt_register` |
-| **DevTools** | `veto_docs_fetch` · `veto_context_status` · `veto_openapi_gen` · `veto_flag_auditor` · `veto_env_setup` · `veto_commit_message` · `veto_pr_description` · `veto_pr_post` · `veto_prompt_optimizer` · `veto_sre_advisor` · `veto_diagram` · `veto_rca` · `veto_translate` · `veto_merge_conflict` |
+| **DevTools** | `veto_docs_fetch` · `veto_context_status` · `veto_openapi_gen` · `veto_flag_auditor` · `veto_env_setup` · `veto_commit_message` · `veto_pr_description` · `veto_pr_post` · `veto_prompt_optimizer` · `veto_sre_advisor` · `veto_diagram` · `veto_rca` · `veto_doc_gen` · `veto_postmortem` · `veto_release_notes` · `veto_translate` · `veto_merge_conflict` |
 | **Plugins** | `veto_plugins` |
 
 ## Which tool do I use?
@@ -144,6 +145,9 @@ veto sessions                    # List last 20 saved sessions ([auto] badge on 
 veto sessions --clean            # Remove auto-saves older than 7 days
 veto memory [query]              # Search knowledge base (blank = all entries)
 veto patterns [prefix]           # List learned agent/routing patterns
+veto tools [filter]              # List all 89 MCP tools (--json for machine output)
+veto agents [filter]             # List all 49 specialists — workers + council (--json)
+veto routing [status|log|reset]  # Inspect the opt-in routing feedback loop
 veto hook install                # Install pre-commit secrets scan hook
 veto hook remove                 # Remove the veto pre-commit hook
 veto check                       # Scan staged changes for secrets (used by hook)
