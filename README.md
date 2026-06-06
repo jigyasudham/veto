@@ -1,6 +1,6 @@
 # veto
 
-> **89 agentic tools. 49 specialists. 4 AIs. Self-learning. Zero extra cost on subscriptions.**
+> **89 agentic tools. 49 specialists. Every major AI CLI. Self-learning. Zero extra cost on subscriptions.**
 
 An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, Gemini CLI, Antigravity CLI, Cursor, Windsurf, Zed, and JetBrains using your existing subscriptions — giving every AI a council of specialist agents, local LLM support, SDD agents, playwright automation, persistent cross-platform memory, a self-learning router that re-tunes its tier thresholds automatically every 20 recorded task outcomes (reviews record outcomes for you; configurable via `auto_apply_learning`), CI/CD gates, workspace discovery, and bidirectional IDE communication.
 
