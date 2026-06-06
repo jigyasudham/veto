@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { callTool } from '../../src/server.js';
 import { resetDb } from '../../src/memory/local.js';
+import scanFixtures from './fixtures/scan-agent-outputs.json';
+
+const SAMPLE_DIFF = 'diff --git a/src/handlers/admin.ts b/src/handlers/admin.ts\n+const x = 1';
 
 // Behavioral safety net for the server.ts handler migration. callTool is the real
 // dispatch (registry + switch); importing server.ts no longer connects stdio.
@@ -131,6 +134,75 @@ describe('dispatch — review pipelines', () => {
   it('veto_diff_review errors when no diff is available', async () => {
     const b = body(await call('veto_diff_review', {}));
     expect(b.success).toBe(false);
+  });
+});
+
+// Pre-baked Phase-2 agent_outputs short-circuit the agentic loop and let the
+// review pipelines resolve to real pass/warn/fail verdicts without MCP sampling.
+describe('dispatch — review pipelines driven by pre-baked agent_outputs', () => {
+  const PROJECT_DIR = process.cwd();
+
+  describe('veto_diff_review', () => {
+    it('reaches a pass verdict on the clean fixture', async () => {
+      const b = body(await call('veto_diff_review', { diff: SAMPLE_DIFF, agent_outputs: scanFixtures.clean }));
+      expect(b.verdict).toBe('pass');
+    });
+
+    it('reaches a fail verdict on the failing fixture', async () => {
+      const b = body(await call('veto_diff_review', { diff: SAMPLE_DIFF, agent_outputs: scanFixtures.failing }));
+      expect(b.verdict).toBe('fail');
+      expect(b.security.critical).toBe(1);
+      expect(b.secrets.findings.length).toBeGreaterThan(0);
+    });
+
+    it('reaches a warn verdict when there are high-severity findings only', async () => {
+      const b = body(await call('veto_diff_review', { diff: SAMPLE_DIFF, agent_outputs: scanFixtures.warn }));
+      expect(b.verdict).toBe('warn');
+    });
+  });
+
+  describe('veto_ci_gate', () => {
+    it('passes with exit_code 0 on the clean fixture', async () => {
+      const b = body(await call('veto_ci_gate', { project_dir: PROJECT_DIR, diff: SAMPLE_DIFF, agent_outputs: scanFixtures.clean }));
+      expect(b.verdict).toBe('pass');
+      expect(b.exit_code).toBe(0);
+    });
+
+    it('fails with exit_code 1 and blocking issues on the failing fixture', async () => {
+      const b = body(await call('veto_ci_gate', { project_dir: PROJECT_DIR, diff: SAMPLE_DIFF, agent_outputs: scanFixtures.failing }));
+      expect(b.verdict).toBe('fail');
+      expect(b.exit_code).toBe(1);
+      expect(b.blocking_issues.length).toBeGreaterThan(0);
+      expect(b.checks.secrets.clean).toBe(false);
+    });
+  });
+
+  describe('veto_full_review', () => {
+    it('does not block (pass/warn) on the clean fixture', async () => {
+      const b = body(await call('veto_full_review', { diff: SAMPLE_DIFF, agent_outputs: scanFixtures.clean }));
+      expect(['pass', 'warn']).toContain(b.verdict);
+    });
+
+    it('reaches a fail verdict on the failing fixture', async () => {
+      const b = body(await call('veto_full_review', { diff: SAMPLE_DIFF, agent_outputs: scanFixtures.failing }));
+      expect(b.verdict).toBe('fail');
+      expect(b.scans.security.critical).toBe(1);
+    });
+  });
+
+  describe('veto_pre_commit', () => {
+    it('passes and is not blocked on the clean fixture', async () => {
+      const b = body(await call('veto_pre_commit', { project_dir: PROJECT_DIR, agent_outputs: scanFixtures.clean }));
+      expect(b.verdict).toBe('pass');
+      expect(b.blocked).toBe(false);
+    });
+
+    it('blocks the commit when the fixture exposes secrets', async () => {
+      const b = body(await call('veto_pre_commit', { project_dir: PROJECT_DIR, agent_outputs: scanFixtures.failing }));
+      expect(b.verdict).toBe('fail');
+      expect(b.blocked).toBe(true);
+      expect(b.secrets.found).toBe(true);
+    });
   });
 });
 

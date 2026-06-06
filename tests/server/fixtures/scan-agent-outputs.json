@@ -1,0 +1,136 @@
+{
+  "_comment": "Pre-baked Phase-2 agent_outputs for the triple-scan review pipelines (veto_diff_review / veto_ci_gate / veto_pr_review / veto_full_review / veto_pre_commit). Each scenario is keyed by the scan task id (scan-review = reviewer, scan-sec = security-scanner, scan-secrets = secrets) and shaped to match buildAnalysisPrompt in src/agents/llm-runner.ts. Passing one of these as the `agent_outputs` argument short-circuits the agentic loop and drives the pipeline to a real verdict. finalizeTripleScan rule: fail when any scan has critical_count > 0 (secrets blocks on any finding); warn on high_count > 0; otherwise pass.",
+
+  "clean": {
+    "scan-review": {
+      "agent": "reviewer",
+      "subject": "Add a typed config loader",
+      "findings": [],
+      "score": 94,
+      "verdict": "approved",
+      "summary": "Clean change with clear naming and no correctness or maintainability concerns.",
+      "critical_count": 0,
+      "high_count": 0
+    },
+    "scan-sec": {
+      "agent": "security-scanner",
+      "subject": "Add a typed config loader",
+      "findings": [],
+      "score": 96,
+      "verdict": "approved",
+      "summary": "No injection, auth, or insecure-deserialization issues detected.",
+      "critical_count": 0,
+      "high_count": 0
+    },
+    "scan-secrets": {
+      "agent": "secrets",
+      "subject": "Add a typed config loader",
+      "findings": [],
+      "score": 100,
+      "verdict": "approved",
+      "summary": "No hardcoded credentials, API keys, or tokens found.",
+      "critical_count": 0,
+      "high_count": 0
+    }
+  },
+
+  "warn": {
+    "scan-review": {
+      "agent": "reviewer",
+      "subject": "Refactor request handler",
+      "findings": [
+        {
+          "severity": "high",
+          "category": "error-handling",
+          "description": "The promise rejection in fetchUser() is swallowed, so transient failures surface as a generic 500 with no log.",
+          "fix": "Catch and log the rejection, then return a typed error to the caller.",
+          "location": "src/handlers/user.ts:42"
+        }
+      ],
+      "score": 78,
+      "verdict": "approved_with_warnings",
+      "summary": "Functional but has one high-severity error-handling gap worth fixing before merge.",
+      "critical_count": 0,
+      "high_count": 1
+    },
+    "scan-sec": {
+      "agent": "security-scanner",
+      "subject": "Refactor request handler",
+      "findings": [],
+      "score": 90,
+      "verdict": "approved",
+      "summary": "No exploitable vulnerabilities found.",
+      "critical_count": 0,
+      "high_count": 0
+    },
+    "scan-secrets": {
+      "agent": "secrets",
+      "subject": "Refactor request handler",
+      "findings": [],
+      "score": 100,
+      "verdict": "approved",
+      "summary": "No secrets detected.",
+      "critical_count": 0,
+      "high_count": 0
+    }
+  },
+
+  "failing": {
+    "scan-review": {
+      "agent": "reviewer",
+      "subject": "Add admin delete endpoint",
+      "findings": [
+        {
+          "severity": "critical",
+          "category": "correctness",
+          "description": "deleteUser() runs before the auth guard resolves, so unauthenticated requests can delete records.",
+          "fix": "Await requireAuth(req) before performing the delete and return 401 on failure.",
+          "location": "src/handlers/admin.ts:17"
+        }
+      ],
+      "score": 35,
+      "verdict": "rejected",
+      "summary": "Critical authorization-ordering bug allows unauthenticated deletes.",
+      "critical_count": 1,
+      "high_count": 0
+    },
+    "scan-sec": {
+      "agent": "security-scanner",
+      "subject": "Add admin delete endpoint",
+      "findings": [
+        {
+          "severity": "critical",
+          "category": "injection",
+          "description": "User-supplied id is concatenated directly into the SQL DELETE statement, enabling SQL injection.",
+          "fix": "Use a parameterized query / prepared statement for the id binding.",
+          "location": "src/handlers/admin.ts:19",
+          "cwe": "CWE-89"
+        }
+      ],
+      "score": 20,
+      "verdict": "rejected",
+      "summary": "SQL injection in the delete path; must be parameterized before merge.",
+      "critical_count": 1,
+      "high_count": 0
+    },
+    "scan-secrets": {
+      "agent": "secrets",
+      "subject": "Add admin delete endpoint",
+      "findings": [
+        {
+          "severity": "critical",
+          "category": "exposed-credential",
+          "description": "A live AWS secret access key is hardcoded in the new config constant.",
+          "fix": "Remove the key, rotate it immediately, and load it from an environment variable or secret manager.",
+          "location": "src/config/aws.ts:4",
+          "cwe": "CWE-798"
+        }
+      ],
+      "score": 0,
+      "verdict": "rejected",
+      "summary": "Hardcoded AWS credential committed; rotate and externalize.",
+      "critical_count": 1,
+      "high_count": 0
+    }
+  }
+}
