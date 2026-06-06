@@ -875,6 +875,8 @@ function shortHelpCommand() {
   console.log(`  ${c.cyan('veto doctor')}                  Check MCP registrations + system health`);
   console.log(`  ${c.cyan('veto status')}                  Version, DB path, memory/session counts`);
   console.log(`  ${c.cyan('veto sessions')}                List last 20 saved sessions`);
+  console.log(`  ${c.cyan('veto tools')} ${c.dim('[filter]')}         List all MCP tools (--json supported)`);
+  console.log(`  ${c.cyan('veto agents')} ${c.dim('[filter]')}        List all worker + council agents (--json)`);
   console.log(`  ${c.cyan('veto memory')} ${c.dim('[query]')}         Search knowledge base`);
   console.log(`  ${c.cyan('veto patterns')} ${c.dim('[prefix]')}      List learned agent/routing patterns`);
   console.log(`  ${c.cyan('veto routing')} ${c.dim('[status|enable|disable|reset|log]')}`);
@@ -1202,6 +1204,113 @@ async function checkCommand() {
   process.exit(0);
 }
 
+// ─── Tools / Agents listings ────────────────────────────────────────────────────
+
+// The 7 Council personas debated by veto_council_debate. They live as separate
+// modules under src/council/ (no shared manifest), so the roster is mirrored here
+// for the listing. Keep in sync with src/council/decision-engine.ts.
+const COUNCIL_AGENTS = [
+  { id: 'Lead Developer',     role: 'Implementation feasibility and code-level risk (can block).' },
+  { id: 'Product Manager',    role: 'User value, scope, and priority trade-offs.' },
+  { id: 'System Architect',   role: 'Architecture fit, scalability, and long-term design (can block).' },
+  { id: 'UX Designer',        role: 'Usability, accessibility, and user-facing impact.' },
+  { id: "Devil's Advocate",   role: 'Probes every failure mode — always raises concerns.' },
+  { id: 'Legal & Compliance', role: 'Licensing, privacy, and regulatory exposure (can block).' },
+  { id: 'Security',           role: 'Threat model and vulnerability surface (can block).' },
+];
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+
+// veto tools [filter] [--json] — lists the MCP tools straight from TOOL_DEFINITIONS
+// (the same source the server registers) so the listing can never drift.
+async function toolsCommand() {
+  const { TOOL_DEFINITIONS } = await import('./tools/definitions.js');
+  const asJson = process.argv.includes('--json');
+  const filter = process.argv.slice(3).find(a => !a.startsWith('--'))?.toLowerCase();
+
+  let tools = TOOL_DEFINITIONS.map(t => ({ name: t.name, description: t.description }));
+  if (filter) tools = tools.filter(t => t.name.toLowerCase().includes(filter) || t.description.toLowerCase().includes(filter));
+
+  if (asJson) {
+    console.log(JSON.stringify({ count: tools.length, tools }, null, 2));
+    return;
+  }
+
+  console.log('');
+  console.log(c.bold('  Veto MCP Tools') + c.dim(` (${tools.length}${filter ? ` matching "${filter}"` : ` of ${TOOL_DEFINITIONS.length}`})`));
+  console.log(c.dim('  ─────────────────────────────────────────────────────'));
+  if (tools.length === 0) {
+    console.log(c.dim('  No tools match that filter.'));
+  } else {
+    const width = Math.max(...tools.map(t => t.name.length));
+    for (const t of tools) {
+      console.log(`  ${c.cyan(t.name.padEnd(width))}  ${c.dim(truncate(t.description, 64))}`);
+    }
+  }
+  console.log('');
+  console.log(c.dim('  Tip: veto tools <filter>  filters by name/description  ·  --json for machine output'));
+  console.log('');
+}
+
+// veto agents [filter] [--json] — lists the 43 worker specialists from AGENT_MANIFEST
+// (grouped by domain) plus the 7 Council personas.
+async function agentsCommand() {
+  const { AGENT_MANIFEST } = await import('./agents/manifest.js');
+  const asJson = process.argv.includes('--json');
+  const filter = process.argv.slice(3).find(a => !a.startsWith('--'))?.toLowerCase();
+
+  const match = (s: string) => !filter || s.toLowerCase().includes(filter);
+  const workers = AGENT_MANIFEST
+    .map(a => ({ id: a.id, role: a.role, output_type: a.output_type, domain: a.domain }))
+    .filter(a => match(a.id) || match(a.role) || match(a.domain));
+  const council = COUNCIL_AGENTS.filter(a => match(a.id) || match(a.role));
+
+  if (asJson) {
+    console.log(JSON.stringify({
+      worker_agents: { count: workers.length, agents: workers },
+      council_agents: { count: council.length, agents: council },
+    }, null, 2));
+    return;
+  }
+
+  console.log('');
+  console.log(c.bold('  Veto Agents') + c.dim(` — ${workers.length} worker specialists + ${council.length} council`));
+  console.log(c.dim('  ─────────────────────────────────────────────────────'));
+
+  if (workers.length === 0 && council.length === 0) {
+    console.log(c.dim('  No agents match that filter.'));
+    console.log('');
+    return;
+  }
+
+  for (const domain of [...new Set(workers.map(a => a.domain))]) {
+    const inDomain = workers.filter(a => a.domain === domain);
+    const width = Math.max(...inDomain.map(a => a.id.length));
+    console.log('');
+    console.log(`  ${c.bold(domain)} ${c.dim(`(${inDomain.length})`)}`);
+    for (const a of inDomain) {
+      const badge = a.output_type === 'analysis' ? c.yellow('analysis') : c.dim('plan    ');
+      console.log(`    ${c.cyan(a.id.padEnd(width))}  ${badge}  ${c.dim(truncate(a.role, 58))}`);
+    }
+  }
+
+  if (council.length > 0) {
+    const width = Math.max(...council.map(a => a.id.length));
+    console.log('');
+    console.log(`  ${c.bold('council')} ${c.dim(`(${council.length})`)} ${c.dim('— 7-agent debate via veto_council_debate')}`);
+    for (const a of council) {
+      console.log(`    ${c.cyan(a.id.padEnd(width))}  ${c.dim(truncate(a.role, 60))}`);
+    }
+  }
+
+  console.log('');
+  console.log(c.dim('  Worker agents run via veto_route_task / veto_agent_plan · council via veto_council_debate'));
+  console.log(c.dim('  Tip: veto agents <filter>  ·  --json for machine output'));
+  console.log('');
+}
+
 // ─── Router ────────────────────────────────────────────────────────────────────
 
 const command = process.argv[2] ?? 'init';
@@ -1237,6 +1346,20 @@ switch (command) {
 
   case 'patterns':
     patternsCommand().catch((err) => {
+      console.error(c.red(`Error: ${err.message}`));
+      process.exit(1);
+    });
+    break;
+
+  case 'tools':
+    toolsCommand().catch((err) => {
+      console.error(c.red(`Error: ${err.message}`));
+      process.exit(1);
+    });
+    break;
+
+  case 'agents':
+    agentsCommand().catch((err) => {
       console.error(c.red(`Error: ${err.message}`));
       process.exit(1);
     });
