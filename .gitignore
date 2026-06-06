@@ -6,12 +6,14 @@ dist/
 veto.db
 .env
 .claude/
+.mcp-tools/
 
 # Internal — not for public repo
 VETO_VISION_FINAL.md
 PLAN.md
 BUGS.md
 Prelaunch.md
+MCP-REGISTRY.md
 docs/
 scripts/
 improvements.md
