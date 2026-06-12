@@ -6,6 +6,8 @@ import {
   recordOutcome, getLearningStats, getLearnedThresholds, applyLearnedThresholds,
   getAgentPerformanceStats, getTaskTypeBreakdown, getCouncilInsights,
 } from '../../router/index.js';
+import { mineImplicitOutcomes } from '../../router/implicit-outcomes.js';
+import { log, errMsg } from '../../log.js';
 import type { HandlerMap } from '../registry.js';
 
 export const learningHandlers: HandlerMap = {
@@ -32,6 +34,15 @@ export const learningHandlers: HandlerMap = {
     const includeTaskTypes = args?.include_task_types === true;
     const includeCouncil = args?.include_council_insights === true;
 
+    // Pick up implicit signals (errors, retries) from the trace log before
+    // reporting, so stats reflect outcomes nobody recorded manually.
+    let mined = { mined: 0, errors: 0, retries: 0 };
+    try {
+      mined = mineImplicitOutcomes();
+    } catch (err) {
+      log.warn('implicit outcome mining failed', { error: errMsg(err) });
+    }
+
     const stats = getLearningStats();
     const learned = getLearnedThresholds();
     const result: Record<string, unknown> = {
@@ -48,6 +59,10 @@ export const learningHandlers: HandlerMap = {
       },
       suggested_thresholds: stats.suggested_thresholds,
       ready_to_apply: stats.total_tasks >= 20,
+      implicit_signals: {
+        ...mined,
+        note: 'Outcomes mined automatically from the tool-call trace (errored calls, rapid re-runs) — no manual veto_record_outcome needed for these.',
+      },
     };
 
     if (includeAgentStats) {

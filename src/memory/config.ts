@@ -13,6 +13,10 @@ export type VetoConfig = {
   // When true (default), the router auto-applies learned tier thresholds every
   // 20 recorded outcomes — no manual veto_learning_apply needed.
   auto_apply_learning: boolean;
+  // When true, ListTools advertises only the compact surface (core tools +
+  // veto_find_tools/veto_call) instead of all 89 schemas. Env VETO_COMPACT
+  // overrides. All tools remain directly callable in both modes.
+  compact_tools: boolean;
 };
 
 const CONFIG_PATH = join(homedir(), '.veto', 'config.json');
@@ -29,7 +33,7 @@ export const DEFAULT_BUDGETS: VetoConfig['dailyTokenBudget'] = {
 
 export function getConfig(): VetoConfig {
   if (!existsSync(CONFIG_PATH)) {
-    return { dailyTokenBudget: { ...DEFAULT_BUDGETS }, billing_mode: 'subscription', auto_apply_learning: true };
+    return { dailyTokenBudget: { ...DEFAULT_BUDGETS }, billing_mode: 'subscription', auto_apply_learning: true, compact_tools: false };
   }
   try {
     const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')) as Partial<VetoConfig>;
@@ -42,9 +46,10 @@ export function getConfig(): VetoConfig {
       },
       billing_mode: raw.billing_mode === 'api' ? 'api' : 'subscription',
       auto_apply_learning: raw.auto_apply_learning !== false, // default true
+      compact_tools: raw.compact_tools === true, // default false
     };
   } catch {
-    return { dailyTokenBudget: { ...DEFAULT_BUDGETS }, billing_mode: 'subscription', auto_apply_learning: true };
+    return { dailyTokenBudget: { ...DEFAULT_BUDGETS }, billing_mode: 'subscription', auto_apply_learning: true, compact_tools: false };
   }
 }
 

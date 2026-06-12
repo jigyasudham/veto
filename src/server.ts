@@ -8,6 +8,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, ListResourcesRequestSchema, ReadResourceRequestSchema, ListPromptsRequestSchema, GetPromptRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { TOOL_DEFINITIONS } from './tools/definitions.js';
+import { isCompactMode, getCompactToolList, findTools } from './tools/compact.js';
 import { log, errMsg } from './log.js';
 import type { HandlerMap } from './server/registry.js';
 import { workerHandlers } from './server/handlers/workers.js';
@@ -119,10 +120,13 @@ const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint
   veto_semantic_search:   { readOnlyHint: true },
   veto_sdd_agent:         { readOnlyHint: false, destructiveHint: false },
   veto_notify_ide:        { readOnlyHint: true },
+  veto_find_tools:        { readOnlyHint: true },
 };
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  const tools = TOOL_DEFINITIONS as unknown as Array<{ name: string; description: string; inputSchema: object }>;
+  const tools = isCompactMode()
+    ? getCompactToolList()
+    : (TOOL_DEFINITIONS as unknown as Array<{ name: string; description: string; inputSchema: object }>);
   return { tools: tools.map(t => ({ ...t, annotations: TOOL_ANNOTATIONS[t.name] ?? {} })) };
 });
 
@@ -146,6 +150,41 @@ const TOOL_REGISTRY: HandlerMap = {
   ...coreHandlers,
   ...agentHandlers,
   ...councilHandlers,
+};
+
+// Meta-tools for compact mode: catalog search + indirect invocation. Defined
+// here (not in a handler module) because veto_call needs the merged registry.
+// Callable in full mode too, but only advertised when compact mode is on.
+TOOL_REGISTRY['veto_find_tools'] = ({ args }) => {
+  const query = String(args?.query ?? '').trim();
+  if (!query) return { content: [{ type: 'text', text: 'query is required.' }], isError: true };
+  const limit = typeof args?.limit === 'number' ? args.limit : 5;
+  const tools = findTools(query, limit);
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify({
+        success: true,
+        matches: tools.length,
+        tools,
+        usage: 'Invoke a result with veto_call { tool: "<name>", args: {...} } following its inputSchema.',
+      }, null, 2),
+    }],
+  };
+};
+
+TOOL_REGISTRY['veto_call'] = async ({ args, server: srv }) => {
+  const toolName = String(args?.tool ?? '').trim();
+  if (!toolName) return { content: [{ type: 'text', text: 'tool is required.' }], isError: true };
+  if (toolName === 'veto_call' || toolName === 'veto_find_tools') {
+    return { content: [{ type: 'text', text: `${toolName} cannot be invoked through veto_call.` }], isError: true };
+  }
+  const handler = TOOL_REGISTRY[toolName];
+  if (!handler) {
+    return { content: [{ type: 'text', text: `Unknown tool: ${toolName}. Use veto_find_tools to discover valid names.` }], isError: true };
+  }
+  const innerArgs = args?.args && typeof args.args === 'object' ? args.args : {};
+  return await handler({ request: { params: { name: toolName, arguments: innerArgs } }, args: innerArgs, server: srv });
 };
 
 // Exported so the dispatch can be unit-tested without connecting stdio. Registered
@@ -585,12 +624,66 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
 
 // ─── Start ─────────────────────────────────────────────────────────────────────
 
+// Experimental streamable-HTTP mode (veto-server --http [port]). Stateless
+// (no session IDs — the direction of the July 2026 spec) with plain JSON
+// responses. Binds 127.0.0.1 unless VETO_HTTP_HOST is set: an MCP server
+// silently reachable from the network is exactly the "Shadow MCP" pattern
+// enterprises are now scanning for, so exposure must be a deliberate choice.
+async function startHttp(port: number) {
+  const { StreamableHTTPServerTransport } = await import('@modelcontextprotocol/sdk/server/streamableHttp.js');
+  const { createServer } = await import('node:http');
+
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+  await server.connect(transport);
+
+  const host = process.env.VETO_HTTP_HOST || '127.0.0.1';
+  const httpServer = createServer((req, res) => {
+    if (!(req.url ?? '').startsWith('/mcp')) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Not found. The MCP endpoint is /mcp.' }));
+      return;
+    }
+    if (req.method === 'POST') {
+      let raw = '';
+      req.on('data', (chunk) => { raw += chunk; });
+      req.on('end', async () => {
+        try {
+          const body = raw ? JSON.parse(raw) : undefined;
+          await transport.handleRequest(req, res, body);
+        } catch (err) {
+          log.error('http request failed', { error: errMsg(err) });
+          if (!res.headersSent) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null }));
+          }
+        }
+      });
+    } else {
+      transport.handleRequest(req, res).catch((err: unknown) => {
+        log.error('http request failed', { error: errMsg(err) });
+        if (!res.headersSent) res.writeHead(500).end();
+      });
+    }
+  });
+
+  await new Promise<void>((resolve) => httpServer.listen(port, host, resolve));
+  process.stderr.write(`Veto MCP server v${VERSION} running (streamable HTTP, http://${host}:${port}/mcp)\n`);
+}
+
 async function main() {
   const loadedPlugins = await loadPlugins();
   if (loadedPlugins.length > 0) {
     process.stderr.write(`[veto] Loaded ${loadedPlugins.length} plugin(s): ${loadedPlugins.join(', ')}\n`);
   }
   initLlmRunner(server);
+
+  const httpFlag = process.argv.indexOf('--http');
+  if (httpFlag !== -1) {
+    const port = parseInt(process.argv[httpFlag + 1] ?? '', 10) || 3939;
+    await startHttp(port);
+    return;
+  }
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   process.stderr.write(`Veto MCP server v${VERSION} running (stdio)\n`);

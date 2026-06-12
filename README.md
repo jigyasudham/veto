@@ -74,6 +74,24 @@ The 7-agent **Council** is LLM-first — its value is the multi-agent debate —
 | **DevTools** | `veto_docs_fetch` · `veto_context_status` · `veto_openapi_gen` · `veto_flag_auditor` · `veto_env_setup` · `veto_commit_message` · `veto_pr_description` · `veto_pr_post` · `veto_prompt_optimizer` · `veto_sre_advisor` · `veto_diagram` · `veto_rca` · `veto_doc_gen` · `veto_postmortem` · `veto_release_notes` · `veto_translate` · `veto_merge_conflict` |
 | **Plugins** | `veto_plugins` |
 
+## Compact Mode — 89 tools without the context tax
+
+89 tool schemas cost a client ~16K context tokens before the user types a word. Compact mode advertises a surface that is **5–6× smaller**: seven core tools (`veto_status`, `veto_session_save`, `veto_session_restore`, `veto_route_task`, `veto_council_debate`, `veto_memory_search`, `veto_record_outcome`) plus two meta-tools — `veto_find_tools` searches the full catalog by keyword and returns matching schemas on demand; `veto_call` invokes any catalog tool by name. Every tool remains directly callable in both modes; compact only changes what is advertised up front.
+
+Enable it with `VETO_COMPACT=1` in your MCP server config env, or `"compact_tools": true` in `~/.veto/config.json`:
+
+```jsonc
+{
+  "mcpServers": {
+    "veto": {
+      "command": "npx",
+      "args": ["-y", "--package", "@jigyasudham/veto", "veto-server"],
+      "env": { "VETO_COMPACT": "1" }
+    }
+  }
+}
+```
+
 ## Which tool do I use?
 
 Several tools overlap by design (different granularity or entry point). Quick guide:
@@ -301,6 +319,8 @@ veto_workflow {
 
 Every agent tool auto-records a quality signal when it completes. After any working session, `veto_learning_stats` shows live data and `veto_learning_apply` adjusts tier thresholds automatically after ~20 calls.
 
+The loop also feeds itself **implicitly**: `veto_learning_stats` mines the tool-call trace for signals nobody recorded manually — an agent-backed tool that returned an error, or the same analysis tool re-run within minutes in one session (which usually means the first answer didn't satisfy) — and records them as low-quality outcomes automatically.
+
 ```bash
 veto_route_task { task: "debug auth issue", file_ext: ".ts" }
 → { ..., recommended_agent: "debugger" }   # ← predicted from history
@@ -348,6 +368,10 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 | Zed | ✅ MCP support (`context_servers`) |
 
 ---
+
+## HTTP Transport (experimental)
+
+`veto-server --http [port]` serves MCP over streamable HTTP at `http://127.0.0.1:<port>/mcp` (default port 3939) instead of stdio — for gateways, remote clients, or anything that can't spawn a subprocess. It runs **stateless** (no session IDs — the direction of the July 2026 MCP spec) and binds loopback only; set `VETO_HTTP_HOST` to expose it deliberately.
 
 ## Project Structure
 
