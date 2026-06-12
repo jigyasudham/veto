@@ -1,6 +1,10 @@
 // Assigns Tier 1/2/3 and specific model recommendations
 // Some agents are permanently locked to a tier regardless of complexity score
 
+import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { readFileSync, existsSync } from 'node:fs';
+
 export type AgentType =
   // Tier 3 locked — stakes too high
   | 'lead-developer' | 'system-architect' | 'security-scanner'
@@ -34,11 +38,39 @@ const TIER1_LOCKED = new Set<AgentType>([
   'file-manager', 'git-agent', 'search-agent', 'secrets', 'reporter',
 ]);
 
-const TIER_MODELS: Record<Tier, { claude: string; gemini: string; codex: string }> = {
-  1: { claude: 'claude-haiku-4-5', gemini: 'gemini-2.0-flash', codex: 'gpt-4o-mini' },
-  2: { claude: 'claude-sonnet-4-6', gemini: 'gemini-2.0-pro', codex: 'gpt-4o' },
-  3: { claude: 'claude-sonnet-4-6', gemini: 'gemini-2.0-advanced', codex: 'gpt-4o' },
+type TierModels = Record<Tier, { claude: string; gemini: string; codex: string }>;
+
+// Bundled defaults (current as of June 2026). Model names rot fast — any of
+// these can be overridden per-tier via ~/.veto/models.json without waiting
+// for a package update, e.g. { "3": { "gemini": "gemini-3.5-pro" } }.
+const DEFAULT_TIER_MODELS: TierModels = {
+  1: { claude: 'claude-haiku-4-5', gemini: 'gemini-3.5-flash', codex: 'gpt-5.1-codex-mini' },
+  2: { claude: 'claude-sonnet-4-6', gemini: 'gemini-3.5-flash', codex: 'gpt-5.1-codex' },
+  3: { claude: 'claude-opus-4-8', gemini: 'gemini-3-pro', codex: 'gpt-5.1' },
 };
+
+const MODELS_PATH = join(homedir(), '.veto', 'models.json');
+let cachedTierModels: TierModels | null = null;
+
+function getTierModels(): TierModels {
+  if (cachedTierModels) return cachedTierModels;
+  let models = DEFAULT_TIER_MODELS;
+  if (existsSync(MODELS_PATH)) {
+    try {
+      const raw = JSON.parse(readFileSync(MODELS_PATH, 'utf8')) as
+        Partial<Record<'1' | '2' | '3', Partial<TierModels[Tier]>>>;
+      models = {
+        1: { ...DEFAULT_TIER_MODELS[1], ...raw['1'] },
+        2: { ...DEFAULT_TIER_MODELS[2], ...raw['2'] },
+        3: { ...DEFAULT_TIER_MODELS[3], ...raw['3'] },
+      };
+    } catch {
+      // Malformed override file — fall back to bundled defaults
+    }
+  }
+  cachedTierModels = models;
+  return models;
+}
 
 export function selectModel(
   complexityScore: number,
@@ -59,7 +91,7 @@ export function selectModel(
     agent_locked = false;
   }
 
-  const models = { ...TIER_MODELS[tier] };
+  const models = { ...getTierModels()[tier] };
   const reason = agent_locked
     ? `${agentType} is locked to Tier ${tier}`
     : `Complexity score ${complexityScore}/100 assigned to Tier ${tier}`;

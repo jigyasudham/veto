@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { recordOutcome, getLearningStats, applyLearnedThresholds, getLearnedThresholds, getRecommendedAgent, isFeedbackEnabled, setFeedbackEnabled, recordRoutingFeedback, getRoutingFeedbackStats, resetRoutingFeedback, listRoutingFeedback } from '../../src/router/learning-updater.js';
-import { resetDb } from '../../src/memory/local.js';
+import { resetDb, getDb } from '../../src/memory/local.js';
+import { randomUUID } from 'node:crypto';
 
 beforeEach(() => {
   resetDb();
@@ -93,6 +94,40 @@ describe('auto-apply learned thresholds (3.4b)', () => {
     expect(last.total).toBe(20);
     expect(last.auto_applied).toBe(true);
     expect(getLearnedThresholds().source).toBe('learned');
+  });
+
+  it('auto-applies even when the count is past 20 but not a multiple of it (pre-existing data)', () => {
+    // Simulate a DB that accumulated outcomes before auto-apply existed:
+    // 25 rows inserted directly, bypassing recordOutcome's trigger.
+    const db = getDb();
+    for (let i = 0; i < 25; i++) {
+      db.prepare(
+        `INSERT INTO learning_data (id, task_type, complexity, model_tier, output_quality, tokens_used, agent)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(randomUUID(), `legacy-${i}`, 50, 2, 88, 0, 'coder');
+    }
+    const r = recordOutcome('new-task', 50, 2, 'coder', 88);
+    expect(r.total).toBe(26);
+    expect(r.auto_applied).toBe(true);
+    expect(getLearnedThresholds().source).toBe('learned');
+  });
+
+  it('waits for 20 NEW outcomes after an apply before re-applying', () => {
+    for (let i = 0; i < 20; i++) recordOutcome(`task-${i}`, 50, 2, 'coder', 88);
+    let r = recordOutcome('task-21', 50, 2, 'coder', 88);
+    expect(r.auto_applied).toBe(false);
+    for (let i = 0; i < 18; i++) r = recordOutcome(`task-2x-${i}`, 50, 2, 'coder', 88);
+    expect(r.auto_applied).toBe(false);
+    r = recordOutcome('task-40', 50, 2, 'coder', 88);
+    expect(r.total).toBe(40);
+    expect(r.auto_applied).toBe(true);
+  });
+
+  it('keeps data_points fresh across repeated applies', () => {
+    for (let i = 0; i < 20; i++) recordOutcome(`task-${i}`, 50, 2, 'coder', 88);
+    expect(getLearnedThresholds().data_points).toBe(20);
+    for (let i = 0; i < 20; i++) recordOutcome(`task-b-${i}`, 50, 2, 'coder', 88);
+    expect(getLearnedThresholds().data_points).toBe(40);
   });
 });
 

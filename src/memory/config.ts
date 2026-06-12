@@ -17,6 +17,9 @@ export type VetoConfig = {
 
 const CONFIG_PATH = join(homedir(), '.veto', 'config.json');
 
+// Local planning heuristics, NOT provider quotas. Veto has no visibility into
+// real subscription limits — these only drive the warning/critical coloring in
+// rate status. Users set their own numbers in ~/.veto/config.json.
 export const DEFAULT_BUDGETS: VetoConfig['dailyTokenBudget'] = {
   claude:  500_000,
   gemini: 1_000_000,

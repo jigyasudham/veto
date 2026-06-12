@@ -20,7 +20,7 @@ export const TOOL_DEFINITIONS = [
         },
         model: {
           type: 'string',
-          description: 'Optional: specific model ID (e.g. "claude-sonnet-4-6", "gemini-2-5-pro", "gpt-4o"). When provided, Veto resolves the exact context window for that model instead of using the platform default.',
+          description: 'Optional: specific model ID (e.g. "claude-sonnet-4-6", "gemini-3.5-pro", "gpt-5.1"). When provided, Veto resolves the exact context window for that model instead of using the platform default.',
         },
       },
       required: [],
@@ -101,7 +101,7 @@ export const TOOL_DEFINITIONS = [
         },
         model: {
           type: 'string',
-          description: 'Optional: specific model ID (e.g. "claude-sonnet-4-6", "gemini-2-5-pro", "gpt-4o"). Veto resolves the exact context window for this model and uses it for auto-save threshold calculations.',
+          description: 'Optional: specific model ID (e.g. "claude-sonnet-4-6", "gemini-3.5-pro", "gpt-5.1"). Veto resolves the exact context window for this model and uses it for auto-save threshold calculations.',
         },
         tags: {
           type: 'array',
