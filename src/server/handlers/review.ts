@@ -6,6 +6,7 @@
 
 import { execSync } from 'node:child_process';
 import { readGitDiff, runTripleScan } from '../scan-core.js';
+import { checkDiffAgainstConstraints } from '../../memory/decisions.js';
 import { autoStoreCritical } from '../runtime.js';
 import { buildContextString } from '../../context/reader.js';
 import { executeOne } from '../../agents/executor.js';
@@ -31,11 +32,18 @@ export const reviewHandlers: HandlerMap = {
     // Parse changed files from diff header lines
     const changedFiles = [...diff.matchAll(/^diff --git a\/.+ b\/(.+)$/gm)].map(m => m[1]);
 
+    // Decision-drift check is deterministic — runs in both phases of the
+    // agentic loop so violations are visible even before LLM analysis lands.
+    const driftViolations = checkDiffAgainstConstraints(diff, projectDir);
+    const driftBlocks = driftViolations.some(v => v.severity === 'block');
+    const decision_drift = { violations_found: driftViolations.length, violations: driftViolations };
+
     const context = buildContextString(projectDir, userContext);
     const scanResult = await runTripleScan(diff, context, true, args?.agent_outputs as any);
-    if ('mode' in scanResult && scanResult.mode === 'agentic_loop') return { content: [{ type: 'text', text: JSON.stringify(scanResult, null, 2) }] };
+    if ('mode' in scanResult && scanResult.mode === 'agentic_loop') return { content: [{ type: 'text', text: JSON.stringify({ ...scanResult, decision_drift }, null, 2) }] };
     if ('mode' in scanResult) return { content: [{ type: 'text', text: JSON.stringify(scanResult) }] };
-    const { reviewResult, secResult, secretsResult, verdict } = scanResult as any;
+    const { reviewResult, secResult, secretsResult, verdict: scanVerdict } = scanResult as any;
+    const verdict = driftBlocks ? 'fail' : scanVerdict;
     const verdictEmoji = verdict === 'pass' ? '✅ PASS' : verdict === 'warn' ? '⚠️  WARN' : '❌ FAIL';
 
     // Per-file finding counts (approximate from line refs)
@@ -51,6 +59,7 @@ export const reviewHandlers: HandlerMap = {
       if ((reviewResult.analysis?.critical_count ?? 0) > 0) blockingIssues.push(`Code: ${reviewResult.analysis?.summary ?? 'critical issues found'}`);
       if ((secResult.analysis?.critical_count ?? 0) > 0) blockingIssues.push(`Security: ${secResult.analysis?.summary ?? 'vulnerabilities detected'}`);
       if ((secretsResult.analysis?.findings?.length ?? 0) > 0) blockingIssues.push(`Secrets: exposed credentials detected`);
+      if (driftBlocks) blockingIssues.push(`Decision drift: ${driftViolations.filter(v => v.severity === 'block').map(v => v.rule).join('; ')}`);
       autoStoreCritical(`Diff review failed: ${changedFiles.slice(0, 2).join(', ')}`, blockingIssues, projectDir, ['diff-review']);
     }
 
@@ -81,11 +90,13 @@ export const reviewHandlers: HandlerMap = {
             verdict: secretsResult.analysis?.verdict ?? null,
             findings: secretsResult.analysis?.findings ?? [],
           },
+          decision_drift,
           summary: [
             `${verdictEmoji} — ${changedFiles.length} file(s) changed`,
             `Code: ${reviewResult.analysis?.verdict ?? 'n/a'} (score ${reviewResult.analysis?.score ?? '?'}/100)`,
             `Security: ${secResult.analysis?.verdict ?? 'n/a'} — ${secResult.analysis?.critical_count ?? 0} critical, ${secResult.analysis?.high_count ?? 0} high`,
             `Secrets: ${(secretsResult.analysis?.findings?.length ?? 0) > 0 ? '🔴 Exposed credentials detected' : '✅ Clean'}`,
+            `Decisions: ${driftViolations.length > 0 ? `🔴 ${driftViolations.length} violation(s) of recorded decisions` : '✅ No drift'}`,
           ].join('\n'),
         }, null, 2),
       }],
@@ -117,9 +128,13 @@ export const reviewHandlers: HandlerMap = {
     const projectCtx = (() => { try { return buildContextString(project_dir); } catch { return ''; } })();
     const fullContext = [context, projectCtx].filter(Boolean).join('\n\n');
 
+    const gateDrift = checkDiffAgainstConstraints(diff, project_dir);
+    const gateDriftBlocks = gateDrift.some(v => v.severity === 'block');
+
     const scanResult = await runTripleScan(diff, fullContext, true, args?.agent_outputs as any);
-    if ('mode' in scanResult) return { content: [{ type: 'text', text: JSON.stringify(scanResult, null, 2) }] };
-    const { reviewResult: codeResult, secResult, secretsResult, verdict } = scanResult;
+    if ('mode' in scanResult) return { content: [{ type: 'text', text: JSON.stringify({ ...scanResult, decision_drift: { violations_found: gateDrift.length, violations: gateDrift } }, null, 2) }] };
+    const { reviewResult: codeResult, secResult, secretsResult, verdict: gateScanVerdict } = scanResult;
+    const verdict = gateDriftBlocks ? 'fail' : gateScanVerdict;
     const exit_code = verdict === 'fail' || (verdict === 'warn' && fail_on === 'warn') ? 1 : 0;
 
     const codeScore    = codeResult.analysis?.score ?? Math.round((codeResult.output?.confidence ?? 0.8) * 100);
@@ -130,6 +145,7 @@ export const reviewHandlers: HandlerMap = {
     if ((codeResult.analysis?.critical_count ?? 0) > 0) blocking_issues.push(`Code review: ${codeResult.analysis?.summary ?? 'critical issues found'}`);
     if ((secResult.analysis?.critical_count  ?? 0) > 0) blocking_issues.push(`Security: ${secResult.analysis?.summary ?? 'vulnerabilities detected'}`);
     if (!secretsClean) blocking_issues.push(`Secrets: ${secretsResult.analysis?.summary ?? 'exposed credentials detected'}`);
+    for (const v of gateDrift.filter(d => d.severity === 'block')) blocking_issues.push(`Decision drift: "${v.rule}" violated in ${v.file} (${v.matched_pattern})`);
 
     const icon = verdict === 'pass' ? '✅' : verdict === 'warn' ? '⚠️' : '❌';
     const ci_summary = [
@@ -140,6 +156,7 @@ export const reviewHandlers: HandlerMap = {
       `| Code Review | ${codeScore}% | ${(codeResult.analysis?.critical_count ?? 0) === 0 ? '✅' : '❌'} |`,
       `| Security Scan | ${secScore}% | ${(secResult.analysis?.critical_count ?? 0) === 0 ? '✅' : '❌'} |`,
       `| Secrets Scan | — | ${secretsClean ? '✅ Clean' : '❌ Found'} |`,
+      `| Decision Drift | — | ${gateDrift.length === 0 ? '✅ None' : gateDriftBlocks ? '❌ Violations' : '⚠️ Warnings'} |`,
       blocking_issues.length > 0 ? `\n**Blocking issues:**\n${blocking_issues.map(i => `- ${i}`).join('\n')}` : '',
     ].filter(Boolean).join('\n');
 
@@ -154,6 +171,7 @@ export const reviewHandlers: HandlerMap = {
             code_review: { score: codeScore, critical: codeResult.analysis?.critical_count ?? 0, high: codeResult.analysis?.high_count ?? 0 },
             security:    { score: secScore,  critical: secResult.analysis?.critical_count  ?? 0, high: secResult.analysis?.high_count  ?? 0 },
             secrets:     { clean: secretsClean, findings: secretsResult.analysis?.findings ?? [] },
+            decision_drift: { violations_found: gateDrift.length, violations: gateDrift },
           },
           blocking_issues,
           ci_summary,

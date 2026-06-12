@@ -3,12 +3,64 @@
 
 import { storeKnowledge, searchKnowledge, deleteKnowledge, updateProjectMap, getProjectMap, upsertPattern, getPatterns } from '../../memory/local.js';
 import { exportMemory, importMemory, exportMemoryMarkdown, importMemoryMarkdown } from '../../memory/sync.js';
+import { addConstraint, listConstraints, setConstraintActive, checkDiffAgainstConstraints } from '../../memory/decisions.js';
+import { readGitDiff } from '../scan-core.js';
 import { buildRepoMap } from '../../repo-map/index.js';
 import type { KnowledgeType } from '../../memory/schema.js';
 import { getActiveProjectDir } from '../runtime.js';
 import type { HandlerMap } from '../registry.js';
 
+const jsonText = (payload: unknown, isError = false) =>
+  ({ content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }], ...(isError ? { isError: true } : {}) });
+
 export const memoryHandlers: HandlerMap = {
+  veto_decisions: ({ args }) => {
+    const action = String(args?.action ?? '').trim();
+    const projectDir = args?.project_dir ? String(args.project_dir) : (getActiveProjectDir() ?? undefined);
+
+    if (action === 'add') {
+      const rule = String(args?.rule ?? '').trim();
+      const patterns = Array.isArray(args?.forbidden_patterns) ? args.forbidden_patterns.map(String).map((s: string) => s.trim()).filter(Boolean) : [];
+      if (!rule || patterns.length === 0) {
+        return jsonText({ success: false, message: 'add requires rule and a non-empty forbidden_patterns array.' }, true);
+      }
+      const constraint = addConstraint({
+        rule,
+        forbidden_patterns: patterns,
+        why: args?.why ? String(args.why) : undefined,
+        file_scope: args?.file_scope ? String(args.file_scope) : undefined,
+        severity: args?.severity === 'warn' ? 'warn' : 'block',
+        project_dir: projectDir,
+      });
+      return jsonText({ success: true, constraint, message: 'Decision recorded as an enforceable constraint. veto_diff_review and veto_ci_gate now flag diffs that violate it.' });
+    }
+
+    if (action === 'list') {
+      const constraints = listConstraints(projectDir, args?.include_inactive === true);
+      return jsonText({ success: true, count: constraints.length, constraints });
+    }
+
+    if (action === 'check') {
+      let diff = args?.diff ? String(args.diff) : '';
+      if (!diff) diff = readGitDiff(projectDir);
+      if (!diff.trim()) return jsonText({ success: false, message: 'No diff provided and no git changes detected.' }, true);
+      const violations = checkDiffAgainstConstraints(diff, projectDir);
+      const verdict = violations.some(v => v.severity === 'block') ? 'fail' : violations.length > 0 ? 'warn' : 'pass';
+      return jsonText({ success: true, verdict, violations_found: violations.length, violations, constraints_active: listConstraints(projectDir).length });
+    }
+
+    if (action === 'disable' || action === 'enable') {
+      const id = String(args?.id ?? '').trim();
+      if (!id) return jsonText({ success: false, message: `${action} requires id.` }, true);
+      const changed = setConstraintActive(id, action === 'enable');
+      return changed
+        ? jsonText({ success: true, message: `Constraint ${id} ${action}d.` })
+        : jsonText({ success: false, message: `No constraint with id ${id}.` }, true);
+    }
+
+    return jsonText({ success: false, message: "action must be one of: add, list, check, disable, enable." }, true);
+  },
+
   veto_memory_store: ({ args }) => {
     const title = String(args?.title ?? '').trim();
     const content = String(args?.content ?? '').trim();

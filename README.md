@@ -1,6 +1,6 @@
 # veto
 
-> **90 agentic tools. 49 specialists. Every major AI CLI. Self-learning. Zero extra cost on subscriptions.**
+> **91 agentic tools. 49 specialists. Every major AI CLI. Self-learning. Zero extra cost on subscriptions.**
 
 An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, Gemini CLI, Antigravity CLI, Cursor, Windsurf, Zed, and JetBrains using your existing subscriptions — giving every AI a council of specialist agents, local LLM support, SDD agents, playwright automation, persistent cross-platform memory, a self-learning router that re-tunes its tier thresholds automatically every 20 recorded task outcomes (reviews record outcomes for you; configurable via `auto_apply_learning`), CI/CD gates, workspace discovery, and bidirectional IDE communication.
 
@@ -52,7 +52,7 @@ The 7-agent **Council** is LLM-first — its value is the multi-agent debate —
 
 ---
 
-## MCP Tools (90)
+## MCP Tools (91)
 
 | Category | Tools |
 |---|---|
@@ -74,9 +74,9 @@ The 7-agent **Council** is LLM-first — its value is the multi-agent debate —
 | **DevTools** | `veto_docs_fetch` · `veto_context_status` · `veto_openapi_gen` · `veto_flag_auditor` · `veto_env_setup` · `veto_commit_message` · `veto_pr_description` · `veto_pr_post` · `veto_prompt_optimizer` · `veto_sre_advisor` · `veto_diagram` · `veto_rca` · `veto_doc_gen` · `veto_postmortem` · `veto_release_notes` · `veto_translate` · `veto_merge_conflict` |
 | **Plugins** | `veto_plugins` |
 
-## Compact Mode — 90 tools without the context tax
+## Compact Mode — 91 tools without the context tax
 
-90 tool schemas cost a client ~16K context tokens before the user types a word. Compact mode advertises a surface that is **5–6× smaller**: seven core tools (`veto_status`, `veto_session_save`, `veto_session_restore`, `veto_route_task`, `veto_council_debate`, `veto_memory_search`, `veto_record_outcome`) plus two meta-tools — `veto_find_tools` searches the full catalog by keyword and returns matching schemas on demand; `veto_call` invokes any catalog tool by name. Every tool remains directly callable in both modes; compact only changes what is advertised up front.
+91 tool schemas cost a client ~16K context tokens before the user types a word. Compact mode advertises a surface that is **5–6× smaller**: seven core tools (`veto_status`, `veto_session_save`, `veto_session_restore`, `veto_route_task`, `veto_council_debate`, `veto_memory_search`, `veto_record_outcome`) plus two meta-tools — `veto_find_tools` searches the full catalog by keyword and returns matching schemas on demand; `veto_call` invokes any catalog tool by name. Every tool remains directly callable in both modes; compact only changes what is advertised up front.
 
 Enable it with `VETO_COMPACT=1` in your MCP server config env, or `"compact_tools": true` in `~/.veto/config.json`:
 
@@ -105,6 +105,22 @@ veto_dep_verify { packages: ["axios", "axois", "left-padd"], ecosystem: "npm" }
 ```
 
 Signals per package: registry existence, age, monthly downloads, version history, deprecation, and typo-distance from popular packages. Supports npm, PyPI, and crates.io. Network failures return `unverifiable` — never silently safe.
+
+## Decision-Drift Enforcement
+
+AI assistants forget architectural decisions and re-litigate them sessions later — the most common complaint about long-running AI projects. Veto's memory doesn't just store decisions; it **enforces** them. Record a decision once as a machine-checkable constraint:
+
+```
+veto_decisions {
+  action: "add",
+  rule: "We use Postgres — no Mongo",
+  why: "Decided 2026-05: relational data, team expertise",
+  forbidden_patterns: ["mongoose", "mongodb"],
+  severity: "block"
+}
+```
+
+From then on, `veto_diff_review` and `veto_ci_gate` automatically fail any diff whose **added lines** match a forbidden pattern — when an AI quietly adds `mongoose` to the imports three sessions later, the review fails with the rule and the rationale attached. Patterns are case-insensitive regexes (with substring fallback), optionally scoped to a file glob (`src/**/*.ts`), per-project or global, severity `block` or `warn`. Manage with `action: list / check / disable / enable`.
 
 ## Which tool do I use?
 
@@ -177,7 +193,7 @@ veto sessions                    # List last 20 saved sessions ([auto] badge on 
 veto sessions --clean            # Remove auto-saves older than 7 days
 veto memory [query]              # Search knowledge base (blank = all entries)
 veto patterns [prefix]           # List learned agent/routing patterns
-veto tools [filter]              # List all 90 MCP tools (--json for machine output)
+veto tools [filter]              # List all 91 MCP tools (--json for machine output)
 veto agents [filter]             # List all 49 specialists — workers + council (--json)
 veto routing [status|log|reset]  # Inspect the opt-in routing feedback loop
 veto hook install                # Install pre-commit secrets scan hook
@@ -389,7 +405,7 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 
 ## Project Structure
 
-Veto is a single MCP server (`src/server.ts`) that registers 90 tools, MCP Resources, and Prompts, then dispatches every tool call through a per-domain **handler registry** — there is no monolithic switch. Each domain owns a `HandlerMap` module under `src/server/handlers/`:
+Veto is a single MCP server (`src/server.ts`) that registers 91 tools, MCP Resources, and Prompts, then dispatches every tool call through a per-domain **handler registry** — there is no monolithic switch. Each domain owns a `HandlerMap` module under `src/server/handlers/`:
 
 | Module | Tools | Domain |
 |---|---|---|

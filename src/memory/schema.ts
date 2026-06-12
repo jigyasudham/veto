@@ -169,6 +169,20 @@ export const CREATE_TABLES = `
     updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS decision_constraints (
+    id                 TEXT PRIMARY KEY,
+    project_dir        TEXT,
+    rule               TEXT NOT NULL,
+    why                TEXT,
+    forbidden_patterns TEXT NOT NULL,
+    file_scope         TEXT,
+    severity           TEXT NOT NULL DEFAULT 'block',
+    active             INTEGER NOT NULL DEFAULT 1,
+    created_at         TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_decision_constraints_proj ON decision_constraints(project_dir);
+
   CREATE TABLE IF NOT EXISTS routing_feedback (
     id           TEXT PRIMARY KEY,
     task_hash    TEXT NOT NULL,

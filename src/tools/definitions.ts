@@ -478,6 +478,27 @@ export const TOOL_DEFINITIONS = [
   },
   // ── Memory & Knowledge ───────────────────────────────────────────────────────
   {
+    name: 'veto_decisions',
+    description:
+      'Decision-drift enforcement: records architectural decisions as machine-checkable constraints, then flags diffs that violate them. AI assistants forget decisions and re-litigate them sessions later — record "we use Postgres" with forbidden_patterns ["mongoose", "mongodb"] once, and veto_diff_review / veto_ci_gate automatically fail any future diff that adds them. Actions: add (rule + forbidden_patterns), list, check (a diff or the working tree), disable / enable (by id).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action:             { type: 'string', description: 'What to do.', enum: ['add', 'list', 'check', 'disable', 'enable'] },
+        rule:               { type: 'string', description: 'add: the decision in human terms, e.g. "We use Postgres — no Mongo".' },
+        why:                { type: 'string', description: 'add: rationale, shown alongside violations.' },
+        forbidden_patterns: { type: 'array', items: { type: 'string' }, description: 'add: case-insensitive regexes (fallback: substring) that violate the decision when they appear in added lines, e.g. ["mongoose", "mongodb"].' },
+        file_scope:         { type: 'string', description: 'add: optional glob limiting which files the constraint applies to, e.g. "src/**/*.ts". Default: all files.' },
+        severity:           { type: 'string', description: "add: 'block' (default — fails reviews/gates) or 'warn'.", enum: ['block', 'warn'] },
+        project_dir:        { type: 'string', description: 'Scope the constraint / check to a project. Defaults to the active project; constraints saved without one apply everywhere.' },
+        diff:               { type: 'string', description: 'check: a unified diff to check. Omit to read uncommitted git changes from project_dir.' },
+        id:                 { type: 'string', description: 'disable/enable: the constraint id.' },
+        include_inactive:   { type: 'boolean', description: 'list: include disabled constraints (default false).' },
+      },
+      required: ['action'],
+    },
+  },
+  {
     name: 'veto_memory_store',
     description: 'Stores a knowledge entry (solution, pattern, error, reference, or decision) in the local knowledge base for retrieval across sessions. Search before storing to avoid duplicates.',
     inputSchema: {
