@@ -1,4 +1,4 @@
-// Tool definitions for all 46 Veto MCP tools — pure data, no side effects.
+// Tool definitions for all Veto MCP tools — pure data, no side effects.
 // Grouped by category. server.ts imports TOOL_DEFINITIONS and maps annotations onto it.
 
 export const TOOL_DEFINITIONS = [
@@ -1014,6 +1014,19 @@ export const TOOL_DEFINITIONS = [
         ecosystem:   { type: 'string', description: "Package ecosystem: 'npm', 'pypi', 'cargo', or 'auto' (default).", enum: ['npm', 'pypi', 'cargo', 'auto'] },
       },
       required: ['project_dir'],
+    },
+  },
+  {
+    name: 'veto_dep_verify',
+    description:
+      'Dependency-hallucination guard: verifies proposed package names against the live registry (npm, PyPI, crates.io) BEFORE install. Checks existence, age, monthly downloads, version history, deprecation, and typo-distance from popular packages. Catches hallucinated names and slopsquatting/typosquat risks. Call this whenever an AI suggests installing a package you have not used before.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        packages:  { type: 'array', items: { type: 'string' }, description: 'Package names to verify, e.g. ["axios", "left-pad"].' },
+        ecosystem: { type: 'string', description: "Registry to check: 'npm' (default), 'pypi', or 'crates'.", enum: ['npm', 'pypi', 'crates'] },
+      },
+      required: ['packages'],
     },
   },
   {

@@ -12,8 +12,39 @@ import { recordOutcome } from '../../router/index.js';
 import { buildContextString } from '../../context/reader.js';
 import type { WorkerAgentType } from '../../agents/types.js';
 import type { HandlerMap } from '../registry.js';
+import { verifyPackages, type Ecosystem } from '../../agents/security/dep-verify.js';
 
 export const advisorHandlers: HandlerMap = {
+  veto_dep_verify: async ({ args }) => {
+    const names = Array.isArray(args?.packages) ? args.packages.map(String).map((s: string) => s.trim()).filter(Boolean) : [];
+    if (names.length === 0) {
+      return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'packages (non-empty array of names) is required.' }) }], isError: true };
+    }
+    if (names.length > 30) {
+      return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'Max 30 packages per call.' }) }], isError: true };
+    }
+    const eco = String(args?.ecosystem ?? 'npm') as Ecosystem;
+    if (!['npm', 'pypi', 'crates'].includes(eco)) {
+      return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: "ecosystem must be 'npm', 'pypi', or 'crates'." }) }], isError: true };
+    }
+
+    const results = await verifyPackages(names, eco);
+    const counts: Record<string, number> = {};
+    for (const r of results) counts[r.verdict] = (counts[r.verdict] ?? 0) + 1;
+
+    const worst =
+      results.some(r => r.verdict === 'not_found' || r.verdict === 'high_risk') ? 'BLOCK' :
+      results.some(r => r.verdict === 'caution' || r.verdict === 'unverifiable') ? 'REVIEW' : 'CLEAR';
+    const guidance =
+      worst === 'BLOCK' ? 'Do not install the flagged packages. not_found = likely hallucinated name (and a slopsquatting target); high_risk = squat-profile package.' :
+      worst === 'REVIEW' ? 'Installable, but review the flagged signals first.' :
+      'All packages verified against the registry.';
+
+    recordOutcome('dep_verify', 40, 2, 'dependency-audit', results.some(r => r.verdict === 'unverifiable') ? 60 : 90);
+
+    return { content: [{ type: 'text', text: JSON.stringify({ success: true, ecosystem: eco, overall: worst, guidance, counts, results }, null, 2) }] };
+  },
+
   veto_dep_advisor: async ({ args }) => {
     const projectDir = String(args?.project_dir ?? '').trim();
     let ecosystem = String(args?.ecosystem ?? 'auto');

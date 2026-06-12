@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Veto MCP Server — 89 tools, LLM council + auto-learning router
+// Veto MCP Server — 90 tools, LLM council + auto-learning router
 
 // Suppress node:sqlite experimental warning — it would corrupt the MCP stdio protocol
 process.removeAllListeners('warning');
@@ -102,6 +102,7 @@ const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint
   veto_test_gaps:         { readOnlyHint: true },
   veto_onboard:           { readOnlyHint: true },
   veto_dep_advisor:       { readOnlyHint: true, openWorldHint: true },
+  veto_dep_verify:        { readOnlyHint: true, openWorldHint: true },
   veto_query_advisor:     { readOnlyHint: true },
   veto_bundle_advisor:    { readOnlyHint: true },
   veto_dead_code:         { readOnlyHint: true },
