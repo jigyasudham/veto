@@ -13,6 +13,8 @@ import { buildContextString } from '../../context/reader.js';
 import type { WorkerAgentType } from '../../agents/types.js';
 import type { HandlerMap } from '../registry.js';
 import { verifyPackages, type Ecosystem } from '../../agents/security/dep-verify.js';
+import { getSessionReplay, listSessions } from '../../memory/local.js';
+import { autoSave } from '../runtime.js';
 
 export const advisorHandlers: HandlerMap = {
   veto_dep_verify: async ({ args }) => {
@@ -373,5 +375,207 @@ export const advisorHandlers: HandlerMap = {
       sdk_detected:       sdk === 'auto' ? (findings.includes('ldClient') ? 'launchdarkly' : findings.includes('unleash') ? 'unleash' : 'custom') : sdk,
       council_note:       'Run veto_council_debate before removing any flags to assess downstream risk.',
     }, null, 2) }] };
+  },
+
+  veto_drift_check: async ({ args }) => {
+    let sessionId = args?.session_id ? String(args.session_id).trim() : null;
+    if (!sessionId) {
+      sessionId = autoSave.last_session_id;
+    }
+    if (!sessionId) {
+      const recent = listSessions(1);
+      if (recent.length > 0) sessionId = recent[0].id;
+    }
+
+    if (!sessionId) {
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No active or saved sessions found. Save a session first.' }, null, 2) }],
+        isError: true
+      };
+    }
+
+    const limit = typeof args?.limit === 'number' ? Math.max(1, args.limit) : 50;
+    const projectDir = args?.project_dir ? String(args.project_dir).trim() : undefined;
+
+    const allTraces = getSessionReplay(sessionId);
+    const traces = allTraces.slice(-limit);
+
+    const total_calls = traces.length;
+    const failed_calls = traces.filter(t => t.result_status === 'error').length;
+    const error_rate = total_calls > 0 ? Math.round((failed_calls / total_calls) * 100) : 0;
+
+    // Consecutive failures (from the end)
+    let consecutive_failures = 0;
+    for (let i = traces.length - 1; i >= 0; i--) {
+      if (traces[i].result_status === 'error') {
+        consecutive_failures++;
+      } else {
+        break;
+      }
+    }
+
+    // Repeated error messages
+    const errorCounts: Record<string, number> = {};
+    for (const t of traces) {
+      if (t.result_status === 'error' && t.error_message) {
+        const msg = t.error_message.trim();
+        errorCounts[msg] = (errorCounts[msg] ?? 0) + 1;
+      }
+    }
+    const repeated_errors = Object.entries(errorCounts)
+      .map(([error_message, count]) => ({ error_message, count }))
+      .filter(item => item.count >= 2)
+      .sort((a, b) => b.count - a.count);
+
+    // Tool repetition and max consecutive tool calls
+    const toolCounts: Record<string, number> = {};
+    let max_consecutive_tool = '';
+    let max_consecutive_tool_count = 0;
+    let current_tool = '';
+    let current_consecutive_count = 0;
+
+    for (const t of traces) {
+      toolCounts[t.tool_name] = (toolCounts[t.tool_name] ?? 0) + 1;
+      if (t.tool_name === current_tool) {
+        current_consecutive_count++;
+      } else {
+        if (current_consecutive_count > max_consecutive_tool_count) {
+          max_consecutive_tool_count = current_consecutive_count;
+          max_consecutive_tool = current_tool;
+        }
+        current_tool = t.tool_name;
+        current_consecutive_count = 1;
+      }
+    }
+    if (current_consecutive_count > max_consecutive_tool_count) {
+      max_consecutive_tool_count = current_consecutive_count;
+      max_consecutive_tool = current_tool;
+    }
+
+    const repeated_tools = Object.entries(toolCounts)
+      .map(([tool_name, count]) => ({ tool_name, count }))
+      .filter(item => item.count >= 3)
+      .sort((a, b) => b.count - a.count);
+
+    // Command repetition check
+    const commandCounts: Record<string, number> = {};
+    for (const t of traces) {
+      if (t.tool_name === 'run_command' && t.args_json) {
+        try {
+          const parsed = JSON.parse(t.args_json);
+          const cmd = String(parsed.CommandLine ?? '').trim();
+          if (cmd) {
+            commandCounts[cmd] = (commandCounts[cmd] ?? 0) + 1;
+          }
+        } catch { /* skip */ }
+      }
+    }
+    const repeated_commands = Object.entries(commandCounts)
+      .map(([command, count]) => ({ command, count }))
+      .filter(item => item.count >= 2)
+      .sort((a, b) => b.count - a.count);
+
+    // Loop detection flag
+    const hasRepeatedError = repeated_errors.some(e => e.count >= 3);
+    const hasRepeatedCommand = repeated_commands.some(c => c.count >= 3);
+    const loop_detected = consecutive_failures >= 3 || hasRepeatedError || hasRepeatedCommand || max_consecutive_tool_count >= 4;
+
+    // Determine verdict
+    let verdict: 'GREEN' | 'YELLOW' | 'RED' = 'GREEN';
+    if (consecutive_failures >= 5 || repeated_errors.some(e => e.count >= 4) || max_consecutive_tool_count >= 5) {
+      verdict = 'RED';
+    } else if (consecutive_failures >= 3 || repeated_errors.some(e => e.count >= 2) || max_consecutive_tool_count >= 3) {
+      verdict = 'YELLOW';
+    }
+
+    let agentOut = '';
+    let recommendations = 'No compounding-error loops detected. Proceed with your current task.';
+    
+    if (loop_detected || verdict !== 'GREEN' || total_calls > 0) {
+      const formattedTraces = traces.map(t => {
+        let cmdStr = '';
+        if (t.tool_name === 'run_command' && t.args_json) {
+          try {
+            cmdStr = ` (cmd: ${JSON.parse(t.args_json).CommandLine})`;
+          } catch {}
+        }
+        return `- ${t.recorded_at.slice(11, 19)}: ${t.tool_name}${cmdStr} -> ${t.result_status.toUpperCase()}${t.error_message ? ` (error: ${t.error_message})` : ''}`;
+      }).join('\n');
+
+      const analysisPayload = {
+        session_id: sessionId,
+        heuristics: {
+          total_calls,
+          failed_calls,
+          error_rate_pct: error_rate,
+          consecutive_failures,
+          max_consecutive_tool: max_consecutive_tool ? `${max_consecutive_tool} (${max_consecutive_tool_count}x)` : 'none',
+          repeated_errors,
+          repeated_tools,
+          repeated_commands,
+        },
+        recent_timeline: formattedTraces,
+      };
+
+      const agentResult = await executeOne({
+        id: `drift-${Date.now().toString(36)}`,
+        agent: 'debugger' as WorkerAgentType,
+        task: `The AI coding assistant is verifying its session for compounding errors or loops. Analyze this trace. Under 'Remediation Plan', list 2-3 specific actions the AI should take to break the loop (e.g. read a specific file, check for syntax errors, check if a mock server is down, revert a commit).`,
+        code: JSON.stringify(analysisPayload, null, 2),
+        project_dir: projectDir,
+      });
+
+      agentOut = agentResult.plan?.approach ?? agentResult.output.recommendation ?? '';
+      recommendations = agentOut;
+    }
+
+    recordOutcome('drift_check', 30, 2, 'debugger', verdict === 'RED' ? 30 : verdict === 'YELLOW' ? 60 : 95);
+
+    const verdictEmoji = verdict === 'RED' ? '🔴 RED' : verdict === 'YELLOW' ? '🟡 YELLOW' : '🟢 GREEN';
+    const formatted = [
+      `## 🔄 Compounding-Error Circuit Breaker (Drift Check)`,
+      ``,
+      `**Verdict:** ${verdictEmoji}`,
+      `**Session ID:** \`${sessionId}\``,
+      ``,
+      `### Heuristics Snapshot`,
+      `- Total tool calls checked: ${total_calls}`,
+      `- Consecutive failures: ${consecutive_failures}`,
+      `- Error rate: ${error_rate}%`,
+      max_consecutive_tool ? `- Max consecutive tool calls: ${max_consecutive_tool} (${max_consecutive_tool_count}x)` : '',
+      ``,
+      `### Loop Indicators`,
+      `- Repeated errors: ${repeated_errors.length === 0 ? 'None' : repeated_errors.map(e => `\`${e.error_message}\` (${e.count}x)`).join(', ')}`,
+      `- Repeated tools: ${repeated_tools.length === 0 ? 'None' : repeated_tools.map(t => `\`${t.tool_name}\` (${t.count}x)`).join(', ')}`,
+      `- Repeated commands: ${repeated_commands.length === 0 ? 'None' : repeated_commands.map(c => `\`${c.command}\` (${c.count}x)`).join(', ')}`,
+      ``,
+      `### 🛠️ Remediation Recommendations`,
+      recommendations,
+    ].filter(l => l !== '').join('\n');
+
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          success: true,
+          session_id: sessionId,
+          verdict,
+          loop_detected,
+          heuristics: {
+            total_calls,
+            failed_calls,
+            error_rate,
+            consecutive_failures,
+            max_consecutive_tool: max_consecutive_tool || null,
+            max_consecutive_tool_count,
+            repeated_errors,
+            repeated_tools,
+            repeated_commands,
+          },
+          remediation_plan: agentOut || null,
+          formatted_report: formatted,
+        }, null, 2),
+      }],
+    };
   },
 };

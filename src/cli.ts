@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { version: VERSION } = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
-const TAGLINE = '91 agentic tools. 49 specialists. Every major AI CLI. Self-learning. Zero extra cost on subscriptions.';
+const TAGLINE = '92 agentic tools. 49 specialists. Every major AI CLI. Self-learning. Zero extra cost on subscriptions.';
 const VETO_DIR = join(homedir(), '.veto');
 const HOME = homedir();
 
@@ -312,7 +312,7 @@ async function initCommand() {
 
   const VETO_GUIDE = `# Veto MCP Server
 
-Veto is active. 91 tools across 6 categories:
+Veto is active. 92 tools across 6 categories:
 
 **Session & Context** — veto_status · veto_session_save · veto_continue · veto_handoff
 Save work at 60–70% context capacity. veto_status triggers auto-save above 70%.
@@ -867,7 +867,7 @@ async function patternsCommand() {
 
 function shortHelpCommand() {
   console.log('');
-  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(` — 91 agentic tools. 49 specialists. Every major AI CLI. Zero extra cost on subscriptions.`));
+  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(` — 92 agentic tools. 49 specialists. Every major AI CLI. Zero extra cost on subscriptions.`));
   console.log('');
   console.log(c.bold('  CLI Commands'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
@@ -888,7 +888,7 @@ function shortHelpCommand() {
   console.log(`  ${c.cyan('veto help')}                    Show this help`);
   console.log(`  ${c.cyan('veto help --troubleshoot')}     Show troubleshooting guide`);
   console.log('');
-  console.log(c.bold('  MCP Tools (91 Agentic Tools)'));
+  console.log(c.bold('  MCP Tools (92 Agentic Tools)'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
   console.log(`  ${c.dim('Session')}       veto_status · veto_session_save · veto_session_restore · veto_sessions_list · veto_session_replay · veto_autosave_status`);
   console.log(`  ${c.dim('Council')}       veto_council_debate · veto_benchmark · veto_adr`);

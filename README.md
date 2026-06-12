@@ -1,6 +1,6 @@
 # veto
 
-> **91 agentic tools. 49 specialists. Every major AI CLI. Self-learning. Zero extra cost on subscriptions.**
+> **92 agentic tools. 49 specialists. Every major AI CLI. Self-learning. Zero extra cost on subscriptions.**
 
 An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, Gemini CLI, Antigravity CLI, Cursor, Windsurf, Zed, and JetBrains using your existing subscriptions — giving every AI a council of specialist agents, local LLM support, SDD agents, playwright automation, persistent cross-platform memory, a self-learning router that re-tunes its tier thresholds automatically every 20 recorded task outcomes (reviews record outcomes for you; configurable via `auto_apply_learning`), CI/CD gates, workspace discovery, and bidirectional IDE communication.
 
@@ -52,7 +52,7 @@ The 7-agent **Council** is LLM-first — its value is the multi-agent debate —
 
 ---
 
-## MCP Tools (91)
+## MCP Tools (92)
 
 | Category | Tools |
 |---|---|
@@ -64,7 +64,7 @@ The 7-agent **Council** is LLM-first — its value is the multi-agent debate —
 | **Pipelines** | `veto_ci_gate` · `veto_pre_commit` · `veto_new_feature` · `veto_workflow` · `veto_task_parse` |
 | **Advanced** | `veto_local_llm` · `veto_semantic_search` · `veto_sdd_agent` · `veto_playwright` · `veto_notify_ide` |
 | **Quality** | `veto_clone_detector` · `veto_lint_rules` · `veto_api_contract` · `veto_a11y_advisor` · `veto_type_coverage` · `veto_test_gaps` |
-| **Advisors** | `veto_dep_advisor` · `veto_dep_verify` · `veto_query_advisor` · `veto_bundle_advisor` · `veto_dead_code` · `veto_hitl_checkpoint` |
+| **Advisors** | `veto_dep_advisor` · `veto_dep_verify` · `veto_query_advisor` · `veto_bundle_advisor` · `veto_dead_code` · `veto_hitl_checkpoint` · `veto_drift_check` |
 | **Watching** | `veto_watch` · `veto_watch_poll` · `veto_watch_stop` |
 | **Memory** | `veto_memory_store` · `veto_memory_search` · `veto_memory_delete` · `veto_project_map_update` · `veto_project_map_get` · `veto_pattern_store` · `veto_patterns_list` · `veto_memory_export` · `veto_memory_import` |
 | **Learning** | `veto_record_outcome` · `veto_learning_stats` · `veto_learning_apply` |
@@ -74,9 +74,9 @@ The 7-agent **Council** is LLM-first — its value is the multi-agent debate —
 | **DevTools** | `veto_docs_fetch` · `veto_context_status` · `veto_openapi_gen` · `veto_flag_auditor` · `veto_env_setup` · `veto_commit_message` · `veto_pr_description` · `veto_pr_post` · `veto_prompt_optimizer` · `veto_sre_advisor` · `veto_diagram` · `veto_rca` · `veto_doc_gen` · `veto_postmortem` · `veto_release_notes` · `veto_translate` · `veto_merge_conflict` |
 | **Plugins** | `veto_plugins` |
 
-## Compact Mode — 91 tools without the context tax
+## Compact Mode — 92 tools without the context tax
 
-91 tool schemas cost a client ~16K context tokens before the user types a word. Compact mode advertises a surface that is **5–6× smaller**: seven core tools (`veto_status`, `veto_session_save`, `veto_session_restore`, `veto_route_task`, `veto_council_debate`, `veto_memory_search`, `veto_record_outcome`) plus two meta-tools — `veto_find_tools` searches the full catalog by keyword and returns matching schemas on demand; `veto_call` invokes any catalog tool by name. Every tool remains directly callable in both modes; compact only changes what is advertised up front.
+92 tool schemas cost a client ~16K context tokens before the user types a word. Compact mode advertises a surface that is **5–6× smaller**: seven core tools (`veto_status`, `veto_session_save`, `veto_session_restore`, `veto_route_task`, `veto_council_debate`, `veto_memory_search`, `veto_record_outcome`) plus two meta-tools — `veto_find_tools` searches the full catalog by keyword and returns matching schemas on demand; `veto_call` invokes any catalog tool by name. Every tool remains directly callable in both modes; compact only changes what is advertised up front.
 
 Enable it with `VETO_COMPACT=1` in your MCP server config env, or `"compact_tools": true` in `~/.veto/config.json`:
 
@@ -193,7 +193,7 @@ veto sessions                    # List last 20 saved sessions ([auto] badge on 
 veto sessions --clean            # Remove auto-saves older than 7 days
 veto memory [query]              # Search knowledge base (blank = all entries)
 veto patterns [prefix]           # List learned agent/routing patterns
-veto tools [filter]              # List all 91 MCP tools (--json for machine output)
+veto tools [filter]              # List all 92 MCP tools (--json for machine output)
 veto agents [filter]             # List all 49 specialists — workers + council (--json)
 veto routing [status|log|reset]  # Inspect the opt-in routing feedback loop
 veto hook install                # Install pre-commit secrets scan hook
@@ -405,7 +405,7 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 
 ## Project Structure
 
-Veto is a single MCP server (`src/server.ts`) that registers 91 tools, MCP Resources, and Prompts, then dispatches every tool call through a per-domain **handler registry** — there is no monolithic switch. Each domain owns a `HandlerMap` module under `src/server/handlers/`:
+Veto is a single MCP server (`src/server.ts`) that registers 92 tools, MCP Resources, and Prompts, then dispatches every tool call through a per-domain **handler registry** — there is no monolithic switch. Each domain owns a `HandlerMap` module under `src/server/handlers/`:
 
 | Module | Tools | Domain |
 |---|---|---|
@@ -413,7 +413,7 @@ Veto is a single MCP server (`src/server.ts`) that registers 91 tools, MCP Resou
 | `generators.ts` | 11 | single-agent artifact generators (adr, diagram, rca, doc_gen, onboard, …) |
 | `memory.ts` | 9 | knowledge base, patterns, project map |
 | `observability.ts` | 7 | health, metrics, usage, audit, context/rate status |
-| `advisors.ts` | 7 | project scanners (dep, query, bundle, dead-code, flag, openapi, HITL) |
+| `advisors.ts` | 8 | project scanners (dep, query, bundle, dead-code, flag, openapi, HITL, drift-check) |
 | `session.ts` | 6 | save · restore · list · handoff · continue · replay |
 | `review.ts` | 5 | diff · ci · pr · full review + pre-commit pipelines |
 | `git.ts` | 5 | blame · changelog · commit message · PR description/post |

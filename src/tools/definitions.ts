@@ -1129,6 +1129,19 @@ export const TOOL_DEFINITIONS = [
       required: ['project_dir'],
     },
   },
+  {
+    name: 'veto_drift_check',
+    description: 'Compounding-error checkpoint: queries the session\'s tool execution trace to detect loop indicators (consecutive failures, duplicate errors, tool repetition) and calls the debugger agent to formulate a concrete loop-breaker remediation plan.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id:  { type: 'string', description: 'Optional. UUID of the session to check. Defaults to the current active session.' },
+        limit:       { type: 'number', description: 'Optional. Maximum trace log rows to retrieve and analyze (default: 50).' },
+        project_dir: { type: 'string', description: 'Optional. Absolute path to the project root.' },
+      },
+      required: [],
+    },
+  },
   // ── Workflow & CI ─────────────────────────────────────────────────────────────
   {
     name: 'veto_workflow',
