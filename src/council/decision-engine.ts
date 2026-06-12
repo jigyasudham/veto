@@ -31,6 +31,11 @@ export function decide(votes: Votes): {
   const secondaryBlockers = blockers.filter(([name]) => !CRITICAL.has(name));
   const criticalApprovers = approvers.filter(([name]) => CRITICAL.has(name));
 
+  // A warn only counts toward escalation when it names a specific risk.
+  // Hedge-warns with no concerns are recorded as warnings but can't flip the verdict.
+  const meaningfulWarners = warners.filter(([, v]) => v.concerns.some(c => typeof c === 'string' && c.length > 0));
+  const criticalMeaningfulWarners = meaningfulWarners.filter(([name]) => CRITICAL.has(name));
+
   const block_reasons = blockers.map(([, v]) => v.reason);
   const warnings: string[] = [
     ...blockers.flatMap(([, v]) => v.concerns),
@@ -46,8 +51,15 @@ export function decide(votes: Votes): {
   } else if (secondaryBlockers.length >= 2 && criticalApprovers.length >= 2) {
     // Business/UX objections vs technical approval — genuine split
     final_verdict = 'DEADLOCK';
-  } else if (secondaryBlockers.length >= 1 || warners.length >= 2) {
-    // At least one concern but no hard expert block
+  } else if (
+    secondaryBlockers.length >= 1 ||
+    meaningfulWarners.length >= 3 ||
+    criticalMeaningfulWarners.length >= 2
+  ) {
+    // Escalate only on substantive dissent: a block, three agents naming real
+    // risks, or two expert-domain agents naming real risks. The Devil's
+    // Advocate warns on almost everything by design — one routine warn plus a
+    // hedge must not be enough to fence-sit, or YELLOW carries no signal.
     final_verdict = 'YELLOW';
   } else {
     final_verdict = 'GREEN';

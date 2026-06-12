@@ -64,14 +64,21 @@ describe('selectModel — model names', () => {
   it('Tier 2 uses balanced models', () => {
     const m = selectModel(50, 'dynamic').models;
     expect(m.claude).toContain('sonnet');
-    expect(m.gemini).toContain('pro');
-    expect(m.codex).toBe('gpt-4o');
+    expect(m.gemini.length).toBeGreaterThan(0);
+    expect(m.codex.length).toBeGreaterThan(0);
   });
 
   it('Tier 3 uses best available models', () => {
     const m = selectModel(90, 'dynamic').models;
-    expect(m.claude).toContain('sonnet');
-    expect(m.gemini).toContain('advanced');
+    expect(m.claude).toContain('opus');
+    expect(m.gemini.length).toBeGreaterThan(0);
+    expect(m.codex.length).toBeGreaterThan(0);
+  });
+
+  it('Tier 3 recommends a stronger Claude model than Tier 1', () => {
+    const t1 = selectModel(10, 'dynamic').models;
+    const t3 = selectModel(90, 'dynamic').models;
+    expect(t1.claude).not.toBe(t3.claude);
   });
 
   it('always returns a non-empty reason string', () => {

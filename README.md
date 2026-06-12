@@ -4,7 +4,7 @@
 
 An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, Gemini CLI, Antigravity CLI, Cursor, Windsurf, Zed, and JetBrains using your existing subscriptions — giving every AI a council of specialist agents, local LLM support, SDD agents, playwright automation, persistent cross-platform memory, a self-learning router that re-tunes its tier thresholds automatically every 20 recorded task outcomes (reviews record outcomes for you; configurable via `auto_apply_learning`), CI/CD gates, workspace discovery, and bidirectional IDE communication.
 
-> **Billing note:** "Zero cost" applies to subscription plans (Claude Max, Gemini Advanced, etc.). If you are on API/pay-per-token billing, MCP Sampling calls made by Veto agents will count toward your token usage. `veto init` detects API key environment variables and warns you automatically.
+> **Billing note:** "Zero cost" applies to subscription plans (Claude Max, Gemini Advanced, etc.). If you are on API/pay-per-token billing, LLM reasoning done for Veto agents (via the agentic loop or MCP Sampling) counts toward your token usage like any other turn. `veto init` detects API key environment variables and warns you automatically.
 
 ---
 
@@ -13,15 +13,15 @@ An MCP server that runs locally on your machine, plugs into Claude Code, Codex C
 **No API keys, zero extra cost.** Every worker agent is a deterministic expert module at its core, with two optional layers of LLM reasoning on top — all of it delegated to the AI you're already paying for.
 
 ### Default — Deterministic expert modules
-Out of the box, each of the 42 worker agents runs as a hand-written expert module (`plan()` / `analyze()` in `src/agents/`) — real heuristics like regex/AST secret detection, OWASP/CWE rules, and complexity metrics, **not** an LLM. They always run, work offline, and cost zero tokens.
+Out of the box, each of the 42 worker agents runs as a hand-written expert module (`plan()` / `analyze()` in `src/agents/`) — **not** an LLM. They always run, work offline, and cost zero tokens. Their depth varies by design: analysis agents (security scanner, secrets, dependency audit, clone detector) apply real algorithms — regex/AST detection, OWASP/CWE rules, hash-based clone matching — while planning agents (coder, debugger, tester, …) are structured expert playbooks: curated steps, checklists, and pitfalls for the task category, built to be reasoned over by the AI you already pay for rather than to reason themselves.
 
-### Phase 1 — LLM upgrade via MCP Sampling
-When a tool is called with `llm_backed` and your client supports MCP Sampling (`server.createMessage`), the agent upgrades to real LLM reasoning for a richer plan or analysis. The call runs on your existing subscription — no separate billing.
+### Path A — Agentic loop (most clients: Claude Code, Cursor, Windsurf)
+Veto returns the specialist's role, rubric, and an output contract as an `llm_upgrade` prompt. The host AI reasons as the specialist and passes structured JSON back to complete the operation. This is the primary path — it costs nothing beyond your existing subscription and works on every client.
 
-### Phase 2 — Agentic fallback
-If Sampling is unavailable, Veto returns an `llm_upgrade` prompt instead. The host AI reads the specialist's role, reasons itself, and passes the JSON back to complete the operation.
+### Path B — MCP Sampling (clients that support `server.createMessage`)
+Where Sampling is available, the same upgrade happens server-side without the extra round-trip. Note: the July 2026 MCP spec revision deprecates Sampling protocol-wide (12-month sunset), so the agentic loop (Path A) is Veto's long-term default; Sampling remains a transparent optimization where it exists.
 
-The 7-agent **Council** is LLM-first — its value is the multi-agent debate — but it too falls back to a deterministic verdict when Sampling is unavailable. When multiple agents run, they execute in parallel.
+The 7-agent **Council** is LLM-first — its value is the multi-agent debate — but it too falls back to a deterministic verdict when no LLM path is available. When multiple agents run, they execute in parallel.
 
 ---
 

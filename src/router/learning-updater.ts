@@ -84,11 +84,17 @@ export function recordOutcome(
 
   // Auto-apply learned thresholds every 20 outcomes (default on; disable via
   // config auto_apply_learning=false). Closes the learning loop so no manual
-  // veto_learning_apply is required.
+  // veto_learning_apply is required. A watermark (count at last apply) is used
+  // instead of `total % 20` — the modulo never fires when the DB already held
+  // outcomes before this feature existed, or after a manual apply desyncs the cadence.
   const total = (db.prepare('SELECT COUNT(*) as c FROM learning_data').get() as { c: number }).c;
   let auto_applied = false;
-  if (total >= 20 && total % 20 === 0 && getConfig().auto_apply_learning !== false) {
-    auto_applied = applyLearnedThresholds().applied;
+  if (total >= 20 && getConfig().auto_apply_learning !== false) {
+    const row = db.prepare('SELECT pattern_val FROM patterns WHERE pattern_key = ?').get('router.last_apply_count') as { pattern_val: string } | undefined;
+    const lastApplied = row ? parseInt(row.pattern_val, 10) : 0;
+    if (total - lastApplied >= 20) {
+      auto_applied = applyLearnedThresholds().applied;
+    }
   }
   return { auto_applied, total };
 }
@@ -292,12 +298,14 @@ export function applyLearnedThresholds(): { applied: boolean; thresholds: { tier
   const stats = getLearningStats();
   const { tier1_max, tier2_max } = stats.suggested_thresholds;
 
-  // Persist to patterns table so the router picks them up on next call
+  // Persist to patterns table so the router picks them up on next call.
+  // seen_count tracks data_points at apply time; the watermark key records
+  // the outcome count so recordOutcome knows when 20 new outcomes have landed.
   const now = new Date().toISOString();
-  for (const [key, val] of [['router.tier1_max', String(tier1_max)], ['router.tier2_max', String(tier2_max)]]) {
+  for (const [key, val] of [['router.tier1_max', String(tier1_max)], ['router.tier2_max', String(tier2_max)], ['router.last_apply_count', String(total)]]) {
     const existing = db.prepare('SELECT id FROM patterns WHERE pattern_key = ?').get(key) as { id: string } | undefined;
     if (existing) {
-      db.prepare('UPDATE patterns SET pattern_val = ?, updated_at = ? WHERE pattern_key = ?').run(val, now, key);
+      db.prepare('UPDATE patterns SET pattern_val = ?, seen_count = ?, updated_at = ? WHERE pattern_key = ?').run(val, total, now, key);
     } else {
       db.prepare('INSERT INTO patterns (id, pattern_key, pattern_val, confidence, seen_count, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
         .run(randomUUID(), key, val, 1.0, total, now);
@@ -436,6 +444,7 @@ export function resetRoutingFeedback(): { deleted_feedback: number; reset_thresh
   const fbResult = db.prepare('DELETE FROM routing_feedback').run() as { changes: number };
   const t1 = db.prepare("DELETE FROM patterns WHERE pattern_key = 'router.tier1_max'").run() as { changes: number };
   const t2 = db.prepare("DELETE FROM patterns WHERE pattern_key = 'router.tier2_max'").run() as { changes: number };
+  db.prepare("DELETE FROM patterns WHERE pattern_key = 'router.last_apply_count'").run();
   return { deleted_feedback: fbResult.changes, reset_thresholds: t1.changes > 0 || t2.changes > 0 };
 }
 

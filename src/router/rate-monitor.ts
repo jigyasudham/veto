@@ -23,6 +23,7 @@ export type RateStatus = {
   codex: RateLimitEntry;
   antigravity: RateLimitEntry;
   updated_at: string;
+  budget_source: string;
 };
 
 function getTodayKey(): string {
@@ -108,6 +109,7 @@ export function getRateStatus(): RateStatus {
     codex: buildEntry('codex'),
     antigravity: buildEntry('antigravity'),
     updated_at: new Date().toISOString(),
+    budget_source: 'Budgets are local planning estimates (set in ~/.veto/config.json), not provider quotas. Token counts come from the host AI\'s self-reports.',
   };
 }
 

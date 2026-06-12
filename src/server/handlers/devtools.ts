@@ -4,6 +4,7 @@
 // push a logging message, so it reads ctx.server.
 
 import { listPlugins } from '../../plugins/loader.js';
+import { upsertPattern } from '../../memory/local.js';
 import type { HandlerMap } from '../registry.js';
 
 export const devtoolsHandlers: HandlerMap = {
@@ -28,9 +29,25 @@ export const devtoolsHandlers: HandlerMap = {
   },
 
   veto_compose_agents: ({ args }) => {
-    const { name, agents, workflow } = args;
-    // Register custom meta-agent in memory (Stub persistence, but functional for the current session)
-    return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: `Custom agent ${name} composed and registered.`, definition: { name, base_agents: agents, workflow } }, null, 2) }] };
+    const name = String(args?.name ?? '').trim();
+    const agents = Array.isArray(args?.agents) ? args.agents.map(String) : [];
+    const workflow = args?.workflow;
+    if (!name || agents.length === 0) {
+      return { content: [{ type: 'text', text: 'name and a non-empty agents array are required.' }], isError: true };
+    }
+    const definition = { name, base_agents: agents, workflow, composed_at: new Date().toISOString() };
+    upsertPattern({ pattern_key: `composed_agent:${name}`, pattern_val: JSON.stringify(definition) });
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          success: true,
+          message: `Custom agent "${name}" composed and persisted to Veto memory.`,
+          definition,
+          usage: 'Retrieve via veto_patterns_list (prefix "composed_agent:"); run its base agents with veto_execute_parallel or veto_workflow.',
+        }, null, 2),
+      }],
+    };
   },
 
   veto_notify_ide: async ({ args, server }) => {
