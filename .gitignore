@@ -9,6 +9,8 @@ veto.db
 .mcp-tools/
 
 # Internal — not for public repo
+VETO-MCP-DIAGNOSTIC.md
+.antigravitycli/
 VETO_VISION_FINAL.md
 PLAN.md
 BUGS.md
