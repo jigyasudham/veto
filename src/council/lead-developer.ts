@@ -101,8 +101,8 @@ const TOPIC_INSIGHTS: Array<{ pattern: RegExp; concern: string; recommendation: 
     recommendation: 'Set explicit timeouts on every LLM call. Cache responses where determinism is acceptable. Return a structured fallback on failure, never an unhandled exception.',
   },
   {
-    pattern: /webhook|http.?server|express|endpoint|route|port/i,
-    concern: 'Adding HTTP transport changes the threat model from local-only to network-exposed. Authentication, rate limiting, and input validation are now mandatory.',
+    pattern: /webhook|http.?server|\bexpress\b|rest.?api|http.?endpoint|listen\s*\(|0\.0\.0\.0/i,
+    concern: 'Exposing an HTTP endpoint changes the threat model from local-only to network-exposed. Authentication, rate limiting, and input validation are now mandatory.',
     recommendation: 'Require authentication on all HTTP endpoints from day one. Apply request body size limits. Log all requests with IP and timestamp.',
   },
   {

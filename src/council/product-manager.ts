@@ -52,7 +52,7 @@ const WARN_RULES: Array<{ pattern: RegExp; concern: string; recommendation: stri
     recommendation: 'Ship what was asked. Add features after user feedback confirms demand.',
   },
   {
-    pattern: /v2|v3|version\s+[23]/i,
+    pattern: /\bv2(?!\.\d)|\bv3(?!\.\d)|\bversion\s+[23]\b/i,
     concern: 'Designing v2/v3 before v1 ships is a classic focus trap.',
     recommendation: 'Ship v1. Learn from real users. Then plan v2 with real data.',
   },
@@ -88,7 +88,7 @@ const TOPIC_INSIGHTS: Array<{ pattern: RegExp; concern: string; recommendation: 
   },
   {
     pattern: /discover|onboard|help|tutorial|guide|doc/i,
-    concern: '45 tools is above the cognitive load threshold for new users. Without discoverability, most tools will never be used — this is the retention killer for complex products.',
+    concern: 'A large tool surface (90+ tools) is above the cognitive load threshold for new users. Without discoverability, most tools will never be used — this is the retention killer for complex products.',
     recommendation: 'Add veto_discover immediately. Track which tools get called most. Consider a first-run guided experience via veto_status output.',
   },
   {

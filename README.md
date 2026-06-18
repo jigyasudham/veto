@@ -122,6 +122,22 @@ veto_decisions {
 
 From then on, `veto_diff_review` and `veto_ci_gate` automatically fail any diff whose **added lines** match a forbidden pattern — when an AI quietly adds `mongoose` to the imports three sessions later, the review fails with the rule and the rationale attached. Patterns are case-insensitive regexes (with substring fallback), optionally scoped to a file glob (`src/**/*.ts`), per-project or global, severity `block` or `warn`. Manage with `action: list / check / disable / enable`.
 
+## Compounding-Error Circuit Breaker
+
+Agents fail silently in loops — retrying the same broken call, re-hitting the same error, thrashing between two tools — and burn a whole session before anyone notices. `veto_drift_check` scans the recent tool-call trace for that pattern mid-flight and trips a breaker before the spiral compounds:
+
+```
+veto_drift_check
+→ DRIFT DETECTED
+  • 4 consecutive failed calls (veto_diff_review)
+  • same error repeated 3× ("no diff provided")
+  • tool veto_route_task called 6× in a row
+→ remediation (debugger agent): stop retrying; the diff is empty —
+  point at a project_dir with uncommitted changes or pass `diff` explicitly.
+```
+
+It looks for three drift signals — consecutive failures, duplicate error messages, and single-tool repetition — and when any trips, it runs the `debugger` agent over the trace for a concrete recovery step instead of letting the loop continue. Call it as a periodic checkpoint in long agentic runs.
+
 ## Which tool do I use?
 
 Several tools overlap by design (different granularity or entry point). Quick guide:
@@ -398,6 +414,23 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 | Zed | ✅ MCP support (`context_servers`) |
 
 ---
+
+## Release Notes
+
+### 2.5.0
+- **`veto_drift_check` — compounding-error circuit breaker.** Scans the recent tool-call trace for consecutive failures, repeated error messages, and single-tool thrashing, then runs the `debugger` agent for a concrete recovery step. See [Compounding-Error Circuit Breaker](#compounding-error-circuit-breaker).
+- **Council calibration fixes.** Tightened the deterministic council's pattern triggers so they no longer false-fire on generic words (e.g. "server", "transport") or semver strings like `v2.5.0`, and removed stale hardcoded tool counts from agent reasoning.
+
+### 2.4.0
+- **`veto_decisions` — decision-drift enforcement.** Record an architectural decision once as a machine-checkable constraint; `veto_diff_review` and `veto_ci_gate` then auto-fail any diff whose added lines reintroduce a forbidden pattern. See [Decision-Drift Enforcement](#decision-drift-enforcement).
+
+### 2.3.0
+- **`veto_dep_verify` — dependency-hallucination guard.** Verifies every proposed package against the live npm/PyPI/crates.io registry before install, flagging hallucinated names and typosquats (slopsquatting defense). See [Dependency-Hallucination Guard](#dependency-hallucination-guard).
+
+### 2.2.0
+- **Compact mode** (`VETO_COMPACT=1`) — advertises 9 tools incl. `veto_find_tools` / `veto_call` meta-tools, ~5–6× schema reduction. See [Compact Mode](#compact-mode--92-tools-without-the-context-tax).
+- **Implicit outcome mining** — `veto_learning_stats` now mines outcomes automatically from the tool-call trace (errored calls, rapid re-runs), no manual `veto_record_outcome` needed.
+- **Experimental streamable HTTP transport** (`veto-server --http`). See [HTTP Transport](#http-transport-experimental).
 
 ## HTTP Transport (experimental)
 

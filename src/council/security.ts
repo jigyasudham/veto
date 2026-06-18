@@ -169,8 +169,8 @@ export function analyze(task: string): AgentVote {
       recommendation: 'Never store tokens in plaintext config files. Use OS keychain or a secrets manager. Scope tokens to minimum required permissions (read-only for PR fetching).',
     },
     {
-      pattern: /http|transport|remote|server|port|network/i,
-      concern: 'Adding HTTP transport changes Veto from a local-only tool to a network service. Without authentication and TLS, any process on the local network can call all 45 tools including memory deletion and file watching.',
+      pattern: /\bhttp\b|streamable.?http|remote.?(server|access)|expose.{0,20}network|0\.0\.0\.0|bind.{0,12}port|listen\s*\(/i,
+      concern: 'Exposing the server over HTTP/network changes Veto from a local-only tool to a network service. Without authentication and TLS, any process on the network can call every tool including memory deletion and file watching.',
       recommendation: 'HTTP transport must require authentication from day one — even locally. Use mutual TLS or bearer tokens. Bind to 127.0.0.1 by default, not 0.0.0.0.',
     },
     {
