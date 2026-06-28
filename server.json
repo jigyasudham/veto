@@ -2,19 +2,19 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.jigyasudham/veto",
   "title": "Veto",
-  "description": "92 agentic MCP tools, 49 specialist agents for every major AI CLI. Self-learning, zero API cost.",
+  "description": "93 agentic MCP tools, 49 specialist agents for every major AI CLI. Self-learning, zero API cost.",
   "repository": {
     "url": "https://github.com/jigyasudham/veto",
     "source": "github"
   },
   "websiteUrl": "https://github.com/jigyasudham/veto#readme",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@jigyasudham/veto",
-      "version": "2.5.0",
+      "version": "2.6.0",
       "transport": {
         "type": "stdio"
       }

@@ -1,6 +1,6 @@
 # veto
 
-> **92 agentic tools. 49 specialists. Every major AI CLI. Self-learning. Zero extra cost on subscriptions.**
+> **93 agentic tools. 49 specialists. Every major AI CLI. Self-learning. Zero extra cost on subscriptions.**
 
 An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, Gemini CLI, Antigravity CLI, Cursor, Windsurf, Zed, and JetBrains using your existing subscriptions — giving every AI a council of specialist agents, local LLM support, SDD agents, playwright automation, persistent cross-platform memory, a self-learning router that re-tunes its tier thresholds automatically every 20 recorded task outcomes (reviews record outcomes for you; configurable via `auto_apply_learning`), CI/CD gates, workspace discovery, and bidirectional IDE communication.
 
@@ -69,12 +69,12 @@ The 7-agent **Council** is LLM-first — its value is the multi-agent debate —
 | **Memory** | `veto_memory_store` · `veto_memory_search` · `veto_memory_delete` · `veto_project_map_update` · `veto_project_map_get` · `veto_pattern_store` · `veto_patterns_list` · `veto_memory_export` · `veto_memory_import` |
 | **Learning** | `veto_record_outcome` · `veto_learning_stats` · `veto_learning_apply` |
 | **Handoff** | `veto_handoff` · `veto_continue` · `veto_platform_setup` |
-| **Observability** | `veto_usage_status` · `veto_audit_log` · `veto_health` · `veto_metrics` |
+| **Observability** | `veto_usage_status` · `veto_audit_log` · `veto_health` · `veto_metrics` · `veto_snapshot` |
 | **Discover** | `veto_discover` · `veto_summarize` · `veto_git_blame` · `veto_changelog` · `veto_onboard` · `veto_debt_register` |
 | **DevTools** | `veto_docs_fetch` · `veto_context_status` · `veto_openapi_gen` · `veto_flag_auditor` · `veto_env_setup` · `veto_commit_message` · `veto_pr_description` · `veto_pr_post` · `veto_prompt_optimizer` · `veto_sre_advisor` · `veto_diagram` · `veto_rca` · `veto_doc_gen` · `veto_postmortem` · `veto_release_notes` · `veto_translate` · `veto_merge_conflict` |
 | **Plugins** | `veto_plugins` |
 
-## Compact Mode — 92 tools without the context tax
+## Compact Mode — 93 tools without the context tax
 
 92 tool schemas cost a client ~16K context tokens before the user types a word. Compact mode advertises a surface that is **5–6× smaller**: seven core tools (`veto_status`, `veto_session_save`, `veto_session_restore`, `veto_route_task`, `veto_council_debate`, `veto_memory_search`, `veto_record_outcome`) plus two meta-tools — `veto_find_tools` searches the full catalog by keyword and returns matching schemas on demand; `veto_call` invokes any catalog tool by name. Every tool remains directly callable in both modes; compact only changes what is advertised up front.
 
@@ -209,7 +209,7 @@ veto sessions                    # List last 20 saved sessions ([auto] badge on 
 veto sessions --clean            # Remove auto-saves older than 7 days
 veto memory [query]              # Search knowledge base (blank = all entries)
 veto patterns [prefix]           # List learned agent/routing patterns
-veto tools [filter]              # List all 92 MCP tools (--json for machine output)
+veto tools [filter]              # List all 93 MCP tools (--json for machine output)
 veto agents [filter]             # List all 49 specialists — workers + council (--json)
 veto routing [status|log|reset]  # Inspect the opt-in routing feedback loop
 veto hook install                # Install pre-commit secrets scan hook
@@ -417,6 +417,11 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 
 ## Release Notes
 
+### 2.6.0
+- **`veto statusline` — a compact Veto line under any AI CLI prompt.** `veto statusline install` wires a `statusLine` command into Claude Code's settings.json (backed up; `uninstall` restores it byte-for-byte). The `print` hot path is read-only, fast, and crash-proof — it renders e.g. `⬡ veto GREEN · router 94% · claude 42% · mem 15` and degrades to a neutral `⬡ veto` if the DB is missing or locked. Lives in the CLI so every Veto user gets it in any terminal, not just the VS Code HUD.
+- **`veto_snapshot` — one-call editor/HUD aggregate.** Returns `{ session, council, routerTop, rate, memoryCount, health }` in a single read-only call, so editor integrations (veto-vscode) can stop reading internal tables directly. Tool count is now **93**.
+- **Stable read-contract versioning.** `veto.db` now stamps `PRAGMA user_version` (`VETO_DB_SCHEMA_VERSION`) on every open, so external readers can detect schema drift and degrade gracefully instead of silently blanking.
+
 ### 2.5.0
 - **`veto_drift_check` — compounding-error circuit breaker.** Scans the recent tool-call trace for consecutive failures, repeated error messages, and single-tool thrashing, then runs the `debugger` agent for a concrete recovery step. See [Compounding-Error Circuit Breaker](#compounding-error-circuit-breaker).
 - **Council calibration fixes.** Tightened the deterministic council's pattern triggers so they no longer false-fire on generic words (e.g. "server", "transport") or semver strings like `v2.5.0`, and removed stale hardcoded tool counts from agent reasoning.
@@ -438,7 +443,7 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 
 ## Project Structure
 
-Veto is a single MCP server (`src/server.ts`) that registers 92 tools, MCP Resources, and Prompts, then dispatches every tool call through a per-domain **handler registry** — there is no monolithic switch. Each domain owns a `HandlerMap` module under `src/server/handlers/`:
+Veto is a single MCP server (`src/server.ts`) that registers 93 tools, MCP Resources, and Prompts, then dispatches every tool call through a per-domain **handler registry** — there is no monolithic switch. Each domain owns a `HandlerMap` module under `src/server/handlers/`:
 
 | Module | Tools | Domain |
 |---|---|---|

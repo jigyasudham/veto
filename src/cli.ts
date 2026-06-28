@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { version: VERSION } = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
-const TAGLINE = '92 agentic tools. 49 specialists. Every major AI CLI. Self-learning. Zero extra cost on subscriptions.';
+const TAGLINE = '93 agentic tools. 49 specialists. Every major AI CLI. Self-learning. Zero extra cost on subscriptions.';
 const VETO_DIR = join(homedir(), '.veto');
 const HOME = homedir();
 
@@ -312,7 +312,7 @@ async function initCommand() {
 
   const VETO_GUIDE = `# Veto MCP Server
 
-Veto is active. 92 tools across 6 categories:
+Veto is active. 93 tools across 6 categories:
 
 **Session & Context** — veto_status · veto_session_save · veto_continue · veto_handoff
 Save work at 60–70% context capacity. veto_status triggers auto-save above 70%.
@@ -865,9 +865,62 @@ async function patternsCommand() {
   console.log('');
 }
 
+async function statuslineCommand() {
+  const sub = process.argv[3] ?? 'status';
+  const args = process.argv.slice(4);
+  const clientArg = args.find(a => a.startsWith('--client='))?.split('=')[1] ?? 'claude';
+  const force = args.includes('--force') || args.includes('--yes') || args.includes('-y');
+  const dryRun = args.includes('--dry-run');
+
+  const sl = await import('./cli/statusline.js');
+
+  // Hot path: one line to stdout, nothing else. No banner, no colors-config noise.
+  if (sub === 'print') {
+    sl.printStatusline();
+    return;
+  }
+
+  if (sub === 'install') {
+    const r = sl.installStatusline(clientArg, { force, dryRun });
+    console.log('');
+    console.log((r.ok ? c.green('  ✓ ') : c.red('  ✗ ')) + r.message.replace(/\n/g, '\n  '));
+    if (r.ok && r.changed) console.log(c.dim('\n  Restart your AI CLI to see the Veto line. Remove with: veto statusline uninstall'));
+    console.log('');
+    if (!r.ok) process.exit(1);
+    return;
+  }
+
+  if (sub === 'uninstall') {
+    const r = sl.uninstallStatusline(clientArg);
+    console.log('');
+    console.log((r.ok ? c.green('  ✓ ') : c.red('  ✗ ')) + r.message);
+    console.log('');
+    if (!r.ok) process.exit(1);
+    return;
+  }
+
+  if (sub === 'status') {
+    const info = sl.statuslineStatusInfo(clientArg);
+    console.log('');
+    console.log(c.bold('  Veto Statusline'));
+    console.log(c.dim('  ─────────────────────────────────────────────────────'));
+    console.log(`  Installed:  ${info.installed ? c.green('yes') : c.dim('no')}`);
+    if (info.settingsPath) console.log(`  Settings:   ${c.dim(info.settingsPath)}`);
+    console.log(`  Sample:     ${info.sample}`);
+    console.log('');
+    console.log(c.dim('  Install: veto statusline install [--client=claude] [--force] [--dry-run]'));
+    console.log('');
+    return;
+  }
+
+  console.error(c.red(`  Unknown statusline subcommand: ${sub}`));
+  console.error(c.dim('  Usage: veto statusline <install|uninstall|print|status>'));
+  process.exit(1);
+}
+
 function shortHelpCommand() {
   console.log('');
-  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(` — 92 agentic tools. 49 specialists. Every major AI CLI. Zero extra cost on subscriptions.`));
+  console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(` — 93 agentic tools. 49 specialists. Every major AI CLI. Zero extra cost on subscriptions.`));
   console.log('');
   console.log(c.bold('  CLI Commands'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
@@ -881,6 +934,8 @@ function shortHelpCommand() {
   console.log(`  ${c.cyan('veto patterns')} ${c.dim('[prefix]')}      List learned agent/routing patterns`);
   console.log(`  ${c.cyan('veto routing')} ${c.dim('[status|enable|disable|reset|log]')}`);
   console.log(`                         Routing feedback loop (opt-in signal storage)`);
+  console.log(`  ${c.cyan('veto statusline')} ${c.dim('[install|uninstall|print|status]')}`);
+  console.log(`                         Compact Veto line under your AI CLI prompt`);
   console.log(`  ${c.cyan('veto version')}                 Show version (alias for status)`);
   console.log(`  ${c.cyan('veto hook install')}            Install pre-commit secrets scan hook`);
   console.log(`  ${c.cyan('veto hook remove')}             Remove the veto pre-commit hook`);
@@ -888,9 +943,9 @@ function shortHelpCommand() {
   console.log(`  ${c.cyan('veto help')}                    Show this help`);
   console.log(`  ${c.cyan('veto help --troubleshoot')}     Show troubleshooting guide`);
   console.log('');
-  console.log(c.bold('  MCP Tools (92 Agentic Tools)'));
+  console.log(c.bold('  MCP Tools (93 Agentic Tools)'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
-  console.log(`  ${c.dim('Session')}       veto_status · veto_session_save · veto_session_restore · veto_sessions_list · veto_session_replay · veto_autosave_status`);
+  console.log(`  ${c.dim('Session')}       veto_status · veto_session_save · veto_session_restore · veto_sessions_list · veto_session_replay · veto_autosave_status · veto_snapshot`);
   console.log(`  ${c.dim('Council')}       veto_council_debate · veto_benchmark · veto_adr`);
   console.log(`  ${c.dim('Intelligence')}  veto_agent_plan · veto_execute_parallel · veto_explain · veto_delegate · veto_compose_agents`);
   console.log(`  ${c.dim('Scanning')}      veto_code_review · veto_security_scan · veto_secrets_scan · veto_diff_review · veto_full_review · veto_pr_review`);
@@ -1374,6 +1429,13 @@ switch (command) {
 
   case 'routing':
     routingCommand().catch((err) => {
+      console.error(c.red(`Error: ${err.message}`));
+      process.exit(1);
+    });
+    break;
+
+  case 'statusline':
+    statuslineCommand().catch((err) => {
       console.error(c.red(`Error: ${err.message}`));
       process.exit(1);
     });

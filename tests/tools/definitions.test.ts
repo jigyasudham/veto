@@ -38,7 +38,7 @@ const handledTools = new Set([
 
 describe('TOOL_DEFINITIONS — shape', () => {
   it('exposes the expected number of tools', () => {
-    expect(TOOL_DEFINITIONS.length).toBe(92);
+    expect(TOOL_DEFINITIONS.length).toBe(93);
   });
 
   it('every tool name is unique and veto_-prefixed', () => {
