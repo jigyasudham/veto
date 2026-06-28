@@ -417,6 +417,11 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 
 ## Release Notes
 
+### 2.6.0
+- **`veto statusline` — a compact Veto line under any AI CLI prompt.** `veto statusline install` wires a `statusLine` command into Claude Code's settings.json (backed up; `uninstall` restores it byte-for-byte). The `print` hot path is read-only, fast, and crash-proof — it renders e.g. `⬡ veto GREEN · router 94% · claude 42% · mem 15` and degrades to a neutral `⬡ veto` if the DB is missing or locked. Lives in the CLI so every Veto user gets it in any terminal, not just the VS Code HUD.
+- **`veto_snapshot` — one-call editor/HUD aggregate.** Returns `{ session, council, routerTop, rate, memoryCount, health }` in a single read-only call, so editor integrations (veto-vscode) can stop reading internal tables directly. Tool count is now **93**.
+- **Stable read-contract versioning.** `veto.db` now stamps `PRAGMA user_version` (`VETO_DB_SCHEMA_VERSION`) on every open, so external readers can detect schema drift and degrade gracefully instead of silently blanking.
+
 ### 2.5.0
 - **`veto_drift_check` — compounding-error circuit breaker.** Scans the recent tool-call trace for consecutive failures, repeated error messages, and single-tool thrashing, then runs the `debugger` agent for a concrete recovery step. See [Compounding-Error Circuit Breaker](#compounding-error-circuit-breaker).
 - **Council calibration fixes.** Tightened the deterministic council's pattern triggers so they no longer false-fire on generic words (e.g. "server", "transport") or semver strings like `v2.5.0`, and removed stale hardcoded tool counts from agent reasoning.
