@@ -53,6 +53,20 @@ export const TOOL_DEFINITIONS = [
       required: [],
     },
   },
+  {
+    name: 'veto_snapshot',
+    description: 'Returns the whole Veto state an editor HUD / statusline needs in ONE read-only call: latest session, latest council verdict, top learned patterns, per-platform rate usage, memory count, and health. Same shape the CLI statusline composes — built for veto-vscode and other editor integrations.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        top: {
+          type: 'number',
+          description: 'How many top learned patterns to include in routerTop (default 5, max 20).',
+        },
+      },
+      required: [],
+    },
+  },
   // ── Session ──────────────────────────────────────────────────────────────────
   {
     name: 'veto_session_save',

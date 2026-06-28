@@ -970,6 +970,22 @@ export type HealthStats = {
   avg_council_latency_ms: number | null;
 };
 
+// Latest council verdict — used by veto_snapshot and other read-only aggregates.
+export type LatestCouncilOutcome = {
+  verdict: string;
+  recommended: string | null;
+  task: string;
+  debated_at: string;
+};
+
+export function getLatestCouncilOutcome(): LatestCouncilOutcome | null {
+  const db = getDb();
+  const row = db.prepare(
+    'SELECT verdict, recommended, task, debated_at FROM council_outcomes ORDER BY debated_at DESC LIMIT 1'
+  ).get() as LatestCouncilOutcome | undefined;
+  return row ?? null;
+}
+
 export function getHealthStats(): HealthStats {
   const db = getDb();
   const count = (table: string) =>

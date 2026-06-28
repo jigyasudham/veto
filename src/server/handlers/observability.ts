@@ -6,6 +6,7 @@ import { statSync } from 'node:fs';
 import {
   getContextUsage, getContextStatus, getHealthStats, getUsageStatus,
   getUsageLogs, getAuditLog, getMetrics, getDbPath, CONTEXT_WINDOWS,
+  listSessions, getPatterns, getLatestCouncilOutcome,
 } from '../../memory/local.js';
 import { getRateStatus } from '../../router/index.js';
 import { getConfig, setConfig } from '../../memory/config.js';
@@ -137,5 +138,71 @@ export const observabilityHandlers: HandlerMap = {
   veto_metrics: () => {
     const metrics = getMetrics();
     return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...metrics }, null, 2) }] };
+  },
+
+  // One read-only call returning everything an editor HUD / CLI statusline shows.
+  // Same fields the statusline composes — built for veto-vscode so editors can
+  // stop reading internal tables directly.
+  veto_snapshot: ({ args }) => {
+    const top = Math.min(Math.max(typeof args?.top === 'number' ? args.top : 5, 1), 20);
+
+    const sessionRow = listSessions(1)[0];
+    const session = sessionRow ? {
+      id: sessionRow.id,
+      platform: sessionRow.platform ?? null,
+      active_client: sessionRow.active_client ?? null,
+      summary: sessionRow.summary ?? null,
+      token_count: sessionRow.token_count ?? 0,
+      project_dir: sessionRow.project_dir ?? null,
+      started_at: sessionRow.started_at ?? null,
+    } : null;
+
+    const council = getLatestCouncilOutcome(); // { verdict, recommended, task, debated_at } | null
+
+    // Top learned patterns, excluding router.* thresholds and composed_agent:* defs
+    // (config/JSON, not learning scores) — mirrors the statusline's router segment.
+    const routerTop = getPatterns(undefined, 50)
+      .filter(p => !p.pattern_key.startsWith('router.') && !p.pattern_key.startsWith('composed_agent:'))
+      .slice(0, top)
+      .map(p => ({
+        pattern_key: p.pattern_key,
+        pattern_val: p.pattern_val,
+        confidence: p.confidence,
+        seen_count: p.seen_count,
+      }));
+
+    const rs = getRateStatus();
+    const rate = (['claude', 'gemini', 'codex', 'antigravity'] as const).map(platform => ({
+      platform,
+      tokens_today: rs[platform].tokens_today,
+      used_percent: rs[platform].used_percent,
+      status: rs[platform].status,
+    }));
+
+    const stats = getHealthStats();
+    const health = {
+      status: serverHealth.errorCount > 10 ? 'degraded' : 'healthy',
+      uptime_seconds: Math.round((Date.now() - serverHealth.startTime) / 1000),
+      version: VERSION,
+      total_sessions: stats.total_sessions,
+      total_patterns: stats.total_patterns,
+      total_council_outcomes: stats.total_council_outcomes,
+      avg_council_latency_ms: stats.avg_council_latency_ms,
+    };
+
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          success: true,
+          session,
+          council,
+          routerTop,
+          rate,
+          memoryCount: stats.total_memories,
+          health,
+        }, null, 2),
+      }],
+    };
   },
 };
