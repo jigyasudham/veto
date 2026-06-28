@@ -1,6 +1,23 @@
 // Database schema definitions for veto.db
 // All tables created on first run — zero setup required
 
+// Read-contract version, written to `PRAGMA user_version` on every open.
+//
+// External readers (e.g. veto-vscode, `veto statusline`) read veto.db directly.
+// The tables/columns they depend on are a STABLE READ SURFACE:
+//   sessions(id, platform, active_client, started_at, summary, token_count, project_dir, created_at)
+//   council_outcomes(id, verdict, lead_dev, pm, architect, ux, devil, legal, security, recommended, debated_at)
+//   patterns(pattern_key, pattern_val, confidence, seen_count, updated_at)
+//   rate_usage(platform, request_count, token_count, date_key)
+//   knowledge_base(id, title, tags, project_dir, type, created_at)
+//   learning_data(model_tier, agent, output_quality)
+//   scan_diagnostics(file_path, line, col_start, message, severity, source)
+//
+// BUMP THIS when any of the above is renamed/dropped (purely additive changes
+// don't require a bump) so external readers can detect drift via
+// `PRAGMA user_version` and degrade gracefully instead of silently blanking.
+export const VETO_DB_SCHEMA_VERSION = 1;
+
 export const CREATE_TABLES = `
   CREATE TABLE IF NOT EXISTS sessions (
     id               TEXT PRIMARY KEY,

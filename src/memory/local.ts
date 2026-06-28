@@ -11,7 +11,7 @@ import { mkdirSync } from 'node:fs';
 // node:sqlite is a Node 22.5+ built-in — use createRequire so bundlers (Vite/esbuild) skip it
 const _require = createRequire(import.meta.url);
 const DbSync = (_require('node:sqlite') as typeof import('node:sqlite')).DatabaseSync;
-import { CREATE_TABLES, type SessionRow, type KnowledgeRow, type KnowledgeType, type ProjectMapRow, type DocsCacheRow, type ToolCallTraceLogRow } from './schema.js';
+import { CREATE_TABLES, VETO_DB_SCHEMA_VERSION, type SessionRow, type KnowledgeRow, type KnowledgeType, type ProjectMapRow, type DocsCacheRow, type ToolCallTraceLogRow } from './schema.js';
 
 // Context window sizes per platform (tokens)
 export const CONTEXT_WINDOWS: Record<string, number> = {
@@ -92,6 +92,9 @@ export function getDb(): DatabaseSync {
   migrateContextUsage(_db);
   migrateRoutingFeedback(_db);
   migrateToolTraceLog(_db);
+  // Stamp the read-contract version so external readers (veto-vscode, statusline)
+  // can detect drift via `PRAGMA user_version`. See VETO_DB_SCHEMA_VERSION.
+  _db.exec(`PRAGMA user_version = ${VETO_DB_SCHEMA_VERSION}`);
   return _db;
 }
 

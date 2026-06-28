@@ -865,6 +865,59 @@ async function patternsCommand() {
   console.log('');
 }
 
+async function statuslineCommand() {
+  const sub = process.argv[3] ?? 'status';
+  const args = process.argv.slice(4);
+  const clientArg = args.find(a => a.startsWith('--client='))?.split('=')[1] ?? 'claude';
+  const force = args.includes('--force') || args.includes('--yes') || args.includes('-y');
+  const dryRun = args.includes('--dry-run');
+
+  const sl = await import('./cli/statusline.js');
+
+  // Hot path: one line to stdout, nothing else. No banner, no colors-config noise.
+  if (sub === 'print') {
+    sl.printStatusline();
+    return;
+  }
+
+  if (sub === 'install') {
+    const r = sl.installStatusline(clientArg, { force, dryRun });
+    console.log('');
+    console.log((r.ok ? c.green('  ✓ ') : c.red('  ✗ ')) + r.message.replace(/\n/g, '\n  '));
+    if (r.ok && r.changed) console.log(c.dim('\n  Restart your AI CLI to see the Veto line. Remove with: veto statusline uninstall'));
+    console.log('');
+    if (!r.ok) process.exit(1);
+    return;
+  }
+
+  if (sub === 'uninstall') {
+    const r = sl.uninstallStatusline(clientArg);
+    console.log('');
+    console.log((r.ok ? c.green('  ✓ ') : c.red('  ✗ ')) + r.message);
+    console.log('');
+    if (!r.ok) process.exit(1);
+    return;
+  }
+
+  if (sub === 'status') {
+    const info = sl.statuslineStatusInfo(clientArg);
+    console.log('');
+    console.log(c.bold('  Veto Statusline'));
+    console.log(c.dim('  ─────────────────────────────────────────────────────'));
+    console.log(`  Installed:  ${info.installed ? c.green('yes') : c.dim('no')}`);
+    if (info.settingsPath) console.log(`  Settings:   ${c.dim(info.settingsPath)}`);
+    console.log(`  Sample:     ${info.sample}`);
+    console.log('');
+    console.log(c.dim('  Install: veto statusline install [--client=claude] [--force] [--dry-run]'));
+    console.log('');
+    return;
+  }
+
+  console.error(c.red(`  Unknown statusline subcommand: ${sub}`));
+  console.error(c.dim('  Usage: veto statusline <install|uninstall|print|status>'));
+  process.exit(1);
+}
+
 function shortHelpCommand() {
   console.log('');
   console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(` — 92 agentic tools. 49 specialists. Every major AI CLI. Zero extra cost on subscriptions.`));
@@ -881,6 +934,8 @@ function shortHelpCommand() {
   console.log(`  ${c.cyan('veto patterns')} ${c.dim('[prefix]')}      List learned agent/routing patterns`);
   console.log(`  ${c.cyan('veto routing')} ${c.dim('[status|enable|disable|reset|log]')}`);
   console.log(`                         Routing feedback loop (opt-in signal storage)`);
+  console.log(`  ${c.cyan('veto statusline')} ${c.dim('[install|uninstall|print|status]')}`);
+  console.log(`                         Compact Veto line under your AI CLI prompt`);
   console.log(`  ${c.cyan('veto version')}                 Show version (alias for status)`);
   console.log(`  ${c.cyan('veto hook install')}            Install pre-commit secrets scan hook`);
   console.log(`  ${c.cyan('veto hook remove')}             Remove the veto pre-commit hook`);
@@ -1374,6 +1429,13 @@ switch (command) {
 
   case 'routing':
     routingCommand().catch((err) => {
+      console.error(c.red(`Error: ${err.message}`));
+      process.exit(1);
+    });
+    break;
+
+  case 'statusline':
+    statuslineCommand().catch((err) => {
       console.error(c.red(`Error: ${err.message}`));
       process.exit(1);
     });
