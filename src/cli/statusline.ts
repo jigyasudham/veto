@@ -268,7 +268,14 @@ export async function printStatusline(opts: ComposeOptions = {}, capturePath?: s
     } catch { /* capture is diagnostic only */ }
   }
 
-  process.stdout.write(line + '\n');
+  // Flush before returning so the caller can exit immediately without truncating
+  // output. A statusLine command runs on every prompt render; the process must not
+  // linger holding an open stdin handle if the parent keeps the pipe open (the line
+  // still prints on time regardless — see the 200ms timeout in readStdinPayload).
+  await new Promise<void>((resolve) => {
+    try { process.stdout.write(line + '\n', () => resolve()); }
+    catch { resolve(); }
+  });
 }
 
 // ─── settings.json install / uninstall ─────────────────────────────────────────
