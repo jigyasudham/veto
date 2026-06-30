@@ -417,6 +417,10 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 
 ## Release Notes
 
+### Unreleased
+- **Statusline now shows LIVE context-window usage.** The token-usage segment previously read Veto's own `rate_usage` tally, which only Veto's tools increment — so it sat frozen during normal use. `veto statusline print` now reads the JSON Claude Code pipes to a `statusLine` command on stdin and surfaces the pre-computed `context_window.used_percentage` as a live `ctx N%` segment (yellow ≥70, red ≥90). It renders e.g. `⬡ veto GREEN · router 94% · ctx 37% · mem 15`, drops `ctx` when the value is unavailable (early session / post-`/compact`), and stays crash-proof and non-blocking (TTY-guarded, 200 ms timeout). Per-platform daily rate remains available via `veto_rate_status` / `veto_snapshot`.
+- **First-run statusline nudge.** Until the statusline is installed, Veto surfaces a one-line offer to the agent via the MCP `instructions` field, so the feature is discoverable instead of hidden behind a command. Consent-preserving (never edits `settings.json` without the user agreeing) and self-resolving (the nudge disappears once installed).
+
 ### 2.6.0
 - **`veto statusline` — a compact Veto line under any AI CLI prompt.** `veto statusline install` wires a `statusLine` command into Claude Code's settings.json (backed up; `uninstall` restores it byte-for-byte). The `print` hot path is read-only, fast, and crash-proof — it renders e.g. `⬡ veto GREEN · router 94% · claude 42% · mem 15` and degrades to a neutral `⬡ veto` if the DB is missing or locked. Lives in the CLI so every Veto user gets it in any terminal, not just the VS Code HUD.
 - **`veto_snapshot` — one-call editor/HUD aggregate.** Returns `{ session, council, routerTop, rate, memoryCount, health }` in a single read-only call, so editor integrations (veto-vscode) can stop reading internal tables directly. Tool count is now **93**.
