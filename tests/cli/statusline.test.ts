@@ -10,21 +10,36 @@ import {
   isStatuslineInstalled,
   statuslineSetupInstruction,
   parseClaudeContextPct,
+  parseClaudeInput,
   type StatuslineData,
 } from '../../src/cli/statusline.js';
 
 const FULL: StatuslineData = {
-  verdict: 'GREEN', routerPct: 94, contextPct: 42, memCount: 15,
+  verdict: 'GREEN', routerPct: 94, contextPct: 42, rate5hPct: 30, rate7dPct: 8, memCount: 15,
 };
 const EMPTY: StatuslineData = {
-  verdict: null, routerPct: null, contextPct: null, memCount: null,
+  verdict: null, routerPct: null, contextPct: null, rate5hPct: null, rate7dPct: null, memCount: null,
 };
 
 const NO_COLOR = { color: false } as const;
 
 describe('composeStatusline (pure formatter)', () => {
   it('renders the full line in the documented order', () => {
-    expect(composeStatusline(FULL, NO_COLOR)).toBe('⬡ veto GREEN · router 94% · ctx 42% · mem 15');
+    expect(composeStatusline(FULL, NO_COLOR)).toBe('⬡ veto GREEN · router 94% · ctx 42% · 5h 30% · 7d 8% · mem 15');
+  });
+
+  it('drops only the live gauges that are unavailable', () => {
+    expect(composeStatusline({ ...FULL, rate5hPct: null }, NO_COLOR))
+      .toBe('⬡ veto GREEN · router 94% · ctx 42% · 7d 8% · mem 15');
+    expect(composeStatusline({ ...FULL, contextPct: null, rate7dPct: null }, NO_COLOR))
+      .toBe('⬡ veto GREEN · router 94% · 5h 30% · mem 15');
+  });
+
+  it('colors each live gauge by its own threshold (5h crit, 7d safe)', () => {
+    const line = composeStatusline({ ...FULL, rate5hPct: 92, rate7dPct: 40 }, { color: true });
+    expect(line).toContain('\x1b[31m5h 92%\x1b[0m'); // red ≥90
+    expect(line).toContain('7d 40%');               // plain (<70)
+    expect(line).not.toContain('\x1b[31m7d');        // 7d not red
   });
 
   it('falls back to a neutral line when there is no data (missing/locked DB)', () => {
@@ -80,6 +95,30 @@ describe('parseClaudeContextPct (live session input)', () => {
   it('returns null on malformed / empty input instead of throwing', () => {
     expect(parseClaudeContextPct('not json')).toBeNull();
     expect(parseClaudeContextPct('')).toBeNull();
+  });
+});
+
+describe('parseClaudeInput (context + rate limits in one pass)', () => {
+  it('extracts context, 5-hour and 7-day rate-limit percentages', () => {
+    const raw = JSON.stringify({
+      context_window: { used_percentage: 15 },
+      rate_limits: { five_hour: { used_percentage: 74 }, seven_day: { used_percentage: 8 } },
+    });
+    expect(parseClaudeInput(raw)).toEqual({ contextPct: 15, rate5hPct: 74, rate7dPct: 8 });
+  });
+
+  it('returns null per-field when a gauge is missing, keeping the others', () => {
+    const raw = JSON.stringify({ rate_limits: { five_hour: { used_percentage: 50 } } });
+    expect(parseClaudeInput(raw)).toEqual({ contextPct: null, rate5hPct: 50, rate7dPct: null });
+  });
+
+  it('clamps and rounds rate-limit values', () => {
+    const raw = JSON.stringify({ rate_limits: { five_hour: { used_percentage: 99.6 }, seven_day: { used_percentage: 120 } } });
+    expect(parseClaudeInput(raw)).toEqual({ contextPct: null, rate5hPct: 100, rate7dPct: 100 });
+  });
+
+  it('all-null on malformed input', () => {
+    expect(parseClaudeInput('}{')).toEqual({ contextPct: null, rate5hPct: null, rate7dPct: null });
   });
 });
 

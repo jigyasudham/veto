@@ -27,11 +27,13 @@ export interface StatuslineData {
   verdict: 'GREEN' | 'YELLOW' | 'RED' | null; // latest council verdict (Veto DB)
   routerPct: number | null;                   // top learned-pattern confidence, 0..100 (Veto DB)
   contextPct: number | null;                  // LIVE context-window % used — from Claude Code stdin, NOT the DB
+  rate5hPct: number | null;                   // LIVE 5-hour rate-limit % used — from Claude Code stdin
+  rate7dPct: number | null;                   // LIVE 7-day (weekly) rate-limit % used — from Claude Code stdin
   memCount: number | null;                    // knowledge_base entries (Veto DB)
 }
 
 const EMPTY: StatuslineData = {
-  verdict: null, routerPct: null, contextPct: null, memCount: null,
+  verdict: null, routerPct: null, contextPct: null, rate5hPct: null, rate7dPct: null, memCount: null,
 };
 
 // Open the veto DB read-only. Returns null if it can't (missing/locked/corrupt).
@@ -148,12 +150,16 @@ export function composeStatusline(data: StatuslineData, opts: ComposeOptions = {
     segments.push(`router ${data.routerPct}%`);
   }
 
-  if (data.contextPct !== null) {
-    // Live context-window usage. Color as a "filling up" warning: yellow ≥70, red ≥90.
-    const label = `ctx ${data.contextPct}%`;
-    const code = data.contextPct >= 90 ? ANSI.red : data.contextPct >= 70 ? ANSI.yellow : '';
-    segments.push(code ? paint(label, code) : label);
-  }
+  // Live "headroom" gauges from Claude Code's stdin payload. All three warn as they
+  // fill up — yellow ≥70, red ≥90 — since each is a budget you're consuming.
+  const gauge = (prefix: string, pct: number) => {
+    const label = `${prefix} ${pct}%`;
+    const code = pct >= 90 ? ANSI.red : pct >= 70 ? ANSI.yellow : '';
+    return code ? paint(label, code) : label;
+  };
+  if (data.contextPct !== null) segments.push(gauge('ctx', data.contextPct)); // context-window used
+  if (data.rate5hPct !== null) segments.push(gauge('5h', data.rate5hPct));     // 5-hour rate limit used
+  if (data.rate7dPct !== null) segments.push(gauge('7d', data.rate7dPct));     // weekly rate limit used
 
   if (data.memCount !== null) {
     segments.push(`mem ${data.memCount}`);
@@ -166,24 +172,46 @@ export function composeStatusline(data: StatuslineData, opts: ComposeOptions = {
 // ─── Live session input (Claude Code stdin) ───────────────────────────────────
 
 // Claude Code pipes a JSON payload to the `statusLine` command on every render.
-// We only need the pre-computed context-window usage; everything else is ignored.
-// See https://code.claude.com/docs/en/statusline (context_window.used_percentage).
+// We read the pre-computed context-window usage plus the live rate-limit gauges;
+// everything else is ignored. See https://code.claude.com/docs/en/statusline.
 export interface ClaudeStatusInput {
   context_window?: { used_percentage?: number | null } | null;
+  rate_limits?: {
+    five_hour?: { used_percentage?: number | null } | null;
+    seven_day?: { used_percentage?: number | null } | null;
+  } | null;
 }
 
-// Pull the live context-window % from the stdin payload. Returns null for anything
-// unexpected (missing field, null early in the session / right after /compact, bad
-// JSON) so the segment simply drops rather than showing a wrong number.
-export function parseClaudeContextPct(raw: string): number | null {
+export interface ClaudeLiveData {
+  contextPct: number | null;
+  rate5hPct: number | null;
+  rate7dPct: number | null;
+}
+
+// Coerce a payload percentage to a clean 0..100 integer, or null for anything
+// unexpected (missing, null early in the session / right after /compact, NaN).
+function pctOrNull(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(100, Math.round(v))) : null;
+}
+
+// Parse all live gauges from the stdin payload in one pass. Never throws — bad/empty
+// JSON yields all-null so every segment simply drops rather than showing a wrong value.
+export function parseClaudeInput(raw: string): ClaudeLiveData {
   try {
     const j = JSON.parse(raw) as ClaudeStatusInput;
-    const p = j?.context_window?.used_percentage;
-    if (typeof p === 'number' && Number.isFinite(p)) {
-      return Math.max(0, Math.min(100, Math.round(p)));
-    }
-  } catch { /* fall through */ }
-  return null;
+    return {
+      contextPct: pctOrNull(j?.context_window?.used_percentage),
+      rate5hPct: pctOrNull(j?.rate_limits?.five_hour?.used_percentage),
+      rate7dPct: pctOrNull(j?.rate_limits?.seven_day?.used_percentage),
+    };
+  } catch {
+    return { contextPct: null, rate5hPct: null, rate7dPct: null };
+  }
+}
+
+// Focused helper kept for callers that only need context usage.
+export function parseClaudeContextPct(raw: string): number | null {
+  return parseClaudeInput(raw).contextPct;
 }
 
 // Read the stdin payload Claude Code sends. Crash-proof and never blocks the prompt:
@@ -222,11 +250,8 @@ export async function printStatusline(opts: ComposeOptions = {}, capturePath?: s
   let raw: string | null = null;
   try {
     raw = await readStdinPayload();
-    if (raw) {
-      const pct = parseClaudeContextPct(raw);
-      if (pct !== null) data = { ...data, contextPct: pct };
-    }
-  } catch { /* live segment stays null */ }
+    if (raw) data = { ...data, ...parseClaudeInput(raw) };
+  } catch { /* live segments stay null */ }
 
   let line: string;
   try { line = composeStatusline(data, opts); } catch { line = composeStatusline(EMPTY, opts); }
