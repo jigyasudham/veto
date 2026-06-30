@@ -12,7 +12,7 @@
 
 import { createRequire } from 'node:module';
 import type { DatabaseSync } from 'node:sqlite';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, appendFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { getDbPath, getDb } from '../memory/local.js';
@@ -212,12 +212,16 @@ function readStdinPayload(timeoutMs = 200): Promise<string | null> {
 }
 
 // The hot path: read DB + live stdin, render, print. Never throws, always exits 0.
-export async function printStatusline(opts: ComposeOptions = {}): Promise<void> {
+// `capturePath` (the `--capture <file>` flag) is a verification aid: it appends the
+// raw payload Claude Code sent and the line we rendered, so you can diff the ACTUAL
+// context_window.used_percentage against the displayed `ctx N%`. Never on by default.
+export async function printStatusline(opts: ComposeOptions = {}, capturePath?: string): Promise<void> {
   let data: StatuslineData;
   try { data = readStatuslineData(); } catch { data = { ...EMPTY }; }
 
+  let raw: string | null = null;
   try {
-    const raw = await readStdinPayload();
+    raw = await readStdinPayload();
     if (raw) {
       const pct = parseClaudeContextPct(raw);
       if (pct !== null) data = { ...data, contextPct: pct };
@@ -226,6 +230,19 @@ export async function printStatusline(opts: ComposeOptions = {}): Promise<void> 
 
   let line: string;
   try { line = composeStatusline(data, opts); } catch { line = composeStatusline(EMPTY, opts); }
+
+  if (capturePath) {
+    // Best-effort, never blocks or crashes the render.
+    try {
+      const actual = raw ? (() => { try { return JSON.parse(raw).context_window?.used_percentage ?? null; } catch { return null; } })() : null;
+      appendFileSync(
+        capturePath,
+        `${new Date().toISOString()}\tactual_used_percentage=${actual}\trendered=${JSON.stringify(line)}\tpayload=${raw ?? '<none>'}\n`,
+        'utf8',
+      );
+    } catch { /* capture is diagnostic only */ }
+  }
+
   process.stdout.write(line + '\n');
 }
 

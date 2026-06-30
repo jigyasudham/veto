@@ -876,7 +876,11 @@ async function statuslineCommand() {
 
   // Hot path: one line to stdout, nothing else. No banner, no colors-config noise.
   if (sub === 'print') {
-    await sl.printStatusline();
+    // --capture <file>: verification aid — log the raw Claude Code payload next to
+    // the rendered line so you can compare the actual context % against `ctx N%`.
+    const capIdx = args.indexOf('--capture');
+    const capturePath = capIdx !== -1 ? args[capIdx + 1] : undefined;
+    await sl.printStatusline({}, capturePath);
     return;
   }
 
