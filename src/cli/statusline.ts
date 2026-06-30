@@ -339,16 +339,41 @@ export function uninstallStatusline(client = 'claude'): InstallResult {
   return { ok: true, changed: false, message: `Veto statusline was not installed for ${target.name}.` };
 }
 
+// Cheap, DB-free "is our statusLine wired into settings.json?" check. Safe to call
+// at server startup — never throws, never opens the DB.
+export function isStatuslineInstalled(client = 'claude'): boolean {
+  const target = resolveClient(client);
+  if (!target || !existsSync(target.settingsPath)) return false;
+  try {
+    const settings = JSON.parse(readFileSync(target.settingsPath, 'utf8')) as Record<string, unknown>;
+    return isOurStatusLine(settings.statusLine);
+  } catch {
+    return false;
+  }
+}
+
 export function statuslineStatusInfo(client = 'claude'): { installed: boolean; settingsPath: string | null; sample: string } {
   const target = resolveClient(client);
   const sample = composeStatusline(readStatuslineData());
   if (!target) return { installed: false, settingsPath: null, sample };
-  let installed = false;
-  if (existsSync(target.settingsPath)) {
-    try {
-      const settings = JSON.parse(readFileSync(target.settingsPath, 'utf8')) as Record<string, unknown>;
-      installed = isOurStatusLine(settings.statusLine);
-    } catch { /* installed stays false */ }
-  }
-  return { installed, settingsPath: target.settingsPath, sample };
+  return { installed: isStatuslineInstalled(client), settingsPath: target.settingsPath, sample };
+}
+
+// First-run setup nudge surfaced to the agent through the MCP server `instructions`
+// field. An MCP server speaks JSON-RPC over stdio — it can't print a `[y/N]` prompt
+// or read a keystroke — so the protocol-correct way to "ask on first connect" is to
+// hand the offer to the agent, which asks the user and runs the install on consent.
+// Returns undefined once the statusline is installed, so the nudge self-resolves and
+// stops appearing. We never edit settings.json without the user agreeing.
+export function statuslineSetupInstruction(client = 'claude'): string | undefined {
+  if (isStatuslineInstalled(client)) return undefined;
+  return [
+    'SETUP TIP — Veto status line (mention once per session; drop it if the user declines).',
+    'Veto ships an always-on status line for Claude Code that renders beneath the prompt',
+    '(latest council verdict · top router-pattern confidence · daily token-budget % · memory',
+    'entry count). It is NOT yet enabled in this install. If the user would like it, offer to',
+    'run `veto statusline install` for them — it backs up settings.json and is reversible with',
+    '`veto statusline uninstall`, and the line appears after the next CLI restart. Do not',
+    'install it unless the user agrees.',
+  ].join(' ');
 }

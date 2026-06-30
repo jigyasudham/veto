@@ -30,10 +30,20 @@ import { listSessions, searchKnowledge, getProjectMap, getPatterns, recordToolCa
 import { buildRepoMap } from './repo-map/index.js';
 import { initLlmRunner } from './agents/executor.js';
 import { loadPlugins } from './plugins/loader.js';
+import { statuslineSetupInstruction } from './cli/statusline.js';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const server = new Server({ name: 'veto', version: VERSION }, { capabilities: { tools: {}, resources: {}, prompts: {} } });
+// First-run-ish setup nudge: until the user enables the Veto status line, surface a
+// one-line offer to the agent via the MCP `instructions` field (computed once at
+// startup; disappears for good once the statusline is installed). See
+// statuslineSetupInstruction() for why this can't be an interactive stdio prompt.
+const setupInstruction = statuslineSetupInstruction();
+
+const server = new Server(
+  { name: 'veto', version: VERSION },
+  { capabilities: { tools: {}, resources: {}, prompts: {} }, ...(setupInstruction ? { instructions: setupInstruction } : {}) },
+);
 
 const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint?: boolean; openWorldHint?: boolean }> = {
   veto_status:           { readOnlyHint: true },

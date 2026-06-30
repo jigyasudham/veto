@@ -7,6 +7,8 @@ import {
   installStatusline,
   uninstallStatusline,
   statuslineStatusInfo,
+  isStatuslineInstalled,
+  statuslineSetupInstruction,
   type StatuslineData,
 } from '../../src/cli/statusline.js';
 
@@ -156,5 +158,39 @@ describe('install / uninstall settings.json patch', () => {
   it('rejects unknown clients', () => {
     expect(installStatusline('emacs').ok).toBe(false);
     expect(uninstallStatusline('emacs').ok).toBe(false);
+  });
+});
+
+describe('first-run setup nudge (MCP instructions)', () => {
+  let dir: string;
+  let settingsPath: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'veto-sl-'));
+    settingsPath = join(dir, 'settings.json');
+    process.env.VETO_STATUSLINE_SETTINGS = settingsPath;
+  });
+
+  afterEach(() => {
+    delete process.env.VETO_STATUSLINE_SETTINGS;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reports not-installed and offers the nudge before install', () => {
+    expect(isStatuslineInstalled('claude')).toBe(false);
+    const tip = statuslineSetupInstruction('claude');
+    expect(tip).toBeDefined();
+    expect(tip).toMatch(/veto statusline install/);
+  });
+
+  it('reports installed and drops the nudge once installed (self-resolving)', () => {
+    installStatusline('claude');
+    expect(isStatuslineInstalled('claude')).toBe(true);
+    expect(statuslineSetupInstruction('claude')).toBeUndefined();
+  });
+
+  it('treats an unknown client as not installed (no nudge crash)', () => {
+    expect(isStatuslineInstalled('emacs')).toBe(false);
+    expect(statuslineSetupInstruction('emacs')).toBeDefined();
   });
 });
