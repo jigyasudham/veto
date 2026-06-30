@@ -9,21 +9,22 @@ import {
   statuslineStatusInfo,
   isStatuslineInstalled,
   statuslineSetupInstruction,
+  parseClaudeContextPct,
   type StatuslineData,
 } from '../../src/cli/statusline.js';
 
 const FULL: StatuslineData = {
-  verdict: 'GREEN', routerPct: 94, platform: 'claude', ratePct: 42, memCount: 15,
+  verdict: 'GREEN', routerPct: 94, contextPct: 42, memCount: 15,
 };
 const EMPTY: StatuslineData = {
-  verdict: null, routerPct: null, platform: null, ratePct: null, memCount: null,
+  verdict: null, routerPct: null, contextPct: null, memCount: null,
 };
 
 const NO_COLOR = { color: false } as const;
 
 describe('composeStatusline (pure formatter)', () => {
   it('renders the full line in the documented order', () => {
-    expect(composeStatusline(FULL, NO_COLOR)).toBe('⬡ veto GREEN · router 94% · claude 42% · mem 15');
+    expect(composeStatusline(FULL, NO_COLOR)).toBe('⬡ veto GREEN · router 94% · ctx 42% · mem 15');
   });
 
   it('falls back to a neutral line when there is no data (missing/locked DB)', () => {
@@ -35,23 +36,50 @@ describe('composeStatusline (pure formatter)', () => {
       .toBe('⬡ veto RED · mem 0');
   });
 
-  it('drops the rate segment when platform is known but rate is null', () => {
-    expect(composeStatusline({ ...EMPTY, platform: 'gemini', ratePct: null }, NO_COLOR))
-      .toBe('⬡ veto');
+  it('drops the ctx segment when live context % is unavailable', () => {
+    expect(composeStatusline({ ...EMPTY, verdict: 'GREEN', contextPct: null }, NO_COLOR))
+      .toBe('⬡ veto GREEN');
+  });
+
+  it('shows ctx 0% (a real reading) rather than dropping it', () => {
+    expect(composeStatusline({ ...EMPTY, contextPct: 0 }, NO_COLOR)).toBe('⬡ veto ctx 0%');
   });
 
   it('uses an ASCII glyph when asked', () => {
     expect(composeStatusline(EMPTY, { color: false, ascii: true })).toBe('# veto');
   });
 
-  it('colors the verdict and a critical rate %', () => {
-    const line = composeStatusline({ ...FULL, verdict: 'YELLOW', ratePct: 95 }, { color: true });
+  it('colors the verdict and a critical context %', () => {
+    const line = composeStatusline({ ...FULL, verdict: 'YELLOW', contextPct: 95 }, { color: true });
     expect(line).toContain('\x1b[33mYELLOW\x1b[0m'); // yellow verdict
-    expect(line).toContain('\x1b[31mclaude 95%\x1b[0m'); // red (critical) rate
+    expect(line).toContain('\x1b[31mctx 95%\x1b[0m'); // red (critical) context usage
   });
 
   it('emits no ANSI codes when color is disabled', () => {
     expect(composeStatusline(FULL, NO_COLOR)).not.toContain('\x1b[');
+  });
+});
+
+describe('parseClaudeContextPct (live session input)', () => {
+  it('reads the pre-computed context-window percentage from Claude Code stdin', () => {
+    const raw = JSON.stringify({ context_window: { used_percentage: 37.4 } });
+    expect(parseClaudeContextPct(raw)).toBe(37); // rounded
+  });
+
+  it('clamps out-of-range values into 0..100', () => {
+    expect(parseClaudeContextPct(JSON.stringify({ context_window: { used_percentage: 142 } }))).toBe(100);
+    expect(parseClaudeContextPct(JSON.stringify({ context_window: { used_percentage: -5 } }))).toBe(0);
+  });
+
+  it('returns null when the field is missing or null (early session / post-compact)', () => {
+    expect(parseClaudeContextPct(JSON.stringify({ context_window: { used_percentage: null } }))).toBeNull();
+    expect(parseClaudeContextPct(JSON.stringify({ model: { display_name: 'Opus' } }))).toBeNull();
+    expect(parseClaudeContextPct('{}')).toBeNull();
+  });
+
+  it('returns null on malformed / empty input instead of throwing', () => {
+    expect(parseClaudeContextPct('not json')).toBeNull();
+    expect(parseClaudeContextPct('')).toBeNull();
   });
 });
 

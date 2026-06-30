@@ -876,7 +876,7 @@ async function statuslineCommand() {
 
   // Hot path: one line to stdout, nothing else. No banner, no colors-config noise.
   if (sub === 'print') {
-    sl.printStatusline();
+    await sl.printStatusline();
     return;
   }
 

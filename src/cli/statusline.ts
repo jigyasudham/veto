@@ -16,7 +16,6 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from '
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { getDbPath, getDb } from '../memory/local.js';
-import { getConfig } from '../memory/config.js';
 
 // node:sqlite is a Node 22.5+ built-in — use createRequire so bundlers skip it.
 const _require = createRequire(import.meta.url);
@@ -25,15 +24,14 @@ const DbSync = (_require('node:sqlite') as typeof import('node:sqlite')).Databas
 // ─── Data ────────────────────────────────────────────────────────────────────
 
 export interface StatuslineData {
-  verdict: 'GREEN' | 'YELLOW' | 'RED' | null; // latest council verdict
-  routerPct: number | null;                   // top learned-pattern confidence, 0..100
-  platform: string | null;                    // active session platform
-  ratePct: number | null;                     // that platform's token usage today, 0..100
-  memCount: number | null;                    // knowledge_base entries
+  verdict: 'GREEN' | 'YELLOW' | 'RED' | null; // latest council verdict (Veto DB)
+  routerPct: number | null;                   // top learned-pattern confidence, 0..100 (Veto DB)
+  contextPct: number | null;                  // LIVE context-window % used — from Claude Code stdin, NOT the DB
+  memCount: number | null;                    // knowledge_base entries (Veto DB)
 }
 
 const EMPTY: StatuslineData = {
-  verdict: null, routerPct: null, platform: null, ratePct: null, memCount: null,
+  verdict: null, routerPct: null, contextPct: null, memCount: null,
 };
 
 // Open the veto DB read-only. Returns null if it can't (missing/locked/corrupt).
@@ -102,29 +100,11 @@ function queryStatusline(db: DatabaseSync): StatuslineData {
     }
   } catch { /* segment off */ }
 
-  try {
-    const row = db.prepare(
-      'SELECT platform FROM sessions ORDER BY created_at DESC LIMIT 1'
-    ).get() as { platform?: string } | undefined;
-    if (row?.platform) data.platform = row.platform;
-  } catch { /* segment off */ }
-
-  // Rate % for the active platform today — mirrors router/rate-monitor semantics
-  // (min(100, round(tokens / dailyBudget * 100))).
-  if (data.platform) {
-    try {
-      const today = new Date().toISOString().slice(0, 10);
-      const row = db.prepare(
-        'SELECT token_count FROM rate_usage WHERE platform = ? AND date_key = ?'
-      ).get(data.platform, today) as { token_count?: number } | undefined;
-      const tokens = row?.token_count ?? 0;
-      const budgets = getConfig().dailyTokenBudget as Record<string, number>;
-      const budget = budgets[data.platform];
-      if (budget && budget > 0) {
-        data.ratePct = Math.min(100, Math.round((tokens / budget) * 100));
-      }
-    } catch { /* segment off */ }
-  }
+  // NOTE: live context-window usage (data.contextPct) is intentionally NOT read
+  // here — it comes from the JSON Claude Code pipes to `statusline print` on stdin,
+  // not from the DB. The old "platform N%" segment read rate_usage.token_count,
+  // which only Veto's own tools increment, so it sat frozen during normal use. That
+  // segment was removed; printStatusline() overlays the real per-render number.
 
   try {
     const row = db.prepare('SELECT COUNT(*) AS n FROM knowledge_base').get() as { n?: number } | undefined;
@@ -168,10 +148,10 @@ export function composeStatusline(data: StatuslineData, opts: ComposeOptions = {
     segments.push(`router ${data.routerPct}%`);
   }
 
-  if (data.platform && data.ratePct !== null) {
-    // Color the rate % using the same thresholds as rate-monitor (warn ≥70, crit ≥90).
-    const label = `${data.platform} ${data.ratePct}%`;
-    const code = data.ratePct >= 90 ? ANSI.red : data.ratePct >= 70 ? ANSI.yellow : '';
+  if (data.contextPct !== null) {
+    // Live context-window usage. Color as a "filling up" warning: yellow ≥70, red ≥90.
+    const label = `ctx ${data.contextPct}%`;
+    const code = data.contextPct >= 90 ? ANSI.red : data.contextPct >= 70 ? ANSI.yellow : '';
     segments.push(code ? paint(label, code) : label);
   }
 
@@ -183,14 +163,69 @@ export function composeStatusline(data: StatuslineData, opts: ComposeOptions = {
   return `${head} ${segments.join(' · ')}`;
 }
 
-// The hot path: read + render + print. Never throws, always exits 0.
-export function printStatusline(opts: ComposeOptions = {}): void {
-  let line: string;
+// ─── Live session input (Claude Code stdin) ───────────────────────────────────
+
+// Claude Code pipes a JSON payload to the `statusLine` command on every render.
+// We only need the pre-computed context-window usage; everything else is ignored.
+// See https://code.claude.com/docs/en/statusline (context_window.used_percentage).
+export interface ClaudeStatusInput {
+  context_window?: { used_percentage?: number | null } | null;
+}
+
+// Pull the live context-window % from the stdin payload. Returns null for anything
+// unexpected (missing field, null early in the session / right after /compact, bad
+// JSON) so the segment simply drops rather than showing a wrong number.
+export function parseClaudeContextPct(raw: string): number | null {
   try {
-    line = composeStatusline(readStatuslineData(), opts);
-  } catch {
-    line = composeStatusline(EMPTY, opts);
-  }
+    const j = JSON.parse(raw) as ClaudeStatusInput;
+    const p = j?.context_window?.used_percentage;
+    if (typeof p === 'number' && Number.isFinite(p)) {
+      return Math.max(0, Math.min(100, Math.round(p)));
+    }
+  } catch { /* fall through */ }
+  return null;
+}
+
+// Read the stdin payload Claude Code sends. Crash-proof and never blocks the prompt:
+// returns null immediately when run from a TTY (manual invocation) and bails after a
+// short timeout if no data arrives. Claude Code closes stdin after writing, so the
+// 'end' path is the normal case.
+function readStdinPayload(timeoutMs = 200): Promise<string | null> {
+  return new Promise((resolve) => {
+    const stdin = process.stdin;
+    if (stdin.isTTY) { resolve(null); return; }
+    let data = '';
+    let settled = false;
+    const done = (v: string | null) => { if (!settled) { settled = true; resolve(v); } };
+    const timer = setTimeout(() => done(null), timeoutMs);
+    timer.unref?.();
+    try {
+      stdin.setEncoding('utf8');
+      stdin.on('data', (c) => { data += c; });
+      stdin.on('end', () => { clearTimeout(timer); done(data || null); });
+      stdin.on('error', () => { clearTimeout(timer); done(null); });
+    } catch {
+      clearTimeout(timer);
+      done(null);
+    }
+  });
+}
+
+// The hot path: read DB + live stdin, render, print. Never throws, always exits 0.
+export async function printStatusline(opts: ComposeOptions = {}): Promise<void> {
+  let data: StatuslineData;
+  try { data = readStatuslineData(); } catch { data = { ...EMPTY }; }
+
+  try {
+    const raw = await readStdinPayload();
+    if (raw) {
+      const pct = parseClaudeContextPct(raw);
+      if (pct !== null) data = { ...data, contextPct: pct };
+    }
+  } catch { /* live segment stays null */ }
+
+  let line: string;
+  try { line = composeStatusline(data, opts); } catch { line = composeStatusline(EMPTY, opts); }
   process.stdout.write(line + '\n');
 }
 
