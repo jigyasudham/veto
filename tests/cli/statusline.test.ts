@@ -7,21 +7,39 @@ import {
   installStatusline,
   uninstallStatusline,
   statuslineStatusInfo,
+  isStatuslineInstalled,
+  statuslineSetupInstruction,
+  parseClaudeContextPct,
+  parseClaudeInput,
   type StatuslineData,
 } from '../../src/cli/statusline.js';
 
 const FULL: StatuslineData = {
-  verdict: 'GREEN', routerPct: 94, platform: 'claude', ratePct: 42, memCount: 15,
+  verdict: 'GREEN', routerPct: 94, contextPct: 42, rate5hPct: 30, rate7dPct: 8, memCount: 15,
 };
 const EMPTY: StatuslineData = {
-  verdict: null, routerPct: null, platform: null, ratePct: null, memCount: null,
+  verdict: null, routerPct: null, contextPct: null, rate5hPct: null, rate7dPct: null, memCount: null,
 };
 
 const NO_COLOR = { color: false } as const;
 
 describe('composeStatusline (pure formatter)', () => {
   it('renders the full line in the documented order', () => {
-    expect(composeStatusline(FULL, NO_COLOR)).toBe('⬡ veto GREEN · router 94% · claude 42% · mem 15');
+    expect(composeStatusline(FULL, NO_COLOR)).toBe('⬡ veto GREEN · router 94% · ctx 42% · 5h 30% · 7d 8% · mem 15');
+  });
+
+  it('drops only the live gauges that are unavailable', () => {
+    expect(composeStatusline({ ...FULL, rate5hPct: null }, NO_COLOR))
+      .toBe('⬡ veto GREEN · router 94% · ctx 42% · 7d 8% · mem 15');
+    expect(composeStatusline({ ...FULL, contextPct: null, rate7dPct: null }, NO_COLOR))
+      .toBe('⬡ veto GREEN · router 94% · 5h 30% · mem 15');
+  });
+
+  it('colors each live gauge by its own threshold (5h crit, 7d safe)', () => {
+    const line = composeStatusline({ ...FULL, rate5hPct: 92, rate7dPct: 40 }, { color: true });
+    expect(line).toContain('\x1b[31m5h 92%\x1b[0m'); // red ≥90
+    expect(line).toContain('7d 40%');               // plain (<70)
+    expect(line).not.toContain('\x1b[31m7d');        // 7d not red
   });
 
   it('falls back to a neutral line when there is no data (missing/locked DB)', () => {
@@ -33,23 +51,74 @@ describe('composeStatusline (pure formatter)', () => {
       .toBe('⬡ veto RED · mem 0');
   });
 
-  it('drops the rate segment when platform is known but rate is null', () => {
-    expect(composeStatusline({ ...EMPTY, platform: 'gemini', ratePct: null }, NO_COLOR))
-      .toBe('⬡ veto');
+  it('drops the ctx segment when live context % is unavailable', () => {
+    expect(composeStatusline({ ...EMPTY, verdict: 'GREEN', contextPct: null }, NO_COLOR))
+      .toBe('⬡ veto GREEN');
+  });
+
+  it('shows ctx 0% (a real reading) rather than dropping it', () => {
+    expect(composeStatusline({ ...EMPTY, contextPct: 0 }, NO_COLOR)).toBe('⬡ veto ctx 0%');
   });
 
   it('uses an ASCII glyph when asked', () => {
     expect(composeStatusline(EMPTY, { color: false, ascii: true })).toBe('# veto');
   });
 
-  it('colors the verdict and a critical rate %', () => {
-    const line = composeStatusline({ ...FULL, verdict: 'YELLOW', ratePct: 95 }, { color: true });
+  it('colors the verdict and a critical context %', () => {
+    const line = composeStatusline({ ...FULL, verdict: 'YELLOW', contextPct: 95 }, { color: true });
     expect(line).toContain('\x1b[33mYELLOW\x1b[0m'); // yellow verdict
-    expect(line).toContain('\x1b[31mclaude 95%\x1b[0m'); // red (critical) rate
+    expect(line).toContain('\x1b[31mctx 95%\x1b[0m'); // red (critical) context usage
   });
 
   it('emits no ANSI codes when color is disabled', () => {
     expect(composeStatusline(FULL, NO_COLOR)).not.toContain('\x1b[');
+  });
+});
+
+describe('parseClaudeContextPct (live session input)', () => {
+  it('reads the pre-computed context-window percentage from Claude Code stdin', () => {
+    const raw = JSON.stringify({ context_window: { used_percentage: 37.4 } });
+    expect(parseClaudeContextPct(raw)).toBe(37); // rounded
+  });
+
+  it('clamps out-of-range values into 0..100', () => {
+    expect(parseClaudeContextPct(JSON.stringify({ context_window: { used_percentage: 142 } }))).toBe(100);
+    expect(parseClaudeContextPct(JSON.stringify({ context_window: { used_percentage: -5 } }))).toBe(0);
+  });
+
+  it('returns null when the field is missing or null (early session / post-compact)', () => {
+    expect(parseClaudeContextPct(JSON.stringify({ context_window: { used_percentage: null } }))).toBeNull();
+    expect(parseClaudeContextPct(JSON.stringify({ model: { display_name: 'Opus' } }))).toBeNull();
+    expect(parseClaudeContextPct('{}')).toBeNull();
+  });
+
+  it('returns null on malformed / empty input instead of throwing', () => {
+    expect(parseClaudeContextPct('not json')).toBeNull();
+    expect(parseClaudeContextPct('')).toBeNull();
+  });
+});
+
+describe('parseClaudeInput (context + rate limits in one pass)', () => {
+  it('extracts context, 5-hour and 7-day rate-limit percentages', () => {
+    const raw = JSON.stringify({
+      context_window: { used_percentage: 15 },
+      rate_limits: { five_hour: { used_percentage: 74 }, seven_day: { used_percentage: 8 } },
+    });
+    expect(parseClaudeInput(raw)).toEqual({ contextPct: 15, rate5hPct: 74, rate7dPct: 8 });
+  });
+
+  it('returns null per-field when a gauge is missing, keeping the others', () => {
+    const raw = JSON.stringify({ rate_limits: { five_hour: { used_percentage: 50 } } });
+    expect(parseClaudeInput(raw)).toEqual({ contextPct: null, rate5hPct: 50, rate7dPct: null });
+  });
+
+  it('clamps and rounds rate-limit values', () => {
+    const raw = JSON.stringify({ rate_limits: { five_hour: { used_percentage: 99.6 }, seven_day: { used_percentage: 120 } } });
+    expect(parseClaudeInput(raw)).toEqual({ contextPct: null, rate5hPct: 100, rate7dPct: 100 });
+  });
+
+  it('all-null on malformed input', () => {
+    expect(parseClaudeInput('}{')).toEqual({ contextPct: null, rate5hPct: null, rate7dPct: null });
   });
 });
 
@@ -156,5 +225,39 @@ describe('install / uninstall settings.json patch', () => {
   it('rejects unknown clients', () => {
     expect(installStatusline('emacs').ok).toBe(false);
     expect(uninstallStatusline('emacs').ok).toBe(false);
+  });
+});
+
+describe('first-run setup nudge (MCP instructions)', () => {
+  let dir: string;
+  let settingsPath: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'veto-sl-'));
+    settingsPath = join(dir, 'settings.json');
+    process.env.VETO_STATUSLINE_SETTINGS = settingsPath;
+  });
+
+  afterEach(() => {
+    delete process.env.VETO_STATUSLINE_SETTINGS;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reports not-installed and offers the nudge before install', () => {
+    expect(isStatuslineInstalled('claude')).toBe(false);
+    const tip = statuslineSetupInstruction('claude');
+    expect(tip).toBeDefined();
+    expect(tip).toMatch(/veto statusline install/);
+  });
+
+  it('reports installed and drops the nudge once installed (self-resolving)', () => {
+    installStatusline('claude');
+    expect(isStatuslineInstalled('claude')).toBe(true);
+    expect(statuslineSetupInstruction('claude')).toBeUndefined();
+  });
+
+  it('treats an unknown client as not installed (no nudge crash)', () => {
+    expect(isStatuslineInstalled('emacs')).toBe(false);
+    expect(statuslineSetupInstruction('emacs')).toBeDefined();
   });
 });

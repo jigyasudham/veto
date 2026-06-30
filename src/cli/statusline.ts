@@ -12,11 +12,10 @@
 
 import { createRequire } from 'node:module';
 import type { DatabaseSync } from 'node:sqlite';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, appendFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { getDbPath, getDb } from '../memory/local.js';
-import { getConfig } from '../memory/config.js';
 
 // node:sqlite is a Node 22.5+ built-in — use createRequire so bundlers skip it.
 const _require = createRequire(import.meta.url);
@@ -25,15 +24,16 @@ const DbSync = (_require('node:sqlite') as typeof import('node:sqlite')).Databas
 // ─── Data ────────────────────────────────────────────────────────────────────
 
 export interface StatuslineData {
-  verdict: 'GREEN' | 'YELLOW' | 'RED' | null; // latest council verdict
-  routerPct: number | null;                   // top learned-pattern confidence, 0..100
-  platform: string | null;                    // active session platform
-  ratePct: number | null;                     // that platform's token usage today, 0..100
-  memCount: number | null;                    // knowledge_base entries
+  verdict: 'GREEN' | 'YELLOW' | 'RED' | null; // latest council verdict (Veto DB)
+  routerPct: number | null;                   // top learned-pattern confidence, 0..100 (Veto DB)
+  contextPct: number | null;                  // LIVE context-window % used — from Claude Code stdin, NOT the DB
+  rate5hPct: number | null;                   // LIVE 5-hour rate-limit % used — from Claude Code stdin
+  rate7dPct: number | null;                   // LIVE 7-day (weekly) rate-limit % used — from Claude Code stdin
+  memCount: number | null;                    // knowledge_base entries (Veto DB)
 }
 
 const EMPTY: StatuslineData = {
-  verdict: null, routerPct: null, platform: null, ratePct: null, memCount: null,
+  verdict: null, routerPct: null, contextPct: null, rate5hPct: null, rate7dPct: null, memCount: null,
 };
 
 // Open the veto DB read-only. Returns null if it can't (missing/locked/corrupt).
@@ -102,29 +102,11 @@ function queryStatusline(db: DatabaseSync): StatuslineData {
     }
   } catch { /* segment off */ }
 
-  try {
-    const row = db.prepare(
-      'SELECT platform FROM sessions ORDER BY created_at DESC LIMIT 1'
-    ).get() as { platform?: string } | undefined;
-    if (row?.platform) data.platform = row.platform;
-  } catch { /* segment off */ }
-
-  // Rate % for the active platform today — mirrors router/rate-monitor semantics
-  // (min(100, round(tokens / dailyBudget * 100))).
-  if (data.platform) {
-    try {
-      const today = new Date().toISOString().slice(0, 10);
-      const row = db.prepare(
-        'SELECT token_count FROM rate_usage WHERE platform = ? AND date_key = ?'
-      ).get(data.platform, today) as { token_count?: number } | undefined;
-      const tokens = row?.token_count ?? 0;
-      const budgets = getConfig().dailyTokenBudget as Record<string, number>;
-      const budget = budgets[data.platform];
-      if (budget && budget > 0) {
-        data.ratePct = Math.min(100, Math.round((tokens / budget) * 100));
-      }
-    } catch { /* segment off */ }
-  }
+  // NOTE: live context-window usage (data.contextPct) is intentionally NOT read
+  // here — it comes from the JSON Claude Code pipes to `statusline print` on stdin,
+  // not from the DB. The old "platform N%" segment read rate_usage.token_count,
+  // which only Veto's own tools increment, so it sat frozen during normal use. That
+  // segment was removed; printStatusline() overlays the real per-render number.
 
   try {
     const row = db.prepare('SELECT COUNT(*) AS n FROM knowledge_base').get() as { n?: number } | undefined;
@@ -168,12 +150,16 @@ export function composeStatusline(data: StatuslineData, opts: ComposeOptions = {
     segments.push(`router ${data.routerPct}%`);
   }
 
-  if (data.platform && data.ratePct !== null) {
-    // Color the rate % using the same thresholds as rate-monitor (warn ≥70, crit ≥90).
-    const label = `${data.platform} ${data.ratePct}%`;
-    const code = data.ratePct >= 90 ? ANSI.red : data.ratePct >= 70 ? ANSI.yellow : '';
-    segments.push(code ? paint(label, code) : label);
-  }
+  // Live "headroom" gauges from Claude Code's stdin payload. All three warn as they
+  // fill up — yellow ≥70, red ≥90 — since each is a budget you're consuming.
+  const gauge = (prefix: string, pct: number) => {
+    const label = `${prefix} ${pct}%`;
+    const code = pct >= 90 ? ANSI.red : pct >= 70 ? ANSI.yellow : '';
+    return code ? paint(label, code) : label;
+  };
+  if (data.contextPct !== null) segments.push(gauge('ctx', data.contextPct)); // context-window used
+  if (data.rate5hPct !== null) segments.push(gauge('5h', data.rate5hPct));     // 5-hour rate limit used
+  if (data.rate7dPct !== null) segments.push(gauge('7d', data.rate7dPct));     // weekly rate limit used
 
   if (data.memCount !== null) {
     segments.push(`mem ${data.memCount}`);
@@ -183,15 +169,113 @@ export function composeStatusline(data: StatuslineData, opts: ComposeOptions = {
   return `${head} ${segments.join(' · ')}`;
 }
 
-// The hot path: read + render + print. Never throws, always exits 0.
-export function printStatusline(opts: ComposeOptions = {}): void {
-  let line: string;
+// ─── Live session input (Claude Code stdin) ───────────────────────────────────
+
+// Claude Code pipes a JSON payload to the `statusLine` command on every render.
+// We read the pre-computed context-window usage plus the live rate-limit gauges;
+// everything else is ignored. See https://code.claude.com/docs/en/statusline.
+export interface ClaudeStatusInput {
+  context_window?: { used_percentage?: number | null } | null;
+  rate_limits?: {
+    five_hour?: { used_percentage?: number | null } | null;
+    seven_day?: { used_percentage?: number | null } | null;
+  } | null;
+}
+
+export interface ClaudeLiveData {
+  contextPct: number | null;
+  rate5hPct: number | null;
+  rate7dPct: number | null;
+}
+
+// Coerce a payload percentage to a clean 0..100 integer, or null for anything
+// unexpected (missing, null early in the session / right after /compact, NaN).
+function pctOrNull(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(100, Math.round(v))) : null;
+}
+
+// Parse all live gauges from the stdin payload in one pass. Never throws — bad/empty
+// JSON yields all-null so every segment simply drops rather than showing a wrong value.
+export function parseClaudeInput(raw: string): ClaudeLiveData {
   try {
-    line = composeStatusline(readStatuslineData(), opts);
+    const j = JSON.parse(raw) as ClaudeStatusInput;
+    return {
+      contextPct: pctOrNull(j?.context_window?.used_percentage),
+      rate5hPct: pctOrNull(j?.rate_limits?.five_hour?.used_percentage),
+      rate7dPct: pctOrNull(j?.rate_limits?.seven_day?.used_percentage),
+    };
   } catch {
-    line = composeStatusline(EMPTY, opts);
+    return { contextPct: null, rate5hPct: null, rate7dPct: null };
   }
-  process.stdout.write(line + '\n');
+}
+
+// Focused helper kept for callers that only need context usage.
+export function parseClaudeContextPct(raw: string): number | null {
+  return parseClaudeInput(raw).contextPct;
+}
+
+// Read the stdin payload Claude Code sends. Crash-proof and never blocks the prompt:
+// returns null immediately when run from a TTY (manual invocation) and bails after a
+// short timeout if no data arrives. Claude Code closes stdin after writing, so the
+// 'end' path is the normal case.
+function readStdinPayload(timeoutMs = 200): Promise<string | null> {
+  return new Promise((resolve) => {
+    const stdin = process.stdin;
+    if (stdin.isTTY) { resolve(null); return; }
+    let data = '';
+    let settled = false;
+    const done = (v: string | null) => { if (!settled) { settled = true; resolve(v); } };
+    const timer = setTimeout(() => done(null), timeoutMs);
+    timer.unref?.();
+    try {
+      stdin.setEncoding('utf8');
+      stdin.on('data', (c) => { data += c; });
+      stdin.on('end', () => { clearTimeout(timer); done(data || null); });
+      stdin.on('error', () => { clearTimeout(timer); done(null); });
+    } catch {
+      clearTimeout(timer);
+      done(null);
+    }
+  });
+}
+
+// The hot path: read DB + live stdin, render, print. Never throws, always exits 0.
+// `capturePath` (the `--capture <file>` flag) is a verification aid: it appends the
+// raw payload Claude Code sent and the line we rendered, so you can diff the ACTUAL
+// context_window.used_percentage against the displayed `ctx N%`. Never on by default.
+export async function printStatusline(opts: ComposeOptions = {}, capturePath?: string): Promise<void> {
+  let data: StatuslineData;
+  try { data = readStatuslineData(); } catch { data = { ...EMPTY }; }
+
+  let raw: string | null = null;
+  try {
+    raw = await readStdinPayload();
+    if (raw) data = { ...data, ...parseClaudeInput(raw) };
+  } catch { /* live segments stay null */ }
+
+  let line: string;
+  try { line = composeStatusline(data, opts); } catch { line = composeStatusline(EMPTY, opts); }
+
+  if (capturePath) {
+    // Best-effort, never blocks or crashes the render.
+    try {
+      const actual = raw ? (() => { try { return JSON.parse(raw).context_window?.used_percentage ?? null; } catch { return null; } })() : null;
+      appendFileSync(
+        capturePath,
+        `${new Date().toISOString()}\tactual_used_percentage=${actual}\trendered=${JSON.stringify(line)}\tpayload=${raw ?? '<none>'}\n`,
+        'utf8',
+      );
+    } catch { /* capture is diagnostic only */ }
+  }
+
+  // Flush before returning so the caller can exit immediately without truncating
+  // output. A statusLine command runs on every prompt render; the process must not
+  // linger holding an open stdin handle if the parent keeps the pipe open (the line
+  // still prints on time regardless — see the 200ms timeout in readStdinPayload).
+  await new Promise<void>((resolve) => {
+    try { process.stdout.write(line + '\n', () => resolve()); }
+    catch { resolve(); }
+  });
 }
 
 // ─── settings.json install / uninstall ─────────────────────────────────────────
@@ -339,16 +423,41 @@ export function uninstallStatusline(client = 'claude'): InstallResult {
   return { ok: true, changed: false, message: `Veto statusline was not installed for ${target.name}.` };
 }
 
+// Cheap, DB-free "is our statusLine wired into settings.json?" check. Safe to call
+// at server startup — never throws, never opens the DB.
+export function isStatuslineInstalled(client = 'claude'): boolean {
+  const target = resolveClient(client);
+  if (!target || !existsSync(target.settingsPath)) return false;
+  try {
+    const settings = JSON.parse(readFileSync(target.settingsPath, 'utf8')) as Record<string, unknown>;
+    return isOurStatusLine(settings.statusLine);
+  } catch {
+    return false;
+  }
+}
+
 export function statuslineStatusInfo(client = 'claude'): { installed: boolean; settingsPath: string | null; sample: string } {
   const target = resolveClient(client);
   const sample = composeStatusline(readStatuslineData());
   if (!target) return { installed: false, settingsPath: null, sample };
-  let installed = false;
-  if (existsSync(target.settingsPath)) {
-    try {
-      const settings = JSON.parse(readFileSync(target.settingsPath, 'utf8')) as Record<string, unknown>;
-      installed = isOurStatusLine(settings.statusLine);
-    } catch { /* installed stays false */ }
-  }
-  return { installed, settingsPath: target.settingsPath, sample };
+  return { installed: isStatuslineInstalled(client), settingsPath: target.settingsPath, sample };
+}
+
+// First-run setup nudge surfaced to the agent through the MCP server `instructions`
+// field. An MCP server speaks JSON-RPC over stdio — it can't print a `[y/N]` prompt
+// or read a keystroke — so the protocol-correct way to "ask on first connect" is to
+// hand the offer to the agent, which asks the user and runs the install on consent.
+// Returns undefined once the statusline is installed, so the nudge self-resolves and
+// stops appearing. We never edit settings.json without the user agreeing.
+export function statuslineSetupInstruction(client = 'claude'): string | undefined {
+  if (isStatuslineInstalled(client)) return undefined;
+  return [
+    'SETUP TIP — Veto status line (mention once per session; drop it if the user declines).',
+    'Veto ships an always-on status line for Claude Code that renders beneath the prompt',
+    '(latest council verdict · top router-pattern confidence · daily token-budget % · memory',
+    'entry count). It is NOT yet enabled in this install. If the user would like it, offer to',
+    'run `veto statusline install` for them — it backs up settings.json and is reversible with',
+    '`veto statusline uninstall`, and the line appears after the next CLI restart. Do not',
+    'install it unless the user agrees.',
+  ].join(' ');
 }

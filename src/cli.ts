@@ -876,8 +876,14 @@ async function statuslineCommand() {
 
   // Hot path: one line to stdout, nothing else. No banner, no colors-config noise.
   if (sub === 'print') {
-    sl.printStatusline();
-    return;
+    // --capture <file>: verification aid — log the raw Claude Code payload next to
+    // the rendered line so you can compare the actual context % against `ctx N%`.
+    const capIdx = args.indexOf('--capture');
+    const capturePath = capIdx !== -1 ? args[capIdx + 1] : undefined;
+    await sl.printStatusline({}, capturePath);
+    // Exit promptly: the line is already flushed, and we must not linger holding an
+    // open stdin handle if the parent kept the pipe open on this per-render hot path.
+    process.exit(0);
   }
 
   if (sub === 'install') {
