@@ -421,6 +421,10 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 
 ## Release Notes
 
+### 2.7.2
+- **`veto init` self-repairs a broken Claude Code registration.** If the user-scope `veto` MCP entry launches `node <script>` and that script no longer exists — the classic case being an old entry pinned to a global install's `dist/server.js` after `npm rm -g` removed it — `init` now re-registers it with the canonical pinned-npx command instead of skipping it as "already registered". It only touches a demonstrably-dead `node`-path entry, never a working or custom config.
+- **Windows: Claude registration uses `npx.cmd`.** `veto init` now registers Claude Code with `npx.cmd` on Windows (Claude Code cannot resolve a bare `npx` there), matching the form that connects reliably.
+
 ### 2.7.1
 - **Fix: `npx` could silently run a stale version.** The generated MCP config used an unpinned `--package @jigyasudham/veto`, so npx would reuse a cached or globally-installed copy instead of fetching the latest — reinstalling and restarting never upgraded. Every generated config and documented register command now pins **`@latest`**, which npx must re-resolve against the registry each launch, so a client restart auto-updates. All `npm i -g @jigyasudham/veto` recommendations were removed (a global install is what shadows npx in the first place).
 - **Startup update nudge.** When a newer Veto is published, the running server surfaces a one-line "update available — restart to pick it up" tip to the agent via the MCP `instructions` field. Non-blocking and offline-safe: it reads a cached latest version and refreshes it in the background at most once per day; it self-resolves once you're current.
