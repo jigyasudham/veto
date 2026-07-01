@@ -164,7 +164,7 @@ function buildContinueResult(session: ReturnType<typeof listSessions>[0], now: s
 // ─── Platform Setup ───────────────────────────────────────────────────────────
 
 export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string): PlatformSetupResult {
-  const mcpEntry = { command: 'npx', args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
+  const mcpEntry = { command: 'npx', args: ['-y', '--package', '@jigyasudham/veto@latest', 'veto-server'] };
 
   // ── Windsurf ────────────────────────────────────────────────────────────────
   if (platform === 'windsurf') {
@@ -222,7 +222,7 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
       },
       setup_steps: [
         '1. Create ~/.aws/amazonq/mcp.json (global) or .amazonq/mcp.json (project-local):',
-        '   { "mcpServers": { "veto": { "command": "npx", "args": ["-y", "--package", "@jigyasudham/veto", "veto-server"] } } }',
+        '   { "mcpServers": { "veto": { "command": "npx", "args": ["-y", "--package", "@jigyasudham/veto@latest", "veto-server"] } } }',
         '2. Restart Amazon Q Developer (VS Code extension or CLI)',
         '3. Verify: call veto_status — should return { "status": "running" }',
         'Tip: project-local .amazonq/mcp.json takes precedence over global ~/.aws/amazonq/mcp.json.',
@@ -262,7 +262,7 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
       mcp_config: { mcpServers: { veto: mcpEntry }, config_path: 'Settings > Tools > MCP Servers' },
       setup_steps: [
         '1. Open JetBrains IDE Settings > Tools > MCP Servers',
-        '2. Add a new server using stdio. Command: npx, Args: -y --package @jigyasudham/veto veto-server',
+        '2. Add a new server using stdio. Command: npx, Args: -y --package @jigyasudham/veto@latest veto-server',
         '3. Apply and restart the AI Assistant chat',
         '4. Verify: call veto_status — should return { "status": "running" }',
       ],
@@ -279,7 +279,7 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
     claude: {
       configPath: '~/.claude/settings.json (managed by `claude mcp add`)',
       configKey:  'mcpServers',
-      installCmd: 'claude mcp add veto -s user -- npx -y --package @jigyasudham/veto veto-server',
+      installCmd: 'claude mcp add veto -s user -- npx -y --package @jigyasudham/veto@latest veto-server',
       notes: [
         'Claude Code manages MCPs via `claude mcp add`, NOT via mcp_servers.json.',
         'The -s user flag is required — without it, the MCP is project-scoped and disappears in new windows.',
@@ -300,7 +300,7 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
     antigravity: {
       configPath: '~/.gemini/antigravity-cli/mcp_config.json',
       configKey:  'mcpServers',
-      installCmd: 'npm install -g @jigyasudham/veto',
+      installCmd: 'npx @jigyasudham/veto@latest init',
       notes: [
         'Antigravity CLI is the official successor to Gemini CLI.',
         'It stores MCP config in ~/.gemini/antigravity-cli/mcp_config.json.',
@@ -310,10 +310,10 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
     codex: {
       configPath: '~/.codex/config.toml (managed by `codex mcp add`)',
       configKey:  'mcp_servers.veto',
-      installCmd: 'codex mcp add veto -- npx -y --package @jigyasudham/veto veto-server',
+      installCmd: 'codex mcp add veto -- npx -y --package @jigyasudham/veto@latest veto-server',
       notes: [
         'Codex CLI stores MCP servers in config.toml under [mcp_servers.name], NOT in config.json.',
-        'Use `codex mcp add veto -- npx -y --package @jigyasudham/veto veto-server` to register.',
+        'Use `codex mcp add veto -- npx -y --package @jigyasudham/veto@latest veto-server` to register.',
         'On Windows, replace `npx` with `npx.cmd` — the Rust binary cannot resolve bare npx.',
         'Verify registration with `codex mcp list` — veto should appear as enabled.',
         'ChatGPT web app does NOT support MCP — Codex CLI is the only OpenAI option.',
@@ -324,7 +324,7 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
   const cfg = configs[platform as Platform] ?? configs['claude'];
 
   const claudeSteps = [
-    `1. Run: claude mcp add veto -s user -- npx -y --package @jigyasudham/veto veto-server`,
+    `1. Run: claude mcp add veto -s user -- npx -y --package @jigyasudham/veto@latest veto-server`,
     `   The -s user flag makes Veto available in ALL Claude Code windows and projects.`,
     `2. Fully restart Claude Code (quit and reopen — not just reload window)`,
     `3. Verify: call veto_status — should return { "status": "running" }`,
@@ -332,17 +332,17 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
   ];
 
   const antigravitySteps = [
-    `1. Install Veto: npm install -g @jigyasudham/veto`,
-    `2. Add to mcp_config.json: ~/.gemini/antigravity-cli/mcp_config.json`,
-    `   "veto": { "command": "npx", "args": ["-y", "@jigyasudham/veto", "veto-server"] }`,
+    `1. Run: npx @jigyasudham/veto@latest init  (auto-writes ~/.gemini/antigravity-cli/mcp_config.json)`,
+    `2. Or add it manually to ~/.gemini/antigravity-cli/mcp_config.json:`,
+    `   "veto": { "command": "npx", "args": ["-y", "--package", "@jigyasudham/veto@latest", "veto-server"] }`,
     `3. Fully restart Antigravity CLI (agy)`,
     `4. Verify: call veto_status — should return { "status": "running" }`,
   ];
 
   const codexSteps = [
-    `1. Run: codex mcp add veto -- npx -y --package @jigyasudham/veto veto-server`,
+    `1. Run: codex mcp add veto -- npx -y --package @jigyasudham/veto@latest veto-server`,
     `   On Windows, use npx.cmd instead of npx (Codex Rust binary requires the .cmd extension).`,
-    `   Windows: codex mcp add veto -- npx.cmd -y --package @jigyasudham/veto veto-server`,
+    `   Windows: codex mcp add veto -- npx.cmd -y --package @jigyasudham/veto@latest veto-server`,
     `2. Verify registration: codex mcp list  (veto should appear as enabled)`,
     `3. Fully restart Codex CLI`,
     `4. Verify: call veto_status — should return { "status": "running" }`,
@@ -358,8 +358,8 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
 
   const codexMcpConfig = {
     toml_path: '~/.codex/config.toml',
-    toml_entry: '[mcp_servers.veto]\ncommand = \'npx.cmd\'  # Windows; use \'npx\' on Linux/Mac\nargs = [\'-y\', \'--package\', \'@jigyasudham/veto\', \'veto-server\']',
-    preferred_method: 'codex mcp add veto -- npx.cmd -y --package @jigyasudham/veto veto-server',
+    toml_entry: '[mcp_servers.veto]\ncommand = \'npx.cmd\'  # Windows; use \'npx\' on Linux/Mac\nargs = [\'-y\', \'--package\', \'@jigyasudham/veto@latest\', \'veto-server\']',
+    preferred_method: 'codex mcp add veto -- npx.cmd -y --package @jigyasudham/veto@latest veto-server',
     warning: 'config.json mcpServers key is ignored by Codex CLI — use config.toml only',
   };
 

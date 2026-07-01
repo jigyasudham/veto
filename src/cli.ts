@@ -64,15 +64,15 @@ function writeVetoConfig(
   const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   if (format === 'mcpServers') {
     const servers = (existing.mcpServers as Record<string, unknown>) ?? {};
-    servers['veto'] = { command: npxCmd, args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
+    servers['veto'] = { command: npxCmd, args: ['-y', '--package', '@jigyasudham/veto@latest', 'veto-server'] };
     existing.mcpServers = servers;
   } else if (format === 'context_servers') {
     const servers = (existing.context_servers as Record<string, unknown>) ?? {};
-    servers['veto'] = { command: npxCmd, args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
+    servers['veto'] = { command: npxCmd, args: ['-y', '--package', '@jigyasudham/veto@latest', 'veto-server'] };
     existing.context_servers = servers;
   } else {
     const servers = (existing.servers as Record<string, unknown>) ?? {};
-    servers['veto'] = { type: 'stdio', command: npxCmd, args: ['-y', '--package', '@jigyasudham/veto', 'veto-server'] };
+    servers['veto'] = { type: 'stdio', command: npxCmd, args: ['-y', '--package', '@jigyasudham/veto@latest', 'veto-server'] };
     existing.servers = servers;
   }
 
@@ -89,7 +89,7 @@ function writeVetoTomlEntry(configPath: string): 'created' | 'updated' | 'skippe
       try { existing = readFileSync(configPath, 'utf8'); } catch { return 'skipped'; }
       if (/\[mcp_servers\.veto\]/.test(existing)) return 'updated';
     }
-    const entry = `\n[mcp_servers.veto]\ncommand = '${npxCmd}'\nargs = ['-y', '--package', '@jigyasudham/veto', 'veto-server']\n`;
+    const entry = `\n[mcp_servers.veto]\ncommand = '${npxCmd}'\nargs = ['-y', '--package', '@jigyasudham/veto@latest', 'veto-server']\n`;
     writeFileSync(configPath, existing + entry, 'utf8');
     return existing.trim() === '' ? 'created' : 'updated';
   } catch {
@@ -219,7 +219,7 @@ async function initCommand() {
   // The -s user flag stores the config at user scope so every window/project picks it up.
   const claudeDir = join(HOME, '.claude');
   if (existsSync(claudeDir)) {
-    const mcpCmd = 'claude mcp add veto -s user -- npx -y --package @jigyasudham/veto veto-server';
+    const mcpCmd = 'claude mcp add veto -s user -- npx -y --package @jigyasudham/veto@latest veto-server';
     try {
       execSync(mcpCmd, { stdio: 'pipe', timeout: 15000 });
       console.log(c.green('  ✓ ') + 'Claude Code — registered (user scope: all windows & projects)');
@@ -254,7 +254,7 @@ async function initCommand() {
   const codexDir = join(HOME, '.codex');
   if (existsSync(codexDir)) {
     const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-    const codexMcpCmd = `codex mcp add veto -- ${npxCmd} -y --package @jigyasudham/veto veto-server`;
+    const codexMcpCmd = `codex mcp add veto -- ${npxCmd} -y --package @jigyasudham/veto@latest veto-server`;
     try {
       execSync(codexMcpCmd, { stdio: 'pipe', timeout: 15000 });
       console.log(c.green('  ✓ ') + 'Codex CLI — registered');
@@ -563,6 +563,38 @@ async function doctorCommand() {
     issues++;
   }
 
+  // Version — the running build, plus guards against the #1 "stuck on an old
+  // version" trap: a stale `npm i -g @jigyasudham/veto` silently shadows
+  // `npx @jigyasudham/veto`, so re-running npx never upgrades. Detect it and,
+  // best-effort, compare against the registry's latest.
+  let latest = '';
+  try {
+    latest = execSync('npm view @jigyasudham/veto version', { encoding: 'utf8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+  } catch { /* offline / npm unavailable — skip the comparison */ }
+
+  if (latest && latest !== VERSION) {
+    console.log(`  ${c.yellow('⚠')} Veto v${VERSION} — ${c.yellow(`v${latest} is available`)}`);
+    issues++;
+  } else if (latest) {
+    console.log(`  ${c.green('✓')} Veto v${VERSION} ${c.dim('(latest)')}`);
+  } else {
+    console.log(`  ${c.green('✓')} Veto v${VERSION}`);
+  }
+
+  // A global install overrides npx resolution → users stay pinned to it forever.
+  let globalVersion = '';
+  try {
+    const out = execSync('npm ls -g @jigyasudham/veto --depth=0', { encoding: 'utf8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] });
+    globalVersion = out.match(/@jigyasudham\/veto@([\d.]+)/)?.[1] ?? '';
+  } catch { /* not installed globally — the desired state */ }
+
+  if (globalVersion) {
+    console.log(`  ${c.red('✗')} Global install found: ${c.yellow(`@jigyasudham/veto@${globalVersion}`)} shadows npx`);
+    console.log(`  ${c.dim('    A global copy makes npx reuse it instead of fetching latest.')}`);
+    console.log(`  ${c.dim(`    fix: ${c.cyan('npm rm -g @jigyasudham/veto')} — then restart your AI client`)}`);
+    issues++;
+  }
+
   // ~/.veto directory
   if (existsSync(VETO_DIR)) {
     console.log(`  ${c.green('✓')} ${c.dim(VETO_DIR)} exists`);
@@ -613,7 +645,7 @@ async function doctorCommand() {
       console.log(`  ${c.green('✓')} Claude Code — registered${claudeNote}`);
     } else {
       console.log(`  ${c.red('✗')} Claude Code — not registered`);
-      console.log(`  ${c.dim('    fix: claude mcp add veto -s user -- npx -y --package @jigyasudham/veto veto-server')}`);
+      console.log(`  ${c.dim('    fix: claude mcp add veto -s user -- npx -y --package @jigyasudham/veto@latest veto-server')}`);
       issues++;
     }
   } else {
@@ -641,7 +673,7 @@ async function doctorCommand() {
     } else {
       const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
       console.log(`  ${c.red('✗')} Codex CLI — not registered`);
-      console.log(`  ${c.dim(`    fix: codex mcp add veto -- ${npxCmd} -y --package @jigyasudham/veto veto-server`)}`);
+      console.log(`  ${c.dim(`    fix: codex mcp add veto -- ${npxCmd} -y --package @jigyasudham/veto@latest veto-server`)}`);
       issues++;
     }
   } else {
@@ -990,7 +1022,7 @@ function troubleshootCommand() {
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
   console.log(`  ${c.yellow('Veto not available in a new VS Code window / project')}`);
   console.log(`  ${c.dim('→')} Claude Code: MCP must be registered at user scope, not project scope`);
-  console.log(`  ${c.dim('→')} Run: ${c.cyan('claude mcp add veto -s user -- npx -y --package @jigyasudham/veto veto-server')}`);
+  console.log(`  ${c.dim('→')} Run: ${c.cyan('claude mcp add veto -s user -- npx -y --package @jigyasudham/veto@latest veto-server')}`);
   console.log(`  ${c.dim('→')} The ${c.cyan('-s user')} flag makes Veto global across ALL windows and projects`);
   console.log(`  ${c.dim('→')} Gemini / Cursor / Windsurf / Zed: run ${c.cyan('veto init')} once — config is written globally`);
   console.log('');
@@ -1000,9 +1032,9 @@ function troubleshootCommand() {
   console.log(`  ${c.dim('→')} Check Node.js version: ${c.cyan('node --version')}  (need >= 22)`);
   console.log('');
   console.log(`  ${c.yellow('veto command not found after install')}`);
-  console.log(`  ${c.dim('→')} Global install: ${c.cyan('npm install -g @jigyasudham/veto')}`);
+  console.log(`  ${c.dim('→')} Run the CLI via npx (no global install needed): ${c.cyan('npx @jigyasudham/veto@latest <command>')}`);
+  console.log(`  ${c.dim('→')} Avoid ${c.cyan('npm i -g')} — a global copy shadows npx and pins the MCP server to an old version`);
   console.log(`  ${c.dim('→')} From source:    ${c.cyan('npm run build && npm link')}`);
-  console.log(`  ${c.dim('→')} Windows: restart terminal after install so PATH refreshes`);
   console.log('');
   console.log(`  ${c.yellow('Tools missing in Claude / Gemini after install')}`);
   console.log(`  ${c.dim('→')} Run ${c.cyan('veto init')} to write / regenerate the MCP config`);
@@ -1011,9 +1043,9 @@ function troubleshootCommand() {
   console.log(`  ${c.dim('→')} Gemini / other: check the platform docs for MCP config location`);
   console.log('');
   console.log(`  ${c.yellow('Old version still showing after update')}`);
-  console.log(`  ${c.dim('→')} ${c.cyan('npm install -g @jigyasudham/veto@latest')}`);
-  console.log(`  ${c.dim('→')} From source: ${c.cyan('npm run build && npm link')}`);
-  console.log(`  ${c.dim('→')} Confirm active binary: ${c.cyan('which veto')} / ${c.cyan('where veto')}`);
+  console.log(`  ${c.dim('→')} Most common cause: a global install shadows npx. Remove it: ${c.cyan('npm rm -g @jigyasudham/veto')}`);
+  console.log(`  ${c.dim('→')} The MCP config is pinned to ${c.cyan('@latest')} — fully restart the AI client to fetch it`);
+  console.log(`  ${c.dim('→')} Confirm: ${c.cyan('veto doctor')} (flags a shadowing global install and shows the latest version)`);
   console.log('');
   console.log(`  ${c.yellow('Database / SQLite errors on startup')}`);
   console.log(`  ${c.dim('→')} Requires Node.js >= 22 (uses built-in node:sqlite)`);
@@ -1045,7 +1077,7 @@ function troubleshootCommand() {
   console.log(`  ${c.yellow('Installed via npx but MCP disconnects after restart')}`);
   console.log(`  ${c.dim('→')} npx runs temporarily — it does NOT add veto-server to PATH permanently`);
   console.log(`  ${c.dim('→')} Fix: run ${c.cyan('npx veto init')} again so the config is rewritten with the correct npx command`);
-  console.log(`  ${c.dim('→')} Or install globally for a stable binary: ${c.cyan('npm install -g @jigyasudham/veto')}`);
+  console.log(`  ${c.dim('→')} The rewritten config pins ${c.cyan('@latest')}, so each restart fetches the newest version — no global install needed`);
   console.log('');
   console.log(`  ${c.yellow('Installed on a new machine but MCP not working')}`);
   console.log(`  ${c.dim('→')} Run ${c.cyan('npx @jigyasudham/veto init')} on the new machine — config is not transferred`);
@@ -1467,6 +1499,13 @@ switch (command) {
       console.error(c.red(`Error: ${err.message}`));
       process.exit(1);
     });
+    break;
+
+  // Conventional version flags — print the concise version and exit.
+  case '--version':
+  case '-v':
+  case '-V':
+    console.log(`veto v${VERSION}`);
     break;
 
   case 'help':

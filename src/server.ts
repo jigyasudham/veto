@@ -31,18 +31,23 @@ import { buildRepoMap } from './repo-map/index.js';
 import { initLlmRunner } from './agents/executor.js';
 import { loadPlugins } from './plugins/loader.js';
 import { statuslineSetupInstruction } from './cli/statusline.js';
+import { versionUpdateInstruction } from './server/update-check.js';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-// First-run-ish setup nudge: until the user enables the Veto status line, surface a
-// one-line offer to the agent via the MCP `instructions` field (computed once at
-// startup; disappears for good once the statusline is installed). See
-// statuslineSetupInstruction() for why this can't be an interactive stdio prompt.
-const setupInstruction = statuslineSetupInstruction();
+// Startup nudges surfaced to the agent via the MCP `instructions` field (computed once
+// at startup, non-blocking). Two independent tips, each self-resolving:
+//   • versionUpdateInstruction() — a newer Veto is on npm; restart to pick it up.
+//   • statuslineSetupInstruction() — until the user enables the Veto status line.
+// Neither can be an interactive stdio prompt (the stdio channel is JSON-RPC), so we
+// hand the offer to the agent, which relays it to the user.
+const instructions = [versionUpdateInstruction(), statuslineSetupInstruction()]
+  .filter(Boolean)
+  .join('\n\n') || undefined;
 
 const server = new Server(
   { name: 'veto', version: VERSION },
-  { capabilities: { tools: {}, resources: {}, prompts: {} }, ...(setupInstruction ? { instructions: setupInstruction } : {}) },
+  { capabilities: { tools: {}, resources: {}, prompts: {} }, ...(instructions ? { instructions } : {}) },
 );
 
 const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint?: boolean; openWorldHint?: boolean }> = {

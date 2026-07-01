@@ -1,5 +1,9 @@
 # veto
 
+[![npm version](https://img.shields.io/npm/v/@jigyasudham/veto)](https://www.npmjs.com/package/@jigyasudham/veto)
+[![npm downloads](https://img.shields.io/npm/dt/@jigyasudham/veto)](https://www.npmjs.com/package/@jigyasudham/veto)
+[![license](https://img.shields.io/npm/l/@jigyasudham/veto)](https://github.com/jigyasudham/veto/blob/main/LICENSE)
+
 > **93 agentic tools. 49 specialists. Every major AI CLI. Self-learning. Zero extra cost on subscriptions.**
 
 An MCP server that runs locally on your machine, plugs into Claude Code, Codex CLI, Gemini CLI, Antigravity CLI, Cursor, Windsurf, Zed, and JetBrains using your existing subscriptions — giving every AI a council of specialist agents, local LLM support, SDD agents, playwright automation, persistent cross-platform memory, a self-learning router that re-tunes its tier thresholds automatically every 20 recorded task outcomes (reviews record outcomes for you; configurable via `auto_apply_learning`), CI/CD gates, workspace discovery, and bidirectional IDE communication.
@@ -85,7 +89,7 @@ Enable it with `VETO_COMPACT=1` in your MCP server config env, or `"compact_tool
   "mcpServers": {
     "veto": {
       "command": "npx",
-      "args": ["-y", "--package", "@jigyasudham/veto", "veto-server"],
+      "args": ["-y", "--package", "@jigyasudham/veto@latest", "veto-server"],
       "env": { "VETO_COMPACT": "1" }
     }
   }
@@ -416,6 +420,12 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 ---
 
 ## Release Notes
+
+### 2.7.1
+- **Fix: `npx` could silently run a stale version.** The generated MCP config used an unpinned `--package @jigyasudham/veto`, so npx would reuse a cached or globally-installed copy instead of fetching the latest — reinstalling and restarting never upgraded. Every generated config and documented register command now pins **`@latest`**, which npx must re-resolve against the registry each launch, so a client restart auto-updates. All `npm i -g @jigyasudham/veto` recommendations were removed (a global install is what shadows npx in the first place).
+- **Startup update nudge.** When a newer Veto is published, the running server surfaces a one-line "update available — restart to pick it up" tip to the agent via the MCP `instructions` field. Non-blocking and offline-safe: it reads a cached latest version and refreshes it in the background at most once per day; it self-resolves once you're current.
+- **`veto --version` / `-v`.** Previously returned "Unknown command". `veto doctor` now also reports whether a newer version is available and flags a shadowing global install with the `npm rm -g` fix.
+- **Honesty fix.** Registry/directory description changed "zero API cost" → "no API keys" (Sampling calls do cost on pay-per-token API billing).
 
 ### 2.7.0
 - **Statusline shows LIVE session gauges, not a frozen tally.** The old token segment read Veto's own `rate_usage` table, which only Veto's tools increment — so it sat frozen during normal use. `veto statusline print` now reads the JSON Claude Code pipes to a `statusLine` command on stdin and renders three live gauges: `ctx N%` (context-window used), `5h N%` (5-hour rate limit), and `7d N%` (weekly rate limit). Each colors yellow ≥70 / red ≥90 and drops when its value is unavailable (early session / post-`/compact`). It renders e.g. `⬡ veto GREEN · router 94% · ctx 37% · 5h 74% · 7d 8% · mem 15`, degrades to a neutral `⬡ veto`, and stays crash-proof and non-blocking (TTY-guarded, 200 ms timeout). Veto's own per-platform daily accounting remains available via `veto_rate_status` / `veto_snapshot`.
