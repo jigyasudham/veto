@@ -9,6 +9,7 @@ import { join, dirname, resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { repairBrokenClaudeEntry } from './cli/claude-repair.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { version: VERSION } = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
@@ -219,16 +220,24 @@ async function initCommand() {
   // The -s user flag stores the config at user scope so every window/project picks it up.
   const claudeDir = join(HOME, '.claude');
   if (existsSync(claudeDir)) {
-    const mcpCmd = 'claude mcp add veto -s user -- npx -y --package @jigyasudham/veto@latest veto-server';
+    // Use npx.cmd on Windows — Claude Code cannot resolve a bare `npx` there.
+    const npxBin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+    const mcpCmd = `claude mcp add veto -s user -- ${npxBin} -y --package @jigyasudham/veto@latest veto-server`;
     try {
       execSync(mcpCmd, { stdio: 'pipe', timeout: 15000 });
       console.log(c.green('  ✓ ') + 'Claude Code — registered (user scope: all windows & projects)');
       configured++;
     } catch (err: unknown) {
       const stderr = (err instanceof Error && 'stderr' in err) ? String((err as NodeJS.ErrnoException & { stderr?: Buffer }).stderr) : '';
-      // "already exists" means it was previously registered — treat as success
+      // "already exists" means it was previously registered. But a stale entry can be
+      // BROKEN — e.g. an old `node <global-install>/dist/server.js` that stops resolving
+      // once the global install is removed (`npm rm -g`). Detect that and self-repair.
       if (/already|exists/i.test(stderr)) {
-        console.log(c.green('  ✓ ') + 'Claude Code — already registered (user scope)');
+        if (repairBrokenClaudeEntry(join(HOME, '.claude.json'), mcpCmd)) {
+          console.log(c.green('  ✓ ') + 'Claude Code — repaired stale registration (was pointing at a missing file)');
+        } else {
+          console.log(c.green('  ✓ ') + 'Claude Code — already registered (user scope)');
+        }
         configured++;
       } else {
         // claude CLI not in PATH — fall back to ~/.claude/settings.json directly
