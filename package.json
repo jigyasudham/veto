@@ -32,6 +32,10 @@
     "veto": "dist/cli.js",
     "veto-server": "dist/server.js"
   },
+  "files": [
+    "dist",
+    "server.json"
+  ],
   "main": "./dist/server.js",
   "scripts": {
     "build": "tsc",
