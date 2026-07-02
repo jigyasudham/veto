@@ -13,6 +13,7 @@
 import { createRequire } from 'node:module';
 import type { DatabaseSync } from 'node:sqlite';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, appendFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { getDbPath, getDb } from '../memory/local.js';
@@ -305,6 +306,18 @@ const STATUSLINE_VALUE = { type: 'command', command: 'veto statusline print' } a
 const BACKUP_SUFFIX = '.veto-statusline-backup';
 const NO_ORIGINAL = '__VETO_NO_ORIGINAL_FILE__';
 
+// The statusLine command invokes bare `veto` — a hot path that can't afford npx,
+// so it needs the global install's PATH shim. Best-effort check; never throws.
+function bareVetoOnPath(): boolean {
+  try {
+    const probe = process.platform === 'win32' ? 'where veto' : 'command -v veto';
+    execSync(probe, { stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function isOurStatusLine(v: unknown): boolean {
   return Boolean(v) && typeof v === 'object'
     && (v as { command?: string }).command === STATUSLINE_VALUE.command;
@@ -368,12 +381,17 @@ export function installStatusline(client = 'claude', opts: { force?: boolean; dr
   if (!existed) mkdirSync(dirname(settingsPath), { recursive: true });
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
 
+  const pathWarning = bareVetoOnPath()
+    ? ''
+    : `\n  ⚠ bare \`veto\` is not on PATH — the statusline will render nothing until you run: npm i -g @jigyasudham/veto`;
+
   return {
     ok: true,
     changed: true,
     backupPath,
     message: `Installed Veto statusline for ${target.name}.\n  ${settingsPath}\n  backup: ${backupPath}`
-      + (current !== undefined ? `\n  (replaced your previous statusLine — restored on uninstall)` : ``),
+      + (current !== undefined ? `\n  (replaced your previous statusLine — restored on uninstall)` : ``)
+      + pathWarning,
   };
 }
 

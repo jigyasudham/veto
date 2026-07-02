@@ -572,10 +572,8 @@ async function doctorCommand() {
     issues++;
   }
 
-  // Version — the running build, plus guards against the #1 "stuck on an old
-  // version" trap: a stale `npm i -g @jigyasudham/veto` silently shadows
-  // `npx @jigyasudham/veto`, so re-running npx never upgrades. Detect it and,
-  // best-effort, compare against the registry's latest.
+  // Version — the running build, compared best-effort against the registry's
+  // latest so an out-of-date install is visible at a glance.
   let latest = '';
   try {
     latest = execSync('npm view @jigyasudham/veto version', { encoding: 'utf8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
@@ -590,18 +588,25 @@ async function doctorCommand() {
     console.log(`  ${c.green('✓')} Veto v${VERSION}`);
   }
 
-  // A global install overrides npx resolution → users stay pinned to it forever.
+  // Global CLI install — how the bare `veto` command gets on PATH. Since 2.7.1
+  // every generated MCP config pins `@latest`, which npx must re-resolve against
+  // the registry, so a global copy can no longer shadow the MCP server. Only
+  // flag it when it has fallen behind the registry.
   let globalVersion = '';
   try {
     const out = execSync('npm ls -g @jigyasudham/veto --depth=0', { encoding: 'utf8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] });
     globalVersion = out.match(/@jigyasudham\/veto@([\d.]+)/)?.[1] ?? '';
-  } catch { /* not installed globally — the desired state */ }
+  } catch { /* not installed globally — CLI still reachable via npx */ }
 
-  if (globalVersion) {
-    console.log(`  ${c.red('✗')} Global install found: ${c.yellow(`@jigyasudham/veto@${globalVersion}`)} shadows npx`);
-    console.log(`  ${c.dim('    A global copy makes npx reuse it instead of fetching latest.')}`);
-    console.log(`  ${c.dim(`    fix: ${c.cyan('npm rm -g @jigyasudham/veto')} — then restart your AI client`)}`);
+  if (globalVersion && latest && globalVersion !== latest) {
+    console.log(`  ${c.yellow('⚠')} Global CLI install v${globalVersion} — ${c.yellow(`v${latest} is available`)}`);
+    console.log(`  ${c.dim(`    update: ${c.cyan('npm i -g @jigyasudham/veto@latest')} (the MCP server is unaffected — its config pins @latest)`)}`);
     issues++;
+  } else if (globalVersion) {
+    console.log(`  ${c.green('✓')} Global CLI install v${globalVersion} ${c.dim('— bare veto commands on PATH')}`);
+  } else {
+    console.log(`  ${c.dim('·')} No global CLI install — bare ${c.cyan('veto')} commands unavailable in this terminal`);
+    console.log(`  ${c.dim(`    optional: ${c.cyan('npm i -g @jigyasudham/veto')} — safe: MCP configs pin @latest, so a global copy cannot shadow the server`)}`);
   }
 
   // ~/.veto directory
@@ -1040,9 +1045,10 @@ function troubleshootCommand() {
   console.log(`  ${c.dim('→')} Verify the MCP entry in your AI client config file`);
   console.log(`  ${c.dim('→')} Check Node.js version: ${c.cyan('node --version')}  (need >= 22)`);
   console.log('');
-  console.log(`  ${c.yellow('veto command not found after install')}`);
-  console.log(`  ${c.dim('→')} Run the CLI via npx (no global install needed): ${c.cyan('npx @jigyasudham/veto@latest <command>')}`);
-  console.log(`  ${c.dim('→')} Avoid ${c.cyan('npm i -g')} — a global copy shadows npx and pins the MCP server to an old version`);
+  console.log(`  ${c.yellow('veto command not found')}`);
+  console.log(`  ${c.dim('→')} The bare ${c.cyan('veto')} command comes from a global install: ${c.cyan('npm i -g @jigyasudham/veto')}`);
+  console.log(`  ${c.dim('→')} Safe to install: MCP configs pin ${c.cyan('@latest')}, so a global copy cannot shadow the server`);
+  console.log(`  ${c.dim('→')} No-install alternative: ${c.cyan('npx -y @jigyasudham/veto@latest <command>')}`);
   console.log(`  ${c.dim('→')} From source:    ${c.cyan('npm run build && npm link')}`);
   console.log('');
   console.log(`  ${c.yellow('Tools missing in Claude / Gemini after install')}`);
@@ -1052,9 +1058,10 @@ function troubleshootCommand() {
   console.log(`  ${c.dim('→')} Gemini / other: check the platform docs for MCP config location`);
   console.log('');
   console.log(`  ${c.yellow('Old version still showing after update')}`);
-  console.log(`  ${c.dim('→')} Most common cause: a global install shadows npx. Remove it: ${c.cyan('npm rm -g @jigyasudham/veto')}`);
   console.log(`  ${c.dim('→')} The MCP config is pinned to ${c.cyan('@latest')} — fully restart the AI client to fetch it`);
-  console.log(`  ${c.dim('→')} Confirm: ${c.cyan('veto doctor')} (flags a shadowing global install and shows the latest version)`);
+  console.log(`  ${c.dim('→')} If the config predates 2.7.1 (no ${c.cyan('@latest')} pin), re-run ${c.cyan('veto init')} to rewrite it`);
+  console.log(`  ${c.dim('→')} The global CLI updates separately: ${c.cyan('npm i -g @jigyasudham/veto@latest')}`);
+  console.log(`  ${c.dim('→')} Confirm: ${c.cyan('veto doctor')} (compares both against the registry's latest)`);
   console.log('');
   console.log(`  ${c.yellow('Database / SQLite errors on startup')}`);
   console.log(`  ${c.dim('→')} Requires Node.js >= 22 (uses built-in node:sqlite)`);
