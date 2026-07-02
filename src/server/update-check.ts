@@ -8,7 +8,7 @@
 //
 // This directly targets the "npx silently runs a stale version" trap: once a newer
 // version ships, the running server tells the agent to restart the client (the pinned
-// `@latest` config then fetches it) and how to clear a shadowing global install.
+// `@latest` config then fetches it) and how to repair a config that predates the pin.
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -84,8 +84,9 @@ export function versionUpdateInstruction(): string | undefined {
       'Mention this once per session, then drop it if the user is not interested.',
       'Veto is launched via npx, so the fix is simply to fully restart the AI client',
       '(quit and reopen) — the pinned `@latest` config fetches the new version on the next',
-      'start. If it stays on the old version, a stale global install is shadowing npx:',
-      'run `npm rm -g @jigyasudham/veto`, then restart. Run `veto doctor` to confirm.',
+      'start. If it stays on the old version, the config likely predates the `@latest` pin:',
+      'run `veto init` to rewrite it. A global CLI install updates separately via',
+      '`npm i -g @jigyasudham/veto@latest`. Run `veto doctor` to confirm.',
     ].join(' ');
   }
 

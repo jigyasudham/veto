@@ -12,6 +12,26 @@ An MCP server that runs locally on your machine, plugs into Claude Code, Codex C
 
 ---
 
+## Getting Started
+
+```bash
+# 1. Install the CLI — puts the bare `veto` command on your PATH
+npm i -g @jigyasudham/veto
+
+# 2. Register Veto with every AI client you use (Claude Code, Gemini, Codex, Cursor, …)
+veto init
+```
+
+Prefer not to install anything? Every command also works via npx:
+
+```bash
+npx -y @jigyasudham/veto@latest init
+```
+
+The two are independent by design. `veto init` writes MCP configs that launch the server with `npx -y --package @jigyasudham/veto@latest veto-server` — npx re-resolves `@latest` against the registry on every client restart, so the **MCP server auto-updates itself** and a global copy can never pin it to an old version. The **global install only provides the CLI** (`veto doctor`, `veto sessions`, the statusline, …); keep it current with `npm i -g @jigyasudham/veto@latest` when `veto doctor` says it's behind.
+
+---
+
 ## How the Agents Work
 
 **No API keys, zero extra cost.** Every worker agent is a deterministic expert module at its core, with two optional layers of LLM reasoning on top — all of it delegated to the AI you're already paying for.
@@ -203,6 +223,8 @@ Several tools overlap by design (different granularity or entry point). Quick gu
 ---
 
 ## CLI Commands
+
+These work standalone in any terminal — no AI client needed. The bare `veto` command comes from the global install (`npm i -g @jigyasudham/veto`, see [Getting Started](#getting-started)); without it, prefix any command with `npx -y @jigyasudham/veto@latest`.
 
 ```bash
 veto init                        # Configure all AI tools + scan project
@@ -420,6 +442,11 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 ---
 
 ## Release Notes
+
+### 2.7.3
+- **Global CLI install restored as the documented path.** 2.7.1 removed all `npm i -g` recommendations because a global copy could shadow npx and pin the MCP server to an old version — but 2.7.1's own `@latest` pin made that shadowing impossible, leaving the README documenting 15 bare `veto` commands with no way to get `veto` on PATH. `npm i -g @jigyasudham/veto` is now the documented way to install the CLI (new [Getting Started](#getting-started) section); the MCP server keeps auto-updating via the pinned-npx config regardless.
+- **`veto doctor` no longer condemns a global install.** It now reports a global CLI install as healthy, warns only when it's behind the registry (with the `npm i -g @latest` fix), and shows an informational hint when no global install exists. Troubleshooting text and the startup update nudge were updated to match — "update the global" instead of "delete the global".
+- **`veto statusline install` checks PATH.** The statusline hot path invokes bare `veto` (npx is too slow to run on every prompt render), so install now warns when `veto` isn't on PATH instead of silently rendering nothing.
 
 ### 2.7.2
 - **`veto init` self-repairs a broken Claude Code registration.** If the user-scope `veto` MCP entry launches `node <script>` and that script no longer exists — the classic case being an old entry pinned to a global install's `dist/server.js` after `npm rm -g` removed it — `init` now re-registers it with the canonical pinned-npx command instead of skipping it as "already registered". It only touches a demonstrably-dead `node`-path entry, never a working or custom config.
