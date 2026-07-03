@@ -21,3 +21,6 @@ docs/
 scripts/
 improvements.md
 AGENTS.md
+
+# MCPB bundles (built per-release for Smithery)
+*.mcpb
