@@ -1,0 +1,46 @@
+{
+  "manifest_version": "0.3",
+  "name": "veto",
+  "display_name": "Veto",
+  "version": "2.7.3",
+  "description": "93 agentic MCP tools + 49 specialist agents for every major AI CLI. Self-learning, no API keys.",
+  "long_description": "An MCP server that gives Claude Code, Codex CLI, Gemini CLI, Cursor, Windsurf, Zed, and JetBrains a council of specialist agents, persistent cross-platform memory, a self-learning router, CI/CD gates, dependency-hallucination and decision-drift guards — using your existing AI subscriptions, no API keys.",
+  "author": {
+    "name": "Jigyasu Dham",
+    "email": "jigyasudham18@gmail.com",
+    "url": "https://github.com/jigyasudham"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jigyasudham/veto"
+  },
+  "homepage": "https://github.com/jigyasudham/veto#readme",
+  "documentation": "https://github.com/jigyasudham/veto#readme",
+  "license": "MIT",
+  "keywords": ["agents", "council", "code-review", "memory", "router", "self-learning", "security"],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/server.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/server.js"],
+      "env": {
+        "VETO_COMPACT": "${user_config.compact}"
+      }
+    }
+  },
+  "user_config": {
+    "compact": {
+      "type": "boolean",
+      "title": "Compact tool surface",
+      "description": "Advertise 9 tools (7 core + find_tools/call meta-tools) instead of all 93 schemas, saving ~16K context tokens. Every tool stays callable.",
+      "default": false
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=22.5.0"
+    }
+  }
+}
