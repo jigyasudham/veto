@@ -443,6 +443,10 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 
 ## Release Notes
 
+### 2.7.4
+- **Server survives runtimes without `node:sqlite`.** The sqlite built-in (Node ≥ 22.5) is now loaded lazily on first database use instead of at import time. On runtimes that lack it — older Nodes, registry capability scanners — the server now starts, answers `initialize`, and lists all 93 tools; only the persistence tools (memory, sessions, learning) return a clear "upgrade Node" error instead of the whole process dying before the MCP handshake. No behavior change on supported Nodes: same database, same schema, same queries.
+- The crash-proof statusline `print` gets the same treatment: its read-only DB open now requires sqlite inside the existing never-throws guard.
+
 ### 2.7.3
 - **Global CLI install restored as the documented path.** 2.7.1 removed all `npm i -g` recommendations because a global copy could shadow npx and pin the MCP server to an old version — but 2.7.1's own `@latest` pin made that shadowing impossible, leaving the README documenting 15 bare `veto` commands with no way to get `veto` on PATH. `npm i -g @jigyasudham/veto` is now the documented way to install the CLI (new [Getting Started](#getting-started) section); the MCP server keeps auto-updating via the pinned-npx config regardless.
 - **`veto doctor` no longer condemns a global install.** It now reports a global CLI install as healthy, warns only when it's behind the registry (with the `npm i -g @latest` fix), and shows an informational hint when no global install exists. Troubleshooting text and the startup update nudge were updated to match — "update the global" instead of "delete the global".
