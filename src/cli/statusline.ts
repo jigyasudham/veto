@@ -19,8 +19,9 @@ import { homedir } from 'node:os';
 import { getDbPath, getDb } from '../memory/local.js';
 
 // node:sqlite is a Node 22.5+ built-in — use createRequire so bundlers skip it.
+// Required lazily inside openReadOnly so importing this module (server.ts pulls in
+// statuslineSetupInstruction at startup) never dies on runtimes without node:sqlite.
 const _require = createRequire(import.meta.url);
-const DbSync = (_require('node:sqlite') as typeof import('node:sqlite')).DatabaseSync;
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 
@@ -40,6 +41,7 @@ const EMPTY: StatuslineData = {
 // Open the veto DB read-only. Returns null if it can't (missing/locked/corrupt).
 function openReadOnly(path: string): DatabaseSync | null {
   try {
+    const DbSync = (_require('node:sqlite') as typeof import('node:sqlite')).DatabaseSync;
     const db = new DbSync(path, { readOnly: true });
     // query_only is belt-and-suspenders; busy_timeout keeps us from blocking the
     // prompt if a writer holds the WAL lock — fail fast to the neutral fallback.
