@@ -9,6 +9,9 @@ veto.db
 .mcp-tools/
 
 # Internal — not for public repo
+SMITHERY.md
+PUBLISH-DIRECTORY.md
+VERSION-3.md
 VETO-MCP-DIAGNOSTIC.md
 .antigravitycli/
 VETO_VISION_FINAL.md
