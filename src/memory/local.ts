@@ -8,9 +8,32 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { mkdirSync } from 'node:fs';
 
-// node:sqlite is a Node 22.5+ built-in — use createRequire so bundlers (Vite/esbuild) skip it
+// node:sqlite is a Node 22.5+ built-in — use createRequire so bundlers (Vite/esbuild) skip it.
+// Loaded LAZILY so the server still starts (and lists all tools) on runtimes without it —
+// e.g. registry capability scanners or older Nodes. Persistence tools then fail per-call
+// with a clear message instead of the whole process dying at import time.
 const _require = createRequire(import.meta.url);
-const DbSync = (_require('node:sqlite') as typeof import('node:sqlite')).DatabaseSync;
+let _DbSync: typeof import('node:sqlite').DatabaseSync | null = null;
+
+function requireDbSync(): typeof import('node:sqlite').DatabaseSync {
+  if (!_DbSync) {
+    try {
+      _DbSync = (_require('node:sqlite') as typeof import('node:sqlite')).DatabaseSync;
+    } catch {
+      throw new Error(
+        `node:sqlite is not available on Node ${process.version} — Veto persistence needs Node >= 22.5 ` +
+        '(unflagged in 22.13+/23.4+). Memory, sessions, and learning are disabled until you upgrade ' +
+        'Node; all other tools keep working.',
+      );
+    }
+  }
+  return _DbSync;
+}
+
+// True when the node:sqlite built-in can be loaded on this runtime.
+export function sqliteAvailable(): boolean {
+  try { requireDbSync(); return true; } catch { return false; }
+}
 import { CREATE_TABLES, VETO_DB_SCHEMA_VERSION, type SessionRow, type KnowledgeRow, type KnowledgeType, type ProjectMapRow, type DocsCacheRow, type ToolCallTraceLogRow } from './schema.js';
 
 // Context window sizes per platform (tokens)
@@ -75,6 +98,7 @@ export function resetDb(): void {
 
 export function getDb(): DatabaseSync {
   if (_db) return _db;
+  const DbSync = requireDbSync();
   if (DB_PATH !== ':memory:') mkdirSync(dirname(DB_PATH), { recursive: true });
   _db = new DbSync(DB_PATH);
   _db.exec('PRAGMA journal_mode = WAL');
