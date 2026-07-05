@@ -6,6 +6,9 @@ export interface AgentVote {
   reason: string;
   concerns: string[];
   recommendation?: string;
+  // Non-voting topical guidance. Shown to the user but never counted by the
+  // decision engine — only concrete rule matches (concerns) can move the verdict.
+  advice?: string;
 }
 
 export type CouncilStrictness = 'fast' | 'standard' | 'strict';

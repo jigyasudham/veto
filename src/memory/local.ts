@@ -116,10 +116,30 @@ export function getDb(): DatabaseSync {
   migrateContextUsage(_db);
   migrateRoutingFeedback(_db);
   migrateToolTraceLog(_db);
+  migrateProjectDirCase(_db);
   // Stamp the read-contract version so external readers (veto-vscode, statusline)
   // can detect drift via `PRAGMA user_version`. See VETO_DB_SCHEMA_VERSION.
   _db.exec(`PRAGMA user_version = ${VETO_DB_SCHEMA_VERSION}`);
   return _db;
+}
+
+// Canonicalize drive-letter case on existing project_dir values so the VS Code
+// extension (which queries with lowercase-drive fsPath, case-sensitively)
+// matches historical rows written with an uppercase drive letter. Idempotent:
+// the GLOB guard only matches uppercase-drive rows, so re-runs are no-ops.
+// See normalizeProjectDir for the canonical form applied to new writes.
+function migrateProjectDirCase(db: DatabaseSync): void {
+  for (const table of ['sessions', 'knowledge_base', 'project_map', 'decision_constraints']) {
+    try {
+      db.exec(
+        `UPDATE ${table} SET project_dir = lower(substr(project_dir, 1, 1)) || substr(project_dir, 2) ` +
+        `WHERE project_dir IS NOT NULL AND substr(project_dir, 2, 1) = ':' ` +
+        `AND substr(project_dir, 1, 1) GLOB '[A-Z]'`
+      );
+    } catch {
+      // Table may not exist on an older DB shape — safe to skip.
+    }
+  }
 }
 
 // Creates tool_call_trace_log table for auditing and session replay (v1.8.0 migration)
@@ -308,6 +328,18 @@ function migrateCouncilOutcomes(db: DatabaseSync): void {
   `);
 }
 
+// Canonicalize a project directory so writes and reads agree regardless of
+// caller. The VS Code extension matches sessions/memory against
+// `workspace.uri.fsPath`, which on Windows always lowercases the drive letter,
+// and it compares case-sensitively. Callers (CLIs, process.cwd()) pass whatever
+// case the user typed, so an uppercase drive letter silently breaks the
+// extension's lookup. Lowercasing just the drive letter — fsPath preserves the
+// rest of the path — keeps stored paths in the form the extension queries with.
+export function normalizeProjectDir<T extends string | null | undefined>(p: T): T {
+  if (!p) return p;
+  return (/^[A-Za-z]:/.test(p) ? p[0].toLowerCase() + p.slice(1) : p) as T;
+}
+
 export type SaveSessionInput = {
   platform?: string;
   model?: string;
@@ -344,7 +376,7 @@ export function saveSession(input: SaveSessionInput): SessionSaveResult {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id, now, platform, connection_type,
-    input.project_dir ?? null,
+    normalizeProjectDir(input.project_dir) ?? null,
     input.summary ?? null,
     input.context ? JSON.stringify(input.context) : null,
     input.task_state ? JSON.stringify(input.task_state) : null,
@@ -502,7 +534,7 @@ export function storeKnowledge(input: StoreKnowledgeInput): string {
     input.title,
     input.content,
     input.tags ? JSON.stringify(input.tags) : null,
-    input.project_dir ?? null,
+    normalizeProjectDir(input.project_dir) ?? null,
     input.session_id ?? null,
     input.relevance ?? 1.0,
     now,
@@ -536,7 +568,7 @@ export function searchKnowledge(opts: SearchKnowledgeOptions): KnowledgeRow[] {
   }
   if (opts.project_dir) {
     conditions.push('project_dir = ?');
-    params.push(opts.project_dir);
+    params.push(normalizeProjectDir(opts.project_dir));
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -570,7 +602,8 @@ export type UpdateProjectMapInput = {
 export function updateProjectMap(input: UpdateProjectMapInput): string {
   const db = getDb();
   const now = new Date().toISOString();
-  const existing = db.prepare('SELECT id FROM project_map WHERE project_dir = ?').get(input.project_dir) as { id: string } | undefined;
+  const project_dir = normalizeProjectDir(input.project_dir);
+  const existing = db.prepare('SELECT id FROM project_map WHERE project_dir = ?').get(project_dir) as { id: string } | undefined;
 
   const structure = typeof input.structure === 'string' ? input.structure : JSON.stringify(input.structure);
   const key_modules = input.key_modules ? JSON.stringify(input.key_modules) : null;
@@ -580,7 +613,7 @@ export function updateProjectMap(input: UpdateProjectMapInput): string {
     db.prepare(`
       UPDATE project_map SET structure = ?, key_modules = ?, tech_stack = ?, updated_at = ?
       WHERE project_dir = ?
-    `).run(structure, key_modules, tech_stack, now, input.project_dir);
+    `).run(structure, key_modules, tech_stack, now, project_dir);
     return existing.id;
   }
 
@@ -588,13 +621,13 @@ export function updateProjectMap(input: UpdateProjectMapInput): string {
   db.prepare(`
     INSERT INTO project_map (id, project_dir, structure, key_modules, tech_stack, updated_at)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(id, input.project_dir, structure, key_modules, tech_stack, now);
+  `).run(id, project_dir, structure, key_modules, tech_stack, now);
   return id;
 }
 
 export function getProjectMap(project_dir: string): ProjectMapRow | null {
   const db = getDb();
-  return db.prepare('SELECT * FROM project_map WHERE project_dir = ?').get(project_dir) as ProjectMapRow | null;
+  return db.prepare('SELECT * FROM project_map WHERE project_dir = ?').get(normalizeProjectDir(project_dir)) as ProjectMapRow | null;
 }
 
 // ─── Pattern Operations ───────────────────────────────────────────────────────

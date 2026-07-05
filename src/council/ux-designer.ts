@@ -125,8 +125,8 @@ export function analyze(task: string): AgentVote {
     },
     {
       pattern: /tool.?count|tool.?list|discover/i,
-      concern: 'A large tool surface (90+ tools) requires users to read documentation before they can use the product. No tool is valuable if users can\'t discover it exists.',
-      recommendation: 'Make veto_discover the entry point. Ship it as the first thing users learn about. Consider surfacing 3 "most useful for your current task" recommendations automatically.',
+      concern: 'A large tool surface requires users to read documentation before they can use the product. No tool is valuable if users can\'t discover it exists.',
+      recommendation: 'Provide a discovery entry point and make it the first thing users learn. Consider surfacing "most useful for your current task" recommendations automatically.',
     },
     {
       pattern: /wait|loading|slow|latency|timeout/i,
@@ -152,14 +152,16 @@ export function analyze(task: string): AgentVote {
       recommendation: recommendations[0],
     };
   } else {
+    // Topic matches are non-voting advice — a topical observation is not a
+    // found UX problem and must not move the verdict.
     const topicMatched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
     if (topicMatched.length > 0) {
       const top = topicMatched.slice(0, 2);
       vote = {
-        verdict: 'warn',
-        reason: top[0].concern,
-        concerns: top.slice(1).map(t => t.concern),
-        recommendation: top.map(t => t.recommendation).join(' | '),
+        verdict: 'approve',
+        reason: 'UX looks solid. No user experience concerns identified.',
+        concerns: [],
+        advice: top.map(t => `${t.concern} → ${t.recommendation}`).join('\n'),
       };
     } else {
       vote = { verdict: 'approve', reason: 'UX looks solid. No user experience concerns identified.', concerns: [] };

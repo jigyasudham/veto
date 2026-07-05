@@ -143,6 +143,13 @@ export function formatDebate(
       const short = concern.length > 46 ? concern.slice(0, 43) + '...' : concern;
       lines.push(`${indent}↳ ${short}`);
     }
+
+    // Non-voting topical guidance — shown, but never part of the verdict
+    if (vote.advice) {
+      const firstLine = vote.advice.split('\n')[0];
+      const short = firstLine.length > 40 ? firstLine.slice(0, 37) + '...' : firstLine;
+      lines.push(`${indent}💡 ${short} [advisory]`);
+    }
   }
 
   lines.push('');
