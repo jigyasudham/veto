@@ -125,3 +125,48 @@ describe('runDebate', () => {
     expect(result.final_verdict).toBeDefined();
   });
 });
+
+describe('topic insights are non-voting advice', () => {
+  // A task that trips only broad topic patterns (agent, memory, plan, feature)
+  // in several personas, but no specific block/warn rule anywhere.
+  const TOPIC_ONLY_TASK = 'Improve the feature roadmap plan for our agent memory system';
+
+  it('a topic-only task stays GREEN', async () => {
+    const result = await runDebate({ task: TOPIC_ONLY_TASK });
+    expect(result.final_verdict).toBe('GREEN');
+  });
+
+  it('topic matches surface as advice on approve votes, not as concerns', async () => {
+    const result = await runDebate({ task: TOPIC_ONLY_TASK });
+    const advisedVotes = Object.values(result.votes).filter(v => v.advice);
+    expect(advisedVotes.length).toBeGreaterThan(0);
+    for (const v of advisedVotes) {
+      if (v.verdict === 'approve') expect(v.concerns).toHaveLength(0);
+    }
+  });
+
+  it("devil's topic probes are a non-escalating hedge: warn with empty concerns", async () => {
+    const result = await runDebate({ task: TOPIC_ONLY_TASK });
+    expect(result.votes.devil.verdict).toBe('warn');
+    expect(result.votes.devil.concerns).toHaveLength(0);
+  });
+
+  it('advice is marked [advisory] in the formatted output', async () => {
+    const result = await runDebate({ task: TOPIC_ONLY_TASK });
+    expect(result.formatted_output).toContain('[advisory]');
+  });
+
+  it('specific block rules still escalate: localStorage tokens → RED', async () => {
+    const result = await runDebate({ task: 'store the JWT token in localStorage after login' });
+    expect(result.final_verdict).toBe('RED');
+  });
+
+  it('specific warn rules still escalate when three agents name real risks', () => {
+    const v = votes({
+      security: vote('warn', ['tokens readable by any script']),
+      architect: vote('warn', ['no timeout on external calls']),
+      pm: vote('warn', ['scope creep risk']),
+    });
+    expect(decide(v).final_verdict).toBe('YELLOW');
+  });
+});

@@ -127,8 +127,8 @@ const TOPIC_INSIGHTS: Array<{ pattern: RegExp; concern: string; recommendation: 
   },
   {
     pattern: /concurrent|parallel|race|async|thread|mutex/i,
-    concern: 'Parallel execution over a shared SQLite connection will cause write conflicts unless WAL mode and proper serialisation are in place.',
-    recommendation: 'Verify WAL journal mode is enabled. Use transactions for multi-step writes. Test with concurrent load before shipping parallel agent features.',
+    concern: 'Parallel execution over shared state or a shared database connection causes write conflicts unless the concurrency model is explicit.',
+    recommendation: 'Use transactions for multi-step writes and verify the journal/locking mode supports concurrent access. Test with concurrent load before shipping.',
   },
 ];
 
@@ -168,15 +168,16 @@ export function analyze(task: string): AgentVote {
       recommendation: 'Address quality concerns before shipping to production.',
     };
   } else {
-    // No bad patterns — apply topic-based expert analysis
+    // No bad patterns — approve. Topic matches become non-voting advice only:
+    // a topical observation is not a found risk and must not move the verdict.
     const matched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
     if (matched.length > 0) {
       const top = matched.slice(0, 2);
       vote = {
-        verdict: 'warn',
-        reason: top[0].concern,
-        concerns: top.slice(1).map(t => t.concern),
-        recommendation: top.map(t => t.recommendation).join(' | '),
+        verdict: 'approve',
+        reason: 'No security or quality violations detected.',
+        concerns: [],
+        advice: top.map(t => `${t.concern} → ${t.recommendation}`).join('\n'),
       };
     } else {
       vote = { verdict: 'approve', reason: 'No security or quality violations detected. Code quality standards appear satisfied.', concerns: [] };

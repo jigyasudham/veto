@@ -155,7 +155,7 @@ export function analyze(task: string): AgentVote {
   const TOPIC_INSIGHTS: Array<{ pattern: RegExp; concern: string; recommendation: string }> = [
     {
       pattern: /plugin|extensi|loader|dynamic.?import|user.?code/i,
-      concern: 'User-supplied code executed in the same process as the MCP server has full access to the filesystem, network, and database. A malicious plugin could exfiltrate memory, delete sessions, or escalate to arbitrary code execution.',
+      concern: 'User-supplied code executed in the host process has full access to the filesystem, network, and data stores. A malicious plugin could exfiltrate data or escalate to arbitrary code execution.',
       recommendation: 'Run plugins in a vm.Script sandbox with a restricted module allowlist. Verify plugin exports schema before loading. Log all plugin loads to the audit trail with file hash.',
     },
     {
@@ -170,12 +170,12 @@ export function analyze(task: string): AgentVote {
     },
     {
       pattern: /\bhttp\b|streamable.?http|remote.?(server|access)|expose.{0,20}network|0\.0\.0\.0|bind.{0,12}port|listen\s*\(/i,
-      concern: 'Exposing the server over HTTP/network changes Veto from a local-only tool to a network service. Without authentication and TLS, any process on the network can call every tool including memory deletion and file watching.',
+      concern: 'Exposing a server over HTTP/network changes a local-only tool into a network service. Without authentication and TLS, any process on the network can call every exposed operation.',
       recommendation: 'HTTP transport must require authentication from day one — even locally. Use mutual TLS or bearer tokens. Bind to 127.0.0.1 by default, not 0.0.0.0.',
     },
     {
       pattern: /mcp|tool|handler|input.?schema/i,
-      concern: 'MCP tool inputs are deserialized from JSON without schema validation in most handlers — args are accessed as `args?.field` with no type checking. A crafted tool call could pass unexpected types.',
+      concern: 'Tool inputs deserialized from JSON without schema validation let a crafted call pass unexpected types or fields into handler logic.',
       recommendation: 'Validate all tool inputs with a schema library (zod) at the top of each handler. Reject calls with unexpected fields or wrong types immediately with a descriptive error.',
     },
     {
@@ -207,14 +207,16 @@ export function analyze(task: string): AgentVote {
       recommendation: recommendations[0],
     };
   } else {
+    // Topic matches are non-voting advice — a topical observation is not a
+    // found threat and must not move the verdict.
     const topicMatched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
     if (topicMatched.length > 0) {
       const top = topicMatched.slice(0, 2);
       vote = {
-        verdict: 'warn',
-        reason: top[0].concern,
-        concerns: top.slice(1).map(t => t.concern),
-        recommendation: top.map(t => t.recommendation).join(' | '),
+        verdict: 'approve',
+        reason: 'No security threats identified in threat model.',
+        concerns: [],
+        advice: top.map(t => `${t.concern} → ${t.recommendation}`).join('\n'),
       };
     } else {
       vote = { verdict: 'approve', reason: 'No security threats identified in threat model.', concerns: [] };

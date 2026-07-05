@@ -91,7 +91,7 @@ const TOPIC_PROBES: Array<{ pattern: RegExp; concern: string; recommendation: st
   {
     pattern: /memory|session|knowledge|persist/i,
     concern: 'Memory grows indefinitely. At 10,000 entries, search degrades. At 100,000, startup slows. Who cleans stale data?',
-    recommendation: 'Define a max entry count per table. Add a background cleanup job or a veto_memory_gc tool. Test with 10k+ entries before shipping.',
+    recommendation: 'Define a max entry count per table. Add a background cleanup job or a garbage-collection command. Test with 10k+ entries before shipping.',
   },
   {
     pattern: /llm|model|ai|gpt|claude|gemini/i,
@@ -110,12 +110,12 @@ const TOPIC_PROBES: Array<{ pattern: RegExp; concern: string; recommendation: st
   },
   {
     pattern: /github|pr|api|integration|webhook/i,
-    concern: 'GitHub API rate limit: 5000 requests/hour authenticated. A power user running veto_pr_review on every commit will hit this in minutes.',
-    recommendation: 'Cache PR diffs by commit SHA. Show current rate limit usage in the response. Fail gracefully with a clear "rate limited, retry in X minutes" message.',
+    concern: 'GitHub API rate limit: 5000 requests/hour authenticated. A power user triggering an API call on every commit will hit this in minutes.',
+    recommendation: 'Cache API responses by commit SHA. Show current rate limit usage in the response. Fail gracefully with a clear "rate limited, retry in X minutes" message.',
   },
   {
     pattern: /config|setting|init|setup|install/i,
-    concern: 'User runs veto init on a machine where the config file is already correct. Init overwrites it silently. Their custom settings are gone.',
+    concern: 'User runs an init/setup command on a machine where the config file is already correct. It overwrites silently. Their custom settings are gone.',
     recommendation: 'Before writing any config, show a diff and ask for confirmation — or at minimum back up the existing config with a .bak extension.',
   },
 ];
@@ -140,27 +140,32 @@ export function analyze(task: string): AgentVote {
     }
   }
 
-  // If no specific probes matched, try topic-specific failure mode probes
-  if (matched.length === 0) {
-    for (const probe of TOPIC_PROBES) {
-      if (probe.pattern.test(task)) {
-        matched.push({ concern: probe.concern, recommendation: probe.recommendation });
-      }
-    }
+  if (matched.length > 0) {
+    // Specific failure-mode probes hit — these are substantive challenges.
+    const top = matched.slice(0, 3); // cap at 3 concerns to avoid flooding
+    return applyDecisionStance({
+      verdict: 'warn',
+      reason: top[0].concern,
+      concerns: top.slice(1).map(m => m.concern),
+      recommendation: top.map(m => m.recommendation).join(' | '),
+    }, task);
   }
 
-  // Devil always raises at least one concern for non-trivial tasks
-  if (matched.length === 0) {
-    matched.push(GENERIC);
-  }
-
-  const top = matched.slice(0, 3); // cap at 3 concerns to avoid flooding
+  // No specific probes hit. The Devil still challenges (never approves
+  // non-trivial tasks), but a topic-level probe is not a found risk: keep
+  // concerns empty so the hedge can't move the verdict, and carry the probes
+  // as non-voting advice.
+  const topicMatched = TOPIC_PROBES.filter(p => p.pattern.test(task)).slice(0, 3);
+  const lead = topicMatched[0] ?? GENERIC;
 
   const vote: AgentVote = {
     verdict: 'warn',
-    reason: top[0].concern,
-    concerns: top.slice(1).map(m => m.concern),
-    recommendation: top.map(m => m.recommendation).join(' | '),
+    reason: lead.concern,
+    concerns: [],
+    recommendation: topicMatched.length > 0 ? topicMatched.map(m => m.recommendation).join(' | ') : GENERIC.recommendation,
+    ...(topicMatched.length > 1
+      ? { advice: topicMatched.slice(1).map(m => `${m.concern} → ${m.recommendation}`).join('\n') }
+      : {}),
   };
 
   return applyDecisionStance(vote, task);

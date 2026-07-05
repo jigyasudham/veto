@@ -146,7 +146,7 @@ export function analyze(task: string): AgentVote {
     {
       pattern: /memory|session|persist|store|knowledge/i,
       concern: 'Persisting user code, task descriptions, and session context locally creates a data retention obligation. Under GDPR, users have the right to request deletion of their data.',
-      recommendation: 'Provide veto_memory_delete and document how users can delete all stored data. Set default retention policies. Do not store data longer than necessary for the stated purpose.',
+      recommendation: 'Provide a data-deletion command and document how users can delete all stored data. Set default retention policies. Do not store data longer than necessary for the stated purpose.',
     },
     {
       pattern: /npm|publish|distribut|package|open.?source/i,
@@ -156,7 +156,7 @@ export function analyze(task: string): AgentVote {
     {
       pattern: /log|audit|monitor|track|telemetry/i,
       concern: 'Logging task content and code snippets locally may capture personally identifiable information or commercially sensitive code that users did not intend to store.',
-      recommendation: 'Truncate task content in logs. Never log raw code in audit trails. Provide a clear privacy notice explaining what Veto stores locally and for how long.',
+      recommendation: 'Truncate task content in logs. Never log raw code in audit trails. Provide a clear privacy notice explaining what the tool stores locally and for how long.',
     },
     {
       pattern: /vscode|extension|marketplace/i,
@@ -182,14 +182,16 @@ export function analyze(task: string): AgentVote {
       recommendation: recommendations[0],
     };
   } else {
+    // Topic matches are non-voting advice — a topical observation is not a
+    // found compliance issue and must not move the verdict.
     const topicMatched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
     if (topicMatched.length > 0) {
       const top = topicMatched.slice(0, 2);
       vote = {
-        verdict: 'warn',
-        reason: top[0].concern,
-        concerns: top.slice(1).map(t => t.concern),
-        recommendation: top.map(t => t.recommendation).join(' | '),
+        verdict: 'approve',
+        reason: 'No legal or compliance issues detected.',
+        concerns: [],
+        advice: top.map(t => `${t.concern} → ${t.recommendation}`).join('\n'),
       };
     } else {
       vote = { verdict: 'approve', reason: 'No legal or compliance issues detected.', concerns: [] };

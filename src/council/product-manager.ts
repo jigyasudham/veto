@@ -83,17 +83,17 @@ const TOPIC_INSIGHTS: Array<{ pattern: RegExp; concern: string; recommendation: 
   },
   {
     pattern: /phase|roadmap|plan|milestone|feature.?list/i,
-    concern: 'Phases planned without user validation risk building features nobody wants. The strongest MCP servers grew from a single killer feature, not a comprehensive roadmap.',
-    recommendation: 'Identify the one feature that would make users tell others about Veto. Ship that first. Use real install/usage metrics to prioritise the next phase.',
+    concern: 'Phases planned without user validation risk building features nobody wants. Strong products grow from a single killer feature, not a comprehensive roadmap.',
+    recommendation: 'Identify the one feature that would make users tell others about the product. Ship that first. Use real usage metrics to prioritise the next phase.',
   },
   {
     pattern: /discover|onboard|help|tutorial|guide|doc/i,
-    concern: 'A large tool surface (90+ tools) is above the cognitive load threshold for new users. Without discoverability, most tools will never be used — this is the retention killer for complex products.',
-    recommendation: 'Add veto_discover immediately. Track which tools get called most. Consider a first-run guided experience via veto_status output.',
+    concern: 'A large feature surface is above the cognitive load threshold for new users. Without discoverability, most features will never be used — this is the retention killer for complex products.',
+    recommendation: 'Invest in discoverability early. Track which features get used most. Consider a first-run guided experience.',
   },
   {
     pattern: /mcp.?server|tool.?count|tool.?list/i,
-    concern: 'More tools ≠ more value. Each additional tool increases the cognitive load on users and the maintenance burden on you. The most successful MCP servers have 5–10 sharp tools, not 40+.',
+    concern: 'More tools ≠ more value. Each additional tool increases the cognitive load on users and the maintenance burden on you. The most successful MCP servers have a small set of sharp tools.',
     recommendation: 'Audit tool usage data. If any tool has zero calls in 30 days, deprecate it. Consolidate tools that overlap in function.',
   },
 ];
@@ -136,14 +136,16 @@ export function analyze(task: string): AgentVote {
       recommendation: recommendations[0],
     };
   } else {
+    // Topic matches are non-voting advice — a topical observation is not a
+    // found risk and must not move the verdict.
     const matched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
     if (matched.length > 0) {
       const top = matched.slice(0, 2);
       vote = {
-        verdict: 'warn',
-        reason: top[0].concern,
-        concerns: top.slice(1).map(t => t.concern),
-        recommendation: top.map(t => t.recommendation).join(' | '),
+        verdict: 'approve',
+        reason: 'Reasonable scope. Ship it.',
+        concerns: [],
+        advice: top.map(t => `${t.concern} → ${t.recommendation}`).join('\n'),
       };
     } else {
       vote = { verdict: 'approve', reason: 'Reasonable scope. Ship it.', concerns: [] };

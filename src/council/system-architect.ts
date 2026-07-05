@@ -113,22 +113,22 @@ const TOPIC_INSIGHTS: Array<{ pattern: RegExp; concern: string; recommendation: 
   },
   {
     pattern: /version|package\.json|semver/i,
-    concern: 'Multiple hardcoded version strings across server.ts, cli.ts, and adapter files create a drift problem that gets worse with each release.',
+    concern: 'Multiple hardcoded version strings across source files create a drift problem that gets worse with each release.',
     recommendation: 'Single source: read version from package.json at startup. Export it from one shared module. All other files import it.',
   },
   {
     pattern: /plugin|extensi|loader|dynamic.?import/i,
-    concern: 'Dynamic plugin loading from user directories creates a security boundary: any code in ~/.veto/agents/ runs with full server privileges. There is currently no sandboxing.',
+    concern: 'Dynamic plugin loading from user directories creates a security boundary: user-supplied code runs with full host privileges unless sandboxed.',
     recommendation: 'Validate plugin exports schema before loading. Consider running plugins in a restricted vm.Script context. Log all plugin load events to the audit trail.',
   },
   {
     pattern: /vscode|extension|ide|ui|frontend/i,
-    concern: 'VS Code extension + MCP server creates a distributed architecture: the extension communicates with the server via MCP protocol, not direct function calls. Version compatibility between extension and server must be managed explicitly.',
-    recommendation: 'Define a minimum server version requirement in the extension. On connect, call veto_status and verify server version meets the minimum. Show a clear upgrade prompt if not.',
+    concern: 'An IDE extension talking to a separate backend process is a distributed architecture: version compatibility between the two must be managed explicitly.',
+    recommendation: 'Define a minimum backend version requirement in the extension. On connect, verify the backend version meets the minimum and show a clear upgrade prompt if not.',
   },
   {
     pattern: /phase|roadmap|migrat|upgrade/i,
-    concern: 'Schema migrations that run inline in the DB constructor (as currently implemented) are safe for additive changes but risky for destructive ones. There is no migration version tracking.',
+    concern: 'Schema migrations that run inline at startup are safe for additive changes but risky for destructive ones when there is no migration version tracking.',
     recommendation: 'Add a schema_version table. Record each migration with a unique ID. Before running a migration, check if it has already been applied. This prevents re-running on restart.',
   },
 ];
@@ -171,14 +171,16 @@ export function analyze(task: string): AgentVote {
       recommendation: recommendations[0],
     };
   } else {
+    // Topic matches are non-voting advice — a topical observation is not a
+    // found structural risk and must not move the verdict.
     const matched = TOPIC_INSIGHTS.filter(t => t.pattern.test(task));
     if (matched.length > 0) {
       const top = matched.slice(0, 2);
       vote = {
-        verdict: 'warn',
-        reason: top[0].concern,
-        concerns: top.slice(1).map(t => t.concern),
-        recommendation: top.map(t => t.recommendation).join(' | '),
+        verdict: 'approve',
+        reason: 'Architecture looks sound. No structural concerns identified.',
+        concerns: [],
+        advice: top.map(t => `${t.concern} → ${t.recommendation}`).join('\n'),
       };
     } else {
       vote = { verdict: 'approve', reason: 'Architecture looks sound. No structural concerns identified.', concerns: [] };
