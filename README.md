@@ -443,6 +443,10 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 
 ## Release Notes
 
+### 2.8.0
+- **Deterministic council verdicts are honest again.** When the council runs without an LLM-backed path, each specialist used to emit canned, task-irrelevant "topic" warnings — broad keyword matches (a task mentioning "test" or "plan") produced boilerplate concerns that piled up and forced YELLOW verdicts with no real signal. Those topic insights are now **non-voting advice**: the agent votes approve and surfaces the guidance as a 💡 `[advisory]` note that never moves the verdict. The Devil's Advocate still always challenges, but its topic probes no longer escalate. Concrete rule matches (hardcoded secrets, `localStorage` tokens, GPL licenses, missing rate limits, …) escalate exactly as before.
+- **VS Code HUD now finds sessions and memory on every workspace.** Sessions and memory are matched to a workspace by `project_dir`, but it was stored with whatever drive-letter case the caller passed (usually uppercase `D:\`), while the extension queries with VS Code's `fsPath` (lowercase drive, case-sensitive) — so the HUD showed "No active session" / "0 memory entries" even after a successful save. `project_dir` is now canonicalized (lowercase Windows drive letter) at every read and write, with a one-time idempotent migration that fixes existing rows on next start.
+
 ### 2.7.4
 - **Server survives runtimes without `node:sqlite`.** The sqlite built-in (Node ≥ 22.5) is now loaded lazily on first database use instead of at import time. On runtimes that lack it — older Nodes, registry capability scanners — the server now starts, answers `initialize`, and lists all 93 tools; only the persistence tools (memory, sessions, learning) return a clear "upgrade Node" error instead of the whole process dying before the MCP handshake. No behavior change on supported Nodes: same database, same schema, same queries.
 - The crash-proof statusline `print` gets the same treatment: its read-only DB open now requires sqlite inside the existing never-throws guard.
