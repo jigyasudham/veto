@@ -7,7 +7,7 @@
 
 import {
   saveSession, updateSession, restoreSession, listSessions, closeSession,
-  resolveContextWindow, upsertContextUsage, getSessionReplay,
+  resolveContextWindow, upsertContextUsage, getSessionReplay, normalizeProjectDir,
 } from '../../memory/local.js';
 import { trackTokens } from '../../router/index.js';
 import type { Platform } from '../../router/index.js';
@@ -18,7 +18,7 @@ import type { HandlerMap } from '../registry.js';
 
 export const sessionHandlers: HandlerMap = {
   veto_session_save: async ({ args, server }) => {
-    const sessionProjectDir = args?.project_dir ? String(args.project_dir) : undefined;
+    const sessionProjectDir = args?.project_dir ? normalizeProjectDir(String(args.project_dir)) : undefined;
     if (sessionProjectDir) setActiveProjectDir(sessionProjectDir);
     const savePlatform = args?.platform ? String(args.platform) : 'claude';
     const shouldAutoSummarize = args?.auto_summarize === true;
