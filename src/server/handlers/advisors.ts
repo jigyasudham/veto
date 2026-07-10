@@ -7,8 +7,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
-import { executeOne } from '../../agents/executor.js';
 import { recordOutcome } from '../../router/index.js';
+import { runHandlerAgent, handlerAgentResponse } from '../scan-core.js';
 import { buildContextString } from '../../context/reader.js';
 import type { WorkerAgentType } from '../../agents/types.js';
 import type { HandlerMap } from '../registry.js';
@@ -92,23 +92,24 @@ export const advisorHandlers: HandlerMap = {
       }
     } catch { /* OSV unavailable — proceed without vuln data */ }
 
-    const depResult = await executeOne({
+    const depRun = await runHandlerAgent('veto_dep_advisor', {
       id: 'dep-1',
       agent: 'dependency-audit',
       task: 'Analyze these dependencies and produce a risk-ranked upgrade plan. For each vulnerable or outdated package: (1) risk level, (2) recommended version, (3) breaking-change risk, (4) migration steps.',
       code: JSON.stringify({ packages: packages.slice(0, 20), vulnerabilities }, null, 2).slice(0, 6000),
-    });
+    }, args?.agent_response);
+    const depResult = depRun.result;
 
     recordOutcome('dep_advisor', 50, 2, 'dependency-audit', depResult.analysis?.score ?? Math.round(depResult.output.confidence * 100));
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       ecosystem,
       packages_scanned:    packages.length,
       vulnerabilities_found: vulnerabilities.length,
       vulns:               vulnerabilities,
       upgrade_plan:        depResult.plan?.approach ?? depResult.output.recommendation ?? '',
       osv_available:       osvAvailable,
-    }, null, 2) }] };
+    }, depRun);
   },
 
   veto_query_advisor: async ({ args }) => {
@@ -127,27 +128,28 @@ export const advisorHandlers: HandlerMap = {
     const joinCount = (q.match(/\bjoin\b/g) ?? []).length;
     if (joinCount > 4) issues.push(`${joinCount} JOINs detected — verify indexes on join columns`);
 
-    const queryResult = await executeOne({
+    const queryRun = await runHandlerAgent('veto_query_advisor', {
       id: 'query-1',
       agent: 'database',
       task: 'Analyze this SQL query for performance issues. Provide: (1) Rewritten optimized query, (2) Specific CREATE INDEX statements needed, (3) N+1 query detection if this is part of a loop, (4) Estimated improvement percentage, (5) Index risk assessment (will this lock the table?)',
       code: query.slice(0, 4000),
       context: [schema && `Schema:\n${schema}`, explainOutput && `EXPLAIN:\n${explainOutput}`].filter(Boolean).join('\n'),
-    });
+    }, args?.agent_response);
+    const queryResult = queryRun.result;
 
     recordOutcome('query_advisor', 50, 2, 'database', queryResult.analysis?.score ?? Math.round(queryResult.output.confidence * 100));
 
     const agentOutput = queryResult.plan?.approach ?? queryResult.output.recommendation ?? '';
     const indexStatements = agentOutput.split('\n').filter((l: string) => /CREATE INDEX/i.test(l)).map((l: string) => l.trim());
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       issues_detected:      issues,
       optimized_query:      '',
       index_statements:     indexStatements,
       n_plus_one_risk:      /n\+1|n \+ 1/i.test(agentOutput),
       recommendations:      agentOutput,
       estimated_improvement: '',
-    }, null, 2) }] };
+    }, queryRun);
   },
 
   veto_bundle_advisor: async ({ args }) => {
@@ -165,22 +167,23 @@ export const advisorHandlers: HandlerMap = {
       top_assets: assets.slice(0, 10).map(a => ({ name: a.name, size_kb: Math.round(a.size / 1024) })),
     }, null, 2);
 
-    const bundleResult = await executeOne({
+    const bundleRun = await runHandlerAgent('veto_bundle_advisor', {
       id: 'bundle-1',
       agent: 'frontend',
       task: 'Analyze this bundle stats and provide: (1) Top 10 heaviest modules to target, (2) Duplicate packages to deduplicate, (3) Code-split candidates (lazy-loadable routes or heavy features), (4) Packages safe to move to CDN externals (React, lodash, etc.), (5) Estimated size reduction achievable.',
       code: summary,
-    });
+    }, args?.agent_response);
+    const bundleResult = bundleRun.result;
 
     recordOutcome('bundle_advisor', 50, 2, 'frontend', bundleResult.analysis?.score ?? Math.round(bundleResult.output.confidence * 100));
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       total_size_kb:        Math.round(totalSize / 1024),
       assets_analyzed:      assets.length,
       heaviest_modules:     assets.slice(0, 10).map(a => ({ name: a.name, size_kb: Math.round(a.size / 1024) })),
       recommendations:      bundleResult.plan?.approach ?? bundleResult.output.recommendation ?? '',
       estimated_reduction_pct: 0,
-    }, null, 2) }] };
+    }, bundleRun);
   },
 
   veto_dead_code: async ({ args }) => {
@@ -205,26 +208,27 @@ export const advisorHandlers: HandlerMap = {
     if (!findings) return { content: [{ type: 'text', text: JSON.stringify({ success: true, dead_code_items: [], summary: 'No dead code patterns detected.' }) }] };
 
     const ctx = buildContextString(projectDir);
-    const deadResult = await executeOne({
+    const deadRun = await runHandlerAgent('veto_dead_code', {
       id: 'dead-1',
       agent: 'code-quality',
       task: 'Identify dead code and safe deletion candidates from these patterns. For each item: (1) is it actually dead/unused?, (2) safe to delete?, (3) deletion risk (high/medium/low). Focus on exports with zero imports, always-true/false flags, and commented blocks older than 6 months.',
       code: findings.slice(0, 6000),
       context: ctx || undefined,
-    });
+    }, args?.agent_response);
+    const deadResult = deadRun.result;
 
     recordOutcome('dead_code', 50, 2, 'code-quality', deadResult.analysis?.score ?? Math.round(deadResult.output.confidence * 100));
 
     const agentOut = deadResult.plan?.approach ?? deadResult.output.recommendation ?? '';
     const safeMatches = agentOut.match(/\blow\b.*\bdelete\b|\bsafe to delete\b|\bsafely removed\b/gi) ?? [];
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       dead_code_items:  [],
       total_found:      findings.split('\n').filter(l => l.startsWith('===')).length,
       safe_to_delete:   safeMatches.length,
       recommendations:  agentOut,
       council_note:     'Run veto_council_debate before deleting any exports to check downstream impact.',
-    }, null, 2) }] };
+    }, deadRun);
   },
 
   veto_hitl_checkpoint: ({ args }) => {
@@ -288,12 +292,13 @@ export const advisorHandlers: HandlerMap = {
     }
     if (!routeContent) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No route files found. Provide file_path or project_dir with route files.' }) }], isError: true };
 
-    const openapiResult = await executeOne({
+    const openapiRun = await runHandlerAgent('veto_openapi_gen', {
       id:    'openapi-1',
       agent: 'api' as WorkerAgentType,
       task:  `Generate a complete OpenAPI 3.1 specification in YAML format for these ${framework === 'auto' ? 'API' : framework} route definitions. Include: info block (title, version), servers, all paths with HTTP methods, request body schemas, response schemas (200, 400, 401, 404, 500), and security schemes if auth is detected. Output ONLY valid YAML — no markdown fences, no explanation.`,
       code:  routeContent,
-    });
+    }, args?.agent_response);
+    const openapiResult = openapiRun.result;
 
     const rawSpec = openapiResult.plan?.approach ?? openapiResult.output.recommendation ?? '';
     const specLines = rawSpec.split('\n');
@@ -313,12 +318,12 @@ export const advisorHandlers: HandlerMap = {
 
     recordOutcome('openapi_gen', 50, 2, 'api', openapiResult.analysis?.score ?? Math.round(openapiResult.output.confidence * 100));
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       spec,
       written_to:       writtenTo,
       routes_detected:  routeLineCount,
       framework,
-    }, null, 2) }] };
+    }, openapiRun);
   },
 
   veto_flag_auditor: async ({ args }) => {
@@ -350,12 +355,13 @@ export const advisorHandlers: HandlerMap = {
 
     if (!findings) return { content: [{ type: 'text', text: JSON.stringify({ success: true, flags_found: 0, flag_items: [], summary: 'No feature flag patterns detected.' }) }] };
 
-    const flagResult = await executeOne({
+    const flagRun = await runHandlerAgent('veto_flag_auditor', {
       id:    'flags-1',
       agent: 'code-quality' as WorkerAgentType,
       task:  'Analyze these feature flag usages and classify each unique flag as: (1) ACTIVE — still toggled in code and worth keeping, (2) CANDIDATE_REMOVAL — always-true/always-false or deprecated, (3) ORPHANED — referenced but flag definition not found. For each, provide: flag name, classification, last-seen location, and safe-to-remove assessment.',
       code:  findings.slice(0, 6000),
-    });
+    }, args?.agent_response);
+    const flagResult = flagRun.result;
 
     const agentOut = flagResult.plan?.approach ?? flagResult.output.recommendation ?? '';
     recordOutcome('flag_audit', 50, 2, 'code-quality', flagResult.analysis?.score ?? Math.round(flagResult.output.confidence * 100));
@@ -365,7 +371,7 @@ export const advisorHandlers: HandlerMap = {
     const removalCount   = (agentOut.match(/CANDIDATE_REMOVAL/g) ?? []).length;
     const orphanedCount  = (agentOut.match(/ORPHANED/g) ?? []).length;
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       flags_found:        totalMatches,
       active:             activeCount,
       candidate_removal:  removalCount,
@@ -374,7 +380,7 @@ export const advisorHandlers: HandlerMap = {
       recommendations:    agentOut,
       sdk_detected:       sdk === 'auto' ? (findings.includes('ldClient') ? 'launchdarkly' : findings.includes('unleash') ? 'unleash' : 'custom') : sdk,
       council_note:       'Run veto_council_debate before removing any flags to assess downstream risk.',
-    }, null, 2) }] };
+    }, flagRun);
   },
 
   veto_drift_check: async ({ args }) => {
@@ -490,7 +496,8 @@ export const advisorHandlers: HandlerMap = {
 
     let agentOut = '';
     let recommendations = 'No compounding-error loops detected. Proceed with your current task.';
-    
+    let driftRun: import('../scan-core.js').HandlerAgentRun | undefined;
+
     if (loop_detected || verdict !== 'GREEN' || total_calls > 0) {
       const formattedTraces = traces.map(t => {
         let cmdStr = '';
@@ -517,13 +524,14 @@ export const advisorHandlers: HandlerMap = {
         recent_timeline: formattedTraces,
       };
 
-      const agentResult = await executeOne({
+      driftRun = await runHandlerAgent('veto_drift_check', {
         id: `drift-${Date.now().toString(36)}`,
         agent: 'debugger' as WorkerAgentType,
         task: `The AI coding assistant is verifying its session for compounding errors or loops. Analyze this trace. Under 'Remediation Plan', list 2-3 specific actions the AI should take to break the loop (e.g. read a specific file, check for syntax errors, check if a mock server is down, revert a commit).`,
         code: JSON.stringify(analysisPayload, null, 2),
         project_dir: projectDir,
-      });
+      }, args?.agent_response);
+      const agentResult = driftRun.result;
 
       agentOut = agentResult.plan?.approach ?? agentResult.output.recommendation ?? '';
       recommendations = agentOut;
@@ -574,6 +582,7 @@ export const advisorHandlers: HandlerMap = {
           },
           remediation_plan: agentOut || null,
           formatted_report: formatted,
+          ...(driftRun?.llm_upgrade ? { llm_upgrade: driftRun.llm_upgrade } : {}),
         }, null, 2),
       }],
     };

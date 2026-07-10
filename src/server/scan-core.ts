@@ -60,6 +60,77 @@ export function finalizeTripleScan(reviewResult: AgentResult, secResult: AgentRe
   return { reviewResult, secResult, secretsResult, verdict };
 }
 
+/**
+ * Runs one worker agent for an evidence-gathering handler (advisors, generators,
+ * git helpers) with full two-call support, WITHOUT forcing the handler to change
+ * its bespoke output shape.
+ *
+ *  - Phase 2: if `agentResponse` is supplied (the host reasoned as the agent and
+ *    passed its JSON back), that becomes the agent output.
+ *  - Phase 1: otherwise MCP Sampling is attempted. On success the LLM result is
+ *    returned. If sampling is unavailable/fails, the DETERMINISTIC result is still
+ *    returned (so the tool never regresses to "no answer") AND an `llm_upgrade`
+ *    offer is attached so the host can complete the loop by calling back with
+ *    `agent_response`.
+ *
+ * `text` is the prose the handler previously extracted inline
+ * (`plan.approach ?? analysis.summary ?? output.recommendation`).
+ */
+export interface HandlerAgentRun {
+  result: AgentResult;
+  text: string;
+  llm_upgrade?: { available: true; instruction: string; prompt: AgenticAgentPrompt };
+}
+
+function extractAgentText(r: AgentResult): string {
+  return r.plan?.approach ?? r.analysis?.summary ?? r.output?.recommendation ?? '';
+}
+
+export async function runHandlerAgent(
+  toolName: string,
+  task: AgentTask,
+  agentResponse?: unknown,
+): Promise<HandlerAgentRun> {
+  // Phase 2 — host-supplied agent output.
+  if (agentResponse && typeof agentResponse === 'object') {
+    const r = parseAgenticAgentResponses([{ ...task, llm_backed: true }], { [task.id]: agentResponse })[0];
+    return { result: r, text: extractAgentText(r) };
+  }
+
+  // Phase 1 — attempt sampling.
+  const sampledTask: AgentTask = { ...task, llm_backed: true };
+  let sampled: AgentResult;
+  try {
+    sampled = await executeOne(sampledTask);
+  } catch {
+    sampled = await executeOne({ ...task, llm_backed: false });
+  }
+  if (sampled.llm_backed && !sampled.error) {
+    return { result: sampled, text: extractAgentText(sampled) };
+  }
+
+  // Sampling unavailable/failed — deterministic floor + upgrade offer.
+  const needsDeterministic = Boolean(sampled.llm_upgrade) || Boolean(sampled.error) || (!sampled.plan && !sampled.analysis);
+  const deterministic = needsDeterministic ? await executeOne({ ...task, llm_backed: false }) : sampled;
+
+  const run: HandlerAgentRun = { result: deterministic, text: extractAgentText(deterministic) };
+  const prompt = buildAgenticAgentPrompt(sampledTask);
+  if (prompt) {
+    run.llm_upgrade = {
+      available: true,
+      instruction: `MCP Sampling is unavailable on this client. For richer LLM-backed output, reason as the ${task.agent} specialist using the prompt below, then call ${toolName} again with your JSON in the agent_response field.`,
+      prompt,
+    };
+  }
+  return run;
+}
+
+/** Wraps a handler payload as an MCP text response, attaching the upgrade offer when present. */
+export function handlerAgentResponse(payload: Record<string, unknown>, run: HandlerAgentRun) {
+  if (run.llm_upgrade) payload.llm_upgrade = run.llm_upgrade;
+  return { content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }] };
+}
+
 /** Handles the 2-phase agentic loop for single worker-agent tools. */
 export async function handleAgenticWorker(name: string, args: any, agentType: WorkerAgentType, defaultTask: string) {
   const llmResponse = args?.agent_response;

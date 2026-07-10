@@ -71,7 +71,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'veto_session_save',
     description:
-      'Saves the current session context to SQLite. Set auto_summarize: true to have Veto read the full conversation and generate an accurate structured summary itself — no manual writing needed. Pass session_id to update an existing session in-place.',
+      'Saves the current session context to SQLite. TRIGGER: when the user types `veto_session_save` / `veto_save_session` / `save session`, call THIS live MCP tool directly — never write a node script or INSERT into ~/.veto/veto.db by hand (that bypasses project scoping and corrupts state). Set auto_summarize: true to have Veto read the full conversation and generate an accurate structured summary itself — no manual writing needed. Pass session_id to update an existing session in-place.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -166,7 +166,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'veto_handoff',
-    description: 'Saves the current session and returns step-by-step instructions to continue on another AI platform (Gemini or Codex). Call this when Claude is approaching its rate limit. The receiving platform calls veto_continue to restore full context instantly.',
+    description: 'Saves the current session and returns step-by-step instructions to continue on another AI platform (Gemini or Codex). TRIGGER: when the user types `veto_handoff` or asks to hand off / save-and-switch, call THIS live MCP tool directly — do NOT write a node script or touch ~/.veto/veto.db by hand. Call this when Claude is approaching its rate limit. The receiving platform calls veto_continue to restore full context instantly.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -183,7 +183,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'veto_continue',
-    description: 'Restores the most recent session on any platform. Call this immediately after switching platforms — Veto returns the full context, summary, and next action. Nothing needs to be re-explained.',
+    description: 'Restores a saved session on any platform. TRIGGER: when the user types `veto_continue` (with or without a session id) or asks to resume/continue/restore a session, call THIS live MCP tool directly with that session_id — do NOT treat it as a task to perform by hand, and never read ~/.veto/veto.db or reconstruct the session yourself. Call this immediately after switching platforms — Veto returns the full context, summary, and next action. Nothing needs to be re-explained.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -792,6 +792,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         prompt: { type: 'string', description: 'The prompt to optimize (system or user prompt).' },
         role:   { type: 'string', description: "Optional — 'system' | 'user' (helps tailor analysis)." },
         goal:   { type: 'string', description: 'Optional — what the prompt is trying to accomplish.' },
@@ -805,6 +809,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         slo_target:       { type: 'number', description: 'SLO target % (e.g. 99.9).' },
         window_days:      { type: 'number', description: 'Measurement window in days (e.g. 30).' },
         downtime_minutes: { type: 'number', description: 'Total downtime minutes in the window.' },
@@ -831,6 +839,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         project_dir:  { type: 'string', description: 'Absolute path to project.' },
         diagram_type: { type: 'string', description: "Diagram type: 'flowchart' | 'classDiagram' | 'sequenceDiagram' | 'C4Context' (default: 'flowchart')." },
         focus:        { type: 'string', description: "Optional — what to focus on (e.g. 'data flow', 'auth', 'API')." },
@@ -861,6 +873,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         project_dir:  { type: 'string', description: 'Absolute path to project.' },
         write_files:  { type: 'boolean', description: 'If true, write .env.example to disk (default false).' },
       },
@@ -873,6 +889,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         project_dir: { type: 'string', description: 'Absolute path to the git repository.' },
         hint:        { type: 'string', description: 'Optional extra context for the commit (ticket number, motivation, etc.).' },
       },
@@ -885,6 +905,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         project_dir:  { type: 'string', description: 'Absolute path to the git repository.' },
         base_branch:  { type: 'string', description: "Branch to diff against (default: 'main')." },
         title:        { type: 'string', description: 'Optional PR title hint.' },
@@ -928,6 +952,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         project_dir: { type: 'string', description: 'Absolute path to project.' },
         max_files:   { type: 'number', description: 'Max files to analyze (default 10, max 30).' },
         extensions:  {
@@ -946,6 +974,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         file_path: { type: 'string', description: 'Absolute path to source file.' },
         style:     { type: 'string', description: "Documentation style: 'jsdoc', 'tsdoc', 'docstring', or 'auto' (default).", enum: ['jsdoc', 'tsdoc', 'docstring', 'auto'] },
       },
@@ -991,6 +1023,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         project_dir: { type: 'string', description: 'Absolute path to project root.' },
         role:        { type: 'string', description: "Developer role focus, e.g. 'frontend', 'backend', 'fullstack'." },
       },
@@ -1004,6 +1040,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         error:       { type: 'string', description: 'Error message or stack trace to analyze.' },
         project_dir: { type: 'string', description: 'Git repo root for blame context (optional).' },
         file_hint:   { type: 'string', description: 'Suspected file path for focused git blame (optional).' },
@@ -1017,6 +1057,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         project_dir: { type: 'string', description: 'Absolute path to the git repository.' },
         from_ref:    { type: 'string', description: 'Tag or commit to diff from (default: last tag).' },
         audience:    { type: 'string', description: "Target audience: 'user' (default) or 'developer'.", enum: ['user', 'developer'] },
@@ -1030,6 +1074,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         incident:    { type: 'string', description: 'Incident description.' },
         timeline:    { type: 'string', description: 'Timeline of events (freeform, optional).' },
         project_dir: { type: 'string', description: 'Git repo root for audit log correlation (optional).' },
@@ -1045,6 +1093,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         project_dir: { type: 'string', description: 'Absolute path to the project directory.' },
         ecosystem:   { type: 'string', description: "Package ecosystem: 'npm', 'pypi', 'cargo', or 'auto' (default).", enum: ['npm', 'pypi', 'cargo', 'auto'] },
       },
@@ -1070,6 +1122,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         query:          { type: 'string', description: 'SQL query or EXPLAIN ANALYZE output to analyze.' },
         schema:         { type: 'string', description: 'Optional CREATE TABLE statements or schema description.' },
         explain_output: { type: 'string', description: 'Optional EXPLAIN ANALYZE output if available.' },
@@ -1083,6 +1139,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         stats_file:  { type: 'string', description: 'Absolute path to the bundle stats JSON file (webpack stats format).' },
         project_dir: { type: 'string', description: 'Optional absolute path to the project root.' },
       },
@@ -1095,6 +1155,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         project_dir: { type: 'string', description: 'Absolute path to the project root.' },
         extensions:  { type: 'array', description: "File extensions to scan (default: ['.ts','.js']).", items: { type: 'string' } },
       },
@@ -1123,6 +1187,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         file_path:   { type: 'string', description: 'Single route file to parse (optional).' },
         project_dir: { type: 'string', description: 'Scan all route files in project (optional).' },
         framework:   { type: 'string', description: "Framework hint: 'express','fastapi','hono','fastify', or 'auto' (default).", enum: ['express', 'fastapi', 'hono', 'fastify', 'auto'] },
@@ -1137,6 +1205,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         project_dir: { type: 'string', description: 'Absolute path to the project root.' },
         sdk:         { type: 'string', description: "SDK hint: 'launchdarkly','unleash','custom', or 'auto' (default)." },
       },
@@ -1149,6 +1221,10 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object',
       properties: {
+        agent_response: {
+          type: 'object',
+          description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
+        },
         session_id:  { type: 'string', description: 'Optional. UUID of the session to check. Defaults to the current active session.' },
         limit:       { type: 'number', description: 'Optional. Maximum trace log rows to retrieve and analyze (default: 50).' },
         project_dir: { type: 'string', description: 'Optional. Absolute path to the project root.' },

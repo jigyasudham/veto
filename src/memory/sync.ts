@@ -220,8 +220,8 @@ export function importMemory(inputPath?: string): ImportResult {
     for (const c of council_outcomes) {
       const r = db.prepare(`
         INSERT OR IGNORE INTO council_outcomes
-          (id, session_id, task, verdict, lead_dev, pm, architect, ux, devil, legal, security, recommended, debated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, session_id, task, verdict, lead_dev, pm, architect, ux, devil, legal, security, recommended, debated_at, project_dir)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         String(c['id'] ?? ''),
         c['session_id'] != null ? String(c['session_id']) : null,
@@ -234,7 +234,8 @@ export function importMemory(inputPath?: string): ImportResult {
         c['legal'] != null ? String(c['legal']) : null,
         c['security'] != null ? String(c['security']) : null,
         c['recommended'] != null ? String(c['recommended']) : null,
-        String(c['debated_at'] ?? new Date().toISOString())
+        String(c['debated_at'] ?? new Date().toISOString()),
+        c['project_dir'] != null ? String(c['project_dir']) : null
       ) as { changes: number };
       if (r.changes > 0) merged['council_outcomes']++; else skipped['council_outcomes']++;
     }

@@ -11,6 +11,7 @@ import {
   statuslineSetupInstruction,
   parseClaudeContextPct,
   parseClaudeInput,
+  parseClaudeCwd,
   type StatuslineData,
 } from '../../src/cli/statusline.js';
 
@@ -119,6 +120,24 @@ describe('parseClaudeInput (context + rate limits in one pass)', () => {
 
   it('all-null on malformed input', () => {
     expect(parseClaudeInput('}{')).toEqual({ contextPct: null, rate5hPct: null, rate7dPct: null });
+  });
+});
+
+describe('parseClaudeCwd (workspace dir for verdict scoping)', () => {
+  it('prefers workspace.current_dir', () => {
+    const raw = JSON.stringify({ workspace: { current_dir: 'D:\\veto-vscode', project_dir: 'D:\\other' }, cwd: 'D:\\nope' });
+    expect(parseClaudeCwd(raw)).toBe('D:\\veto-vscode');
+  });
+
+  it('falls back to workspace.project_dir then top-level cwd', () => {
+    expect(parseClaudeCwd(JSON.stringify({ workspace: { project_dir: 'D:\\proj' } }))).toBe('D:\\proj');
+    expect(parseClaudeCwd(JSON.stringify({ cwd: 'D:\\proj' }))).toBe('D:\\proj');
+  });
+
+  it('returns null when no workspace field is present or input is malformed', () => {
+    expect(parseClaudeCwd(JSON.stringify({ context_window: { used_percentage: 10 } }))).toBeNull();
+    expect(parseClaudeCwd('{}')).toBeNull();
+    expect(parseClaudeCwd('not json')).toBeNull();
   });
 });
 

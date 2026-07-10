@@ -6,9 +6,8 @@
 import { statSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { execSync } from 'node:child_process';
-import { executeOne } from '../../agents/executor.js';
 import { recordOutcome } from '../../router/index.js';
-import { readGitDiff } from '../scan-core.js';
+import { readGitDiff, runHandlerAgent, handlerAgentResponse } from '../scan-core.js';
 import { getActiveProjectDir } from '../runtime.js';
 import type { WorkerAgentType } from '../../agents/types.js';
 import type { HandlerMap } from '../registry.js';
@@ -119,13 +118,15 @@ export const gitHandlers: HandlerMap = {
 
     const truncatedDiff = diff.slice(0, 6000);
 
-    const result = await executeOne({
+    const run = await runHandlerAgent('veto_commit_message', {
       id:      'commit-msg-1',
       agent:   'git-agent' as WorkerAgentType,
       task:    'Generate a conventional commit message for these staged changes. Follow the Conventional Commits spec: type(scope): subject\n\nbody. Types: feat/fix/docs/chore/refactor/test/perf/ci/build/style. Be concise. Subject ≤ 72 chars.',
       code:    truncatedDiff,
       context: hint,
-    });
+      project_dir: projectDir,
+    }, args?.agent_response);
+    const result = run.result;
 
     recordOutcome('commit-message', 50, 2, 'git-agent', Math.round(result.output.confidence * 100));
 
@@ -133,13 +134,13 @@ export const gitHandlers: HandlerMap = {
     const firstLine = message.split('\n')[0] ?? '';
     const match = firstLine.match(/^(\w+)(?:\(([^)]+)\))?!?:\s*(.+)/);
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       message,
       type:       match ? match[1] : null,
       scope:      match ? (match[2] ?? null) : null,
       subject:    match ? match[3] : null,
       confidence: Math.round(result.output.confidence * 100),
-    }, null, 2) }] };
+    }, run);
   },
 
   veto_pr_description: async ({ args }) => {
@@ -171,14 +172,15 @@ export const gitHandlers: HandlerMap = {
     if (stat)        contextParts.push(`Diff stat:\n${stat}`);
     const builtContext = contextParts.join('\n\n');
 
-    const result = await executeOne({
+    const run = await runHandlerAgent('veto_pr_description', {
       id:          'pr-desc-1',
       agent:       'documentation' as WorkerAgentType,
       task:        "Write a complete GitHub Pull Request description. Include: ## Summary (3–5 bullet points of what changed and why), ## Changes (file-level breakdown from the diff stat), ## Test Plan (bulleted checklist of how to verify the changes), ## Breaking Changes (any API or interface changes; say 'None' if clean). Be specific and developer-facing.",
       code:        fullDiff.slice(0, 8000),
       context:     builtContext || undefined,
       project_dir: projectDir,
-    });
+    }, args?.agent_response);
+    const result = run.result;
 
     const quality = Math.round(result.output.confidence * 100);
     recordOutcome('pr-description', 50, 2, 'documentation', quality);
@@ -186,12 +188,12 @@ export const gitHandlers: HandlerMap = {
     const body = (result.plan?.approach ?? result.output.recommendation ?? '').trim();
     const suggestedTitle = titleHint ?? (commitLog.split('\n')[0]?.replace(/^[a-f0-9]+ /, '') ?? 'Pull Request');
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       title:       suggestedTitle,
       body,
       base_branch: baseBranch,
       confidence:  quality,
-    }, null, 2) }] };
+    }, run);
   },
 
   veto_pr_post: async ({ args }) => {

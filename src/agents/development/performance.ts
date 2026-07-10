@@ -1,4 +1,5 @@
 import { AgentPlan, WorkerAgentType } from '../types.js';
+import type { AgentAnalysis, AgentFinding, FindingSeverity } from '../types.js';
 
 type PerfDomain = 'database' | 'network' | 'cpu' | 'memory' | 'frontend' | 'general';
 
@@ -140,5 +141,126 @@ export function plan(task: string, context?: string): AgentPlan {
       'Index-only queries (cover all needed columns in the index)',
     ],
     duration_estimate: '4-8 hours',
+  };
+}
+
+// ─── Runtime anti-pattern checks ───────────────────────────────────────────
+//
+// Scope: RUNTIME performance anti-patterns (serial I/O, O(n²) iteration, sync
+// blocking, unbounded queries). Deliberately distinct from `code-quality`
+// (complexity/duplication/maintainability). Single-line-detectable heuristics —
+// findings are advisory signal, not proof of a hot-path bottleneck.
+
+interface PerfCheck {
+  regex: RegExp;
+  severity: FindingSeverity;
+  category: string;
+  description: string;
+  fix: string;
+}
+
+const CHECKS: PerfCheck[] = [
+  // await inside a for/while body — serialises I/O that is often parallelisable (N+1).
+  {
+    regex: /\b(?:for|while)\s*\([^)]*\)\s*\{[^}]*\bawait\b/,
+    severity: 'medium',
+    category: 'Serial Await in Loop',
+    description: 'await inside a loop runs iterations one at a time — a common N+1 / serial-I/O bottleneck.',
+    fix: 'If iterations are independent, collect the promises and await Promise.all() to run them concurrently (bound the concurrency for large inputs).',
+  },
+  // async callback passed to forEach/map — forEach ignores the promise; map needs Promise.all.
+  {
+    regex: /\.(?:forEach|map)\s*\(\s*async\b/,
+    severity: 'medium',
+    category: 'Async Callback in forEach/map',
+    description: 'An async callback in forEach is not awaited at all; in map it produces an array of unawaited promises.',
+    fix: 'Use `for…of` with await for sequential work, or `await Promise.all(arr.map(async …))` for concurrent work.',
+  },
+  // Inner search inside an outer iteration — quadratic O(n·m) lookup.
+  {
+    regex: /\.(?:map|forEach|filter|reduce)\s*\([^)]*=>[^)]*\.(?:find|includes|indexOf|filter|some|every)\s*\(/,
+    severity: 'medium',
+    category: 'Nested Iteration O(n²)',
+    description: 'A linear search (find/includes/…) runs inside an outer iteration — cost grows as O(n·m) and degrades sharply with size.',
+    fix: 'Build a Map/Set from the inner collection once, then do O(1) lookups inside the loop.',
+  },
+  // SELECT * — fetches every column, defeats covering indexes, bloats payloads.
+  {
+    regex: /\bSELECT\s+\*/i,
+    severity: 'low',
+    category: 'Unbounded Column Selection',
+    description: 'SELECT * fetches every column, prevents index-only scans, and grows silently as the schema changes.',
+    fix: 'Select only the columns the code actually uses.',
+  },
+  // Synchronous fs/exec — blocks the event loop if it runs in a request path.
+  {
+    regex: /\b(?:readFileSync|writeFileSync|readdirSync|appendFileSync|execSync)\b/,
+    severity: 'low',
+    category: 'Synchronous I/O',
+    description: 'Synchronous I/O blocks the event loop — acceptable at startup, but a throughput killer inside a request handler.',
+    fix: 'Use the async fs.promises API (or exec) in any code path that serves requests.',
+  },
+  // JSON round-trip deep clone — slow and lossy (drops Dates, Maps, undefined).
+  {
+    regex: /JSON\.parse\s*\(\s*JSON\.stringify\s*\(/,
+    severity: 'low',
+    category: 'Inefficient Deep Clone',
+    description: 'JSON.parse(JSON.stringify(x)) is a slow deep clone that silently drops Dates, Maps, Sets and undefined values.',
+    fix: 'Use structuredClone(x) (Node 17+) or a purpose-built clone.',
+  },
+];
+
+// ─── Analysis API ──────────────────────────────────────────────────────────
+
+export function analyze(code: string, context?: string): AgentAnalysis {
+  const findings: AgentFinding[] = [];
+  const lines = code.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    for (const check of CHECKS) {
+      if (check.regex.test(line)) {
+        findings.push({
+          severity: check.severity,
+          category: check.category,
+          description: check.description,
+          fix: check.fix,
+          location: `line ${i + 1}`,
+        });
+        break; // one finding per line — highest-priority check wins
+      }
+    }
+  }
+
+  const critical = findings.filter(f => f.severity === 'critical').length;
+  const high = findings.filter(f => f.severity === 'high').length;
+  const medium = findings.filter(f => f.severity === 'medium').length;
+  const low = findings.filter(f => f.severity === 'low').length;
+
+  const raw = 100 - (critical * 25 + high * 10 + medium * 5 + low * 2);
+  const score = Math.max(0, raw);
+
+  const verdict: AgentAnalysis['verdict'] =
+    score >= 90 ? 'approved'
+    : score >= 70 ? 'approved_with_warnings'
+    : score >= 50 ? 'needs_revision'
+    : 'rejected';
+
+  const subject = context ?? 'provided code';
+
+  const summary =
+    findings.length === 0
+      ? `No runtime performance anti-patterns detected in ${subject}. Score: ${score}/100.`
+      : `Found ${findings.length} performance issue(s) in ${subject}: ${medium} medium, ${low} low. Score: ${score}/100 — ${verdict.replace(/_/g, ' ')}.`;
+
+  return {
+    agent: 'performance',
+    subject,
+    findings,
+    score,
+    verdict,
+    summary,
+    critical_count: critical,
+    high_count: high,
   };
 }

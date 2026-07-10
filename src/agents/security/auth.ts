@@ -1,4 +1,4 @@
-import type { AgentPlan } from '../types.js';
+import type { AgentPlan, AgentAnalysis, AgentFinding, FindingSeverity } from '../types.js';
 
 // ─── Auth-type detection ───────────────────────────────────────────────────
 
@@ -283,5 +283,135 @@ export function plan(task: string, context?: string): AgentPlan {
     pitfalls: PITFALLS_MAP[authType],
     patterns: PATTERNS_MAP[authType],
     duration_estimate: context?.includes('complex') ? '8-12 hours' : durationMap[authType],
+  };
+}
+
+// ─── Auth-defect checks ────────────────────────────────────────────────────
+//
+// Scope: authentication/authorization-specific defects — JWT config, token
+// randomness, credential comparison, cookie security flags. Deliberately does
+// NOT re-check `security-scanner`'s A07 (localStorage tokens, login rate-limit)
+// or `secrets` (hardcoded keys). One finding per line, highest severity first.
+
+interface AuthCheck {
+  regex: RegExp;
+  severity: FindingSeverity;
+  category: string;
+  description: string;
+  fix: string;
+  cwe?: string;
+}
+
+const CHECKS: AuthCheck[] = [
+  // JWT verification that accepts the "none" algorithm — signature bypass.
+  {
+    regex: /\balgorithms?\s*[:=]\s*\[?\s*['"]none['"]|\balg['"]?\s*[:=]\s*['"]none['"]/i,
+    severity: 'critical',
+    category: 'JWT Algorithm None',
+    description: 'The "none" JWT algorithm is accepted — an attacker can forge tokens with no valid signature.',
+    fix: 'Pin an explicit allow-list of asymmetric/HMAC algorithms (e.g. algorithms: ["RS256"]); never accept "none".',
+    cwe: 'CWE-347',
+  },
+  // Math.random() used to mint a security-sensitive value — not cryptographically secure.
+  {
+    regex: /(?:token|secret|session|nonce|otp|password|reset|salt|api_?key)[^\n]{0,40}Math\.random|Math\.random[^\n]{0,40}(?:token|secret|session|nonce|otp|password|reset|salt|api_?key)/i,
+    severity: 'high',
+    category: 'Weak Randomness for Secret',
+    description: 'Math.random() is used to generate a security value — it is predictable and not cryptographically secure.',
+    fix: 'Use crypto.randomBytes()/crypto.randomUUID() (Node) or crypto.getRandomValues() (browser).',
+    cwe: 'CWE-330',
+  },
+  // Password/credential compared with == / === instead of a constant-time hash check.
+  {
+    regex: /\b(?:password|passwd|pwd)\s*===?[^=]|===?\s*(?:\w+\.)*(?:password|passwd|pwd)\b/i,
+    severity: 'medium',
+    category: 'Non-Constant-Time Credential Compare',
+    description: 'A credential is compared with ==/=== — this leaks timing and implies a plaintext or non-hashed comparison.',
+    fix: 'Verify passwords with a slow hash comparison (bcrypt.compare / argon2.verify); compare other secrets with crypto.timingSafeEqual.',
+    cwe: 'CWE-208',
+  },
+  // jwt.sign(...) on a line with no expiresIn — tokens that never expire.
+  {
+    regex: /jwt\.sign\s*\((?:(?!expiresIn).)*$/i,
+    severity: 'medium',
+    category: 'JWT Without Expiry',
+    description: 'jwt.sign() is called with no expiresIn on this line — a token without an expiry is valid forever if leaked.',
+    fix: 'Set a short access-token lifetime (e.g. expiresIn: "15m") and use refresh-token rotation for longer sessions.',
+    cwe: 'CWE-613',
+  },
+  // Session/auth cookie with Secure or httpOnly explicitly disabled.
+  {
+    regex: /(?:secure|httpOnly)\s*:\s*false\b/i,
+    severity: 'medium',
+    category: 'Insecure Cookie Flag',
+    description: 'A cookie disables Secure or httpOnly — it can be sent over plain HTTP or read by page scripts (XSS theft).',
+    fix: 'Set session/auth cookies with { secure: true, httpOnly: true }.',
+    cwe: 'CWE-1004',
+  },
+  // SameSite=None weakens CSRF protection (only safe when paired with Secure + intent).
+  {
+    regex: /sameSite\s*[:=]\s*['"]?none['"]?/i,
+    severity: 'medium',
+    category: 'Cookie SameSite None',
+    description: 'SameSite=None sends the cookie on cross-site requests, re-opening CSRF exposure.',
+    fix: 'Use SameSite=Strict or Lax unless a cross-site cookie is truly required (and then only with Secure).',
+    cwe: 'CWE-1275',
+  },
+];
+
+// ─── Analysis API ──────────────────────────────────────────────────────────
+
+export function analyze(code: string, context?: string): AgentAnalysis {
+  const findings: AgentFinding[] = [];
+  const lines = code.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    for (const check of CHECKS) {
+      if (check.regex.test(line)) {
+        const finding: AgentFinding = {
+          severity: check.severity,
+          category: check.category,
+          description: check.description,
+          fix: check.fix,
+          location: `line ${i + 1}`,
+        };
+        if (check.cwe) finding.cwe = check.cwe;
+        findings.push(finding);
+        break; // one finding per line — highest-priority check wins
+      }
+    }
+  }
+
+  const critical = findings.filter(f => f.severity === 'critical').length;
+  const high = findings.filter(f => f.severity === 'high').length;
+  const medium = findings.filter(f => f.severity === 'medium').length;
+  const low = findings.filter(f => f.severity === 'low').length;
+
+  const raw = 100 - (critical * 25 + high * 10 + medium * 5 + low * 2);
+  const score = Math.max(0, raw);
+
+  const verdict: AgentAnalysis['verdict'] =
+    score >= 90 ? 'approved'
+    : score >= 70 ? 'approved_with_warnings'
+    : score >= 50 ? 'needs_revision'
+    : 'rejected';
+
+  const subject = context ?? 'provided code';
+
+  const summary =
+    findings.length === 0
+      ? `No authentication defects detected in ${subject}. Score: ${score}/100.`
+      : `Found ${findings.length} auth issue(s) in ${subject}: ${critical} critical, ${high} high, ${medium} medium, ${low} low. Score: ${score}/100 — ${verdict.replace(/_/g, ' ')}.`;
+
+  return {
+    agent: 'auth',
+    subject,
+    findings,
+    score,
+    verdict,
+    summary,
+    critical_count: critical,
+    high_count: high,
   };
 }

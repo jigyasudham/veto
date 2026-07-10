@@ -73,10 +73,14 @@ const ANALYZE_CAPABLE: Set<WorkerAgentType> = new Set([
   'reviewer',
   'security-scanner',
   'secrets',
+  'privacy',
+  'performance',
+  'auth',
   'dependency-audit',
   'code-quality',
   'documentation',
   'accessibility',
+  'compatibility',
   'error-handling',
 ]);
 

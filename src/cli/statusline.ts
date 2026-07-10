@@ -16,7 +16,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, appendF
 import { execSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
-import { getDbPath, getDb } from '../memory/local.js';
+import { getDbPath, getDb, normalizeProjectDir } from '../memory/local.js';
 
 // node:sqlite is a Node 22.5+ built-in — use createRequire so bundlers skip it.
 // Required lazily inside openReadOnly so importing this module (server.ts pulls in
@@ -54,7 +54,9 @@ function openReadOnly(path: string): DatabaseSync | null {
 }
 
 // Crash-proof read of everything the statusline shows. Never throws.
-export function readStatuslineData(): StatuslineData {
+// `projectDir` (when known, e.g. from the Claude Code payload's workspace dir) scopes
+// the council verdict to the current workspace instead of the global newest.
+export function readStatuslineData(projectDir?: string): StatuslineData {
   let db: DatabaseSync | null = null;
   let closeAfter = false;
   try {
@@ -69,7 +71,7 @@ export function readStatuslineData(): StatuslineData {
       closeAfter = true;
       if (!db) return EMPTY;
     }
-    return queryStatusline(db);
+    return queryStatusline(db, projectDir);
   } catch {
     return EMPTY;
   } finally {
@@ -79,15 +81,21 @@ export function readStatuslineData(): StatuslineData {
   }
 }
 
-function queryStatusline(db: DatabaseSync): StatuslineData {
+function queryStatusline(db: DatabaseSync, projectDir?: string): StatuslineData {
   const data: StatuslineData = { ...EMPTY };
 
   // Each block is independently guarded: a missing/older table degrades that one
   // segment to null rather than blanking the whole line.
   try {
-    const row = db.prepare(
-      'SELECT verdict FROM council_outcomes ORDER BY debated_at DESC LIMIT 1'
-    ).get() as { verdict?: string } | undefined;
+    // Scope the verdict to the current workspace when we know it — otherwise the line
+    // shows the globally-newest debate, which may belong to a different project. When
+    // projectDir is provided we do NOT fall back to another project's verdict; the
+    // segment simply drops if this project has no council row yet.
+    const scoped = projectDir ? normalizeProjectDir(projectDir) : undefined;
+    const row = (scoped
+      ? db.prepare('SELECT verdict FROM council_outcomes WHERE project_dir = ? ORDER BY debated_at DESC LIMIT 1').get(scoped)
+      : db.prepare('SELECT verdict FROM council_outcomes ORDER BY debated_at DESC LIMIT 1').get()
+    ) as { verdict?: string } | undefined;
     const v = (row?.verdict ?? '').toUpperCase();
     if (v === 'GREEN' || v === 'YELLOW' || v === 'RED') data.verdict = v;
   } catch { /* segment off */ }
@@ -183,6 +191,9 @@ export interface ClaudeStatusInput {
     five_hour?: { used_percentage?: number | null } | null;
     seven_day?: { used_percentage?: number | null } | null;
   } | null;
+  // Claude Code sends the active workspace; used to scope the council verdict segment.
+  workspace?: { current_dir?: string | null; project_dir?: string | null } | null;
+  cwd?: string | null;
 }
 
 export interface ClaudeLiveData {
@@ -217,6 +228,19 @@ export function parseClaudeContextPct(raw: string): number | null {
   return parseClaudeInput(raw).contextPct;
 }
 
+// Extract the active workspace directory from the stdin payload so the council verdict
+// can be scoped to it. Prefers workspace.current_dir, then workspace.project_dir, then
+// top-level cwd. Returns null (→ global verdict) for bad/empty JSON or a missing field.
+export function parseClaudeCwd(raw: string): string | null {
+  try {
+    const j = JSON.parse(raw) as ClaudeStatusInput;
+    const dir = j?.workspace?.current_dir ?? j?.workspace?.project_dir ?? j?.cwd;
+    return typeof dir === 'string' && dir.length > 0 ? dir : null;
+  } catch {
+    return null;
+  }
+}
+
 // Read the stdin payload Claude Code sends. Crash-proof and never blocks the prompt:
 // returns null immediately when run from a TTY (manual invocation) and bails after a
 // short timeout if no data arrives. Claude Code closes stdin after writing, so the
@@ -247,12 +271,17 @@ function readStdinPayload(timeoutMs = 200): Promise<string | null> {
 // raw payload Claude Code sent and the line we rendered, so you can diff the ACTUAL
 // context_window.used_percentage against the displayed `ctx N%`. Never on by default.
 export async function printStatusline(opts: ComposeOptions = {}, capturePath?: string): Promise<void> {
-  let data: StatuslineData;
-  try { data = readStatuslineData(); } catch { data = { ...EMPTY }; }
-
+  // Read the live payload first so we know the active workspace before the DB read —
+  // that lets us scope the council verdict to the current project rather than showing
+  // the globally-newest debate (which may belong to another folder).
   let raw: string | null = null;
+  try { raw = await readStdinPayload(); } catch { /* no live data */ }
+  const projectDir = raw ? parseClaudeCwd(raw) : null;
+
+  let data: StatuslineData;
+  try { data = readStatuslineData(projectDir ?? undefined); } catch { data = { ...EMPTY }; }
+
   try {
-    raw = await readStdinPayload();
     if (raw) data = { ...data, ...parseClaudeInput(raw) };
   } catch { /* live segments stay null */ }
 
