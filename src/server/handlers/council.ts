@@ -9,7 +9,7 @@ import { executeOne } from '../../agents/executor.js';
 import { recordOutcome } from '../../router/index.js';
 import { saveCouncilOutcome, storeKnowledge, logUsage } from '../../memory/local.js';
 import { buildContextString } from '../../context/reader.js';
-import { parsePrdIntoTasks } from '../runtime.js';
+import { parsePrdIntoTasks, getActiveProjectDir } from '../runtime.js';
 import type { HandlerMap } from '../registry.js';
 
 export const councilHandlers: HandlerMap = {
@@ -28,7 +28,10 @@ export const councilHandlers: HandlerMap = {
     const debateInput = {
       task,
       context: args?.context ? String(args.context) : undefined,
-      project_dir: args?.project_dir ? String(args.project_dir) : undefined,
+      // Fall back to the active project (set by the session/handoff tools) so a debate
+      // is scoped even when the caller omits project_dir — otherwise the outcome is
+      // stored unscoped and the HUD/statusline can't attribute it to a workspace.
+      project_dir: args?.project_dir ? String(args.project_dir) : (getActiveProjectDir() ?? undefined),
       strictness: strictnessArg,
       architect_model: args?.architect_model ? String(args.architect_model) : undefined,
       editor_model: args?.editor_model ? String(args.editor_model) : undefined,
@@ -50,6 +53,7 @@ export const councilHandlers: HandlerMap = {
           devil: JSON.stringify(result.votes.devil), legal: JSON.stringify(result.votes.legal),
           security: JSON.stringify(result.votes.security), recommended: result.recommended,
           duration_ms: debateDuration,
+          project_dir: debateInput.project_dir,
         });
         const payload = { outcome_id: outcomeId, llm_backed: true, final_verdict: result.final_verdict, block_reasons: result.block_reasons, warnings: result.warnings, recommended: result.recommended, debated_at: result.debated_at, votes: result.votes };
         return { content: [{ type: 'text', text: result.formatted_output + '\n\n' + JSON.stringify(payload, null, 2) }] };
@@ -75,6 +79,7 @@ export const councilHandlers: HandlerMap = {
       security: JSON.stringify(result.votes.security),
       recommended: result.recommended,
       duration_ms: debateDuration,
+      project_dir: debateInput.project_dir,
     });
 
     // #38: auto-record learning outcome from verdict — no manual veto_record_outcome needed
@@ -104,7 +109,7 @@ export const councilHandlers: HandlerMap = {
         title: `${result.final_verdict}: ${task.slice(0, 80)}`,
         content: lines.join(''),
         tags: [isRed ? 'red-verdict' : 'yellow-verdict', isRed ? 'blocked' : 'caution', 'council'],
-        project_dir: args?.project_dir ? String(args.project_dir) : undefined,
+        project_dir: debateInput.project_dir,
         session_id: sessionId,
         relevance: isRed ? 1.0 : 0.8,
       });

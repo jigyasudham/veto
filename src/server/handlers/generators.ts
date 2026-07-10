@@ -8,8 +8,8 @@
 import { readFileSync, writeFileSync, readdirSync, mkdirSync, existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { execSync } from 'node:child_process';
-import { executeOne } from '../../agents/executor.js';
 import { recordOutcome } from '../../router/index.js';
+import { runHandlerAgent, handlerAgentResponse } from '../scan-core.js';
 import { getAuditLog } from '../../memory/local.js';
 import { buildContextString } from '../../context/reader.js';
 import type { WorkerAgentType } from '../../agents/types.js';
@@ -64,12 +64,13 @@ export const generatorHandlers: HandlerMap = {
       .join('\n\n')
       .slice(0, 8000);
 
-    const debtResult = await executeOne({
+    const debtRun = await runHandlerAgent('veto_debt_register', {
       id: `debt-${Date.now()}`,
       agent: 'code-quality',
       task: 'Analyze these high-churn source files for technical debt. For each file, identify: (1) the primary debt type (complexity/duplication/coupling/coverage/documentation), (2) severity (high/medium/low), (3) estimated fix effort in hours, (4) recommended agent to fix it. Rank by: high-churn × high-severity first.',
       code: debtCode,
-    });
+    }, args?.agent_response);
+    const debtResult = debtRun.result;
 
     recordOutcome('debt-register', 50, 2, 'code-quality', Math.round(debtResult.output.confidence * 100));
 
@@ -107,12 +108,12 @@ export const generatorHandlers: HandlerMap = {
       }));
     }
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       total_files_analyzed: fileContents.length,
       date_range: 'last 90 days',
       debt_items: debtItems,
       summary: (debtResult.plan?.approach ?? debtResult.output.recommendation ?? '').trim(),
-    }, null, 2) }] };
+    }, debtRun);
   },
 
   veto_adr: ({ args }) => {
@@ -237,7 +238,8 @@ export const generatorHandlers: HandlerMap = {
     const projectSummary = summaryParts.join('\n') || 'No configuration files found.';
     const enrichedCtx    = buildContextString(projectDir, projectSummary);
     const agentTask      = 'Generate a .env.example file for this project. List every environment variable needed with a placeholder value and a one-line comment explaining what it is. Then write a numbered setup guide (5-10 steps) for a developer setting up this project from scratch.';
-    const envResult      = await executeOne({ id: 'env-setup-1', agent: 'devops', task: agentTask, context: enrichedCtx || undefined, project_dir: projectDir });
+    const envRun         = await runHandlerAgent('veto_env_setup', { id: 'env-setup-1', agent: 'devops', task: agentTask, context: enrichedCtx || undefined, project_dir: projectDir }, args?.agent_response);
+    const envResult      = envRun.result;
 
     const rawOutput  = envResult.output.recommendation ?? envResult.plan?.approach ?? '';
     const envLines   = rawOutput.split('\n').filter((l: string) => /^[A-Z_]+=/.test(l));
@@ -249,12 +251,12 @@ export const generatorHandlers: HandlerMap = {
       written = true;
     }
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       env_example: envExample,
       setup_guide: rawOutput,
       written,
       detected:    [...new Set(detected)],
-    }, null, 2) }] };
+    }, envRun);
   },
 
   veto_prompt_optimizer: async ({ args }) => {
@@ -281,13 +283,14 @@ export const generatorHandlers: HandlerMap = {
       issues.push({ category: 'specificity', severity: 'low', finding: 'Prompt is very short. Add more context and constraints for better results.' });
     }
 
-    const result = await executeOne({
+    const promptRun = await runHandlerAgent('veto_prompt_optimizer', {
       id:      'prompt-optimizer-1',
       agent:   'documentation' as WorkerAgentType,
       task:    'You are a prompt engineering expert. Analyze this prompt for failure modes: vague instructions, missing context, ambiguous outputs, injection risks, lack of examples, poor role definition. Then rewrite it to be clearer, more specific, and safer. Return: 1) A numbered list of issues found, 2) A complete rewritten version of the prompt.',
       code:    prompt,
       context: goal ? `Goal: ${goal}` : undefined,
-    });
+    }, args?.agent_response);
+    const result = promptRun.result;
 
     const quality = result.analysis?.score ?? Math.round(result.output.confidence * 100);
     recordOutcome('prompt-optimizer', 50, 2, 'documentation', quality);
@@ -300,12 +303,12 @@ export const generatorHandlers: HandlerMap = {
     const rewritten_prompt    = result.plan?.approach ?? result.output.recommendation ?? '';
     const improvement_summary = result.analysis?.summary ?? result.plan?.steps?.join('; ') ?? '';
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       score,
       issues,
       rewritten_prompt,
       improvement_summary,
-    }, null, 2) }] };
+    }, promptRun);
   },
 
   veto_sre_advisor: async ({ args }) => {
@@ -336,16 +339,17 @@ export const generatorHandlers: HandlerMap = {
       ? 'Recent incidents:\n' + incidents.map(i => `- ${i.date}: ${i.duration_minutes} min — ${i.description}`).join('\n')
       : 'No incident data provided.';
 
-    const sreResult = await executeOne({
+    const sreRun = await runHandlerAgent('veto_sre_advisor', {
       id:      'sre-advisor-1',
       agent:   'performance' as WorkerAgentType,
       task:    'You are an SRE advisor. Given this service\'s error budget status, suggest: 1) Top 3 reliability improvements ranked by error budget recovery potential, 2) Whether to freeze non-critical deployments, 3) Specific monitoring improvements. Be concrete and actionable.',
       context: `Service: ${service_name || 'unknown'}\nSLO: ${slo_target}%\nWindow: ${window_days} days\nBudget remaining: ${remainingPct}% (${remainingMinutes.toFixed(1)} min)\nStatus: ${status}\n${incidentSummary}`,
-    });
+    }, args?.agent_response);
+    const sreResult = sreRun.result;
 
     const recommendations = sreResult.plan?.approach ?? sreResult.output.recommendation ?? '';
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       slo_target_pct:       slo_target,
       window_days,
       total_budget_minutes: Math.round(totalBudgetMinutes * 10) / 10,
@@ -356,7 +360,7 @@ export const generatorHandlers: HandlerMap = {
       projected_exhaustion: exhaustedAt,
       recommendations,
       freeze_recommended:   remainingPct < 20,
-    }, null, 2) }] };
+    }, sreRun);
   },
 
   veto_diagram: async ({ args }) => {
@@ -375,13 +379,14 @@ export const generatorHandlers: HandlerMap = {
       }).toString().split('\n').filter((f: string) => !f.includes('node_modules') && !f.includes('dist/')).slice(0, 60).join('\n');
     } catch { /* not a git repo */ }
 
-    const diagramResult = await executeOne({
+    const diagramRun = await runHandlerAgent('veto_diagram', {
       id:      'diagram-1',
       agent:   'documentation' as WorkerAgentType,
       task:    `Generate a ${diagramType} Mermaid diagram of this project's architecture. Output ONLY the raw Mermaid diagram code (starting with 'flowchart TD' or similar — no markdown fences, no explanation text). Focus on: ${focus || 'overall system architecture, main modules, and data flow'}. Keep it under 30 nodes for readability.`,
       code:    fileTree.slice(0, 4000),
       context: ctx || undefined,
-    });
+    }, args?.agent_response);
+    const diagramResult = diagramRun.result;
 
     const diagramQuality = diagramResult.analysis?.score ?? Math.round(diagramResult.output.confidence * 100);
     recordOutcome('diagram', 50, 2, 'documentation', diagramQuality);
@@ -393,11 +398,11 @@ export const generatorHandlers: HandlerMap = {
     const startIdx = lines.findIndex((l: string) => /^(flowchart|graph|classDiagram|sequenceDiagram|C4Context|erDiagram)/.test(l.trim()));
     const mermaid = startIdx >= 0 ? lines.slice(startIdx).join('\n').trim() : rawOutput.trim();
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       diagram_type: diagramType,
       mermaid,
       render_hint: 'Paste into https://mermaid.live or a GitHub markdown code block with ```mermaid',
-    }, null, 2) }] };
+    }, diagramRun);
   },
 
   veto_rca: async ({ args }) => {
@@ -419,13 +424,14 @@ export const generatorHandlers: HandlerMap = {
       }
     } catch { /* not a git repo */ }
 
-    const result = await executeOne({
+    const rcaRun = await runHandlerAgent('veto_rca', {
       id:      'rca-1',
       agent:   'debugger' as WorkerAgentType,
       task:    'Perform a structured root-cause analysis. Identify: (1) the most likely root cause, (2) the probable introducing commit or change, (3) immediate fix steps, (4) prevention recommendations.',
       code:    error.slice(0, 6000),
       context: [gitContext, userContext].filter(Boolean).join('\n') || undefined,
-    });
+    }, args?.agent_response);
+    const result = rcaRun.result;
 
     const quality = Math.round(result.output.confidence * 100);
     recordOutcome('rca', 50, 2, 'debugger', quality);
@@ -434,14 +440,14 @@ export const generatorHandlers: HandlerMap = {
     const fix_steps  = result.plan?.steps?.slice(0, 5) ?? [];
     const hypothesis = result.output.recommendation;
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       root_cause,
       hypothesis,
       suspect_commits: [],
       fix_steps,
       prevention:  [],
       confidence:  quality,
-    }, null, 2) }] };
+    }, rcaRun);
   },
 
   veto_release_notes: async ({ args }) => {
@@ -465,21 +471,22 @@ export const generatorHandlers: HandlerMap = {
 
     const commitsCount = commits.split('\n').filter(Boolean).length;
 
-    const result = await executeOne({
+    const relnotesRun = await runHandlerAgent('veto_release_notes', {
       id:    'relnotes-1',
       agent: 'documentation' as WorkerAgentType,
       task:  `Generate ${audience === 'developer' ? 'developer-facing' : 'user-facing'} release notes from these git commits. Rewrite technical commit messages into clear benefit-focused language. Group by: New Features, Improvements, Bug Fixes, Other. Each line should be one sentence describing the user benefit.`,
       code:  commits.slice(0, 4000),
-    });
+    }, args?.agent_response);
+    const result = relnotesRun.result;
 
     const release_notes = result.plan?.approach ?? result.output.recommendation;
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       release_notes,
       from_ref:          fromRef || 'HEAD~30',
       commits_processed: commitsCount,
       audience,
-    }, null, 2) }] };
+    }, relnotesRun);
   },
 
   veto_postmortem: async ({ args }) => {
@@ -506,24 +513,25 @@ export const generatorHandlers: HandlerMap = {
       auditCtx   || '',
     ].filter(Boolean).join('\n\n') || undefined;
 
-    const result = await executeOne({
+    const pmRun = await runHandlerAgent('veto_postmortem', {
       id:      'pm-1',
       agent:   'debugger' as WorkerAgentType,
       task:    'Write a blameless postmortem. Include: (1) Incident summary (2) Root cause (five-whys analysis) (3) Impact (4) Timeline of detection/response/resolution (5) Action items with owner and deadline (6) What went well (7) Prevention measures. Use a constructive tone — blame systems not people.',
       code:    incident.slice(0, 4000),
       context,
-    });
+    }, args?.agent_response);
+    const result = pmRun.result;
 
     const postmortem  = result.plan?.approach ?? result.output.recommendation;
     const root_cause  = result.output.recommendation.split(/[.!?]/)[0]?.trim() ?? '';
     const action_items = result.plan?.steps?.slice(0, 10) ?? [];
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       postmortem,
       root_cause,
       action_items,
       correlated_red_verdicts: correlatedRedVerdicts,
-    }, null, 2) }] };
+    }, pmRun);
   },
 
   veto_doc_gen: async ({ args }) => {
@@ -547,12 +555,13 @@ export const generatorHandlers: HandlerMap = {
       else detectedStyle = 'jsdoc';
     }
 
-    const docGenResult = await executeOne({
+    const docGenRun = await runHandlerAgent('veto_doc_gen', {
       id:    'docgen-1',
       agent: 'documentation' as WorkerAgentType,
       task:  `Add ${detectedStyle} documentation comments to all public functions, classes, interfaces, and exported constants in this file. For each, add: (1) a one-line summary, (2) @param descriptions, (3) @returns description, (4) @throws if applicable. Return the COMPLETE file content with documentation added — do not truncate.`,
       code:  content.slice(0, 10000),
-    });
+    }, args?.agent_response);
+    const docGenResult = docGenRun.result;
 
     const docQuality = docGenResult.analysis?.score ?? Math.round(docGenResult.output.confidence * 100);
     recordOutcome('doc-gen', 50, 2, 'documentation', docQuality);
@@ -560,12 +569,12 @@ export const generatorHandlers: HandlerMap = {
     const annotatedContent = docGenResult.plan?.approach ?? docGenResult.output.recommendation ?? '';
     const symbolsDocumented = (annotatedContent.match(/@param\b/g) ?? []).length;
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       file_path:          filePath,
       style:              detectedStyle,
       annotated_content:  annotatedContent,
       symbols_documented: symbolsDocumented,
-    }, null, 2) }] };
+    }, docGenRun);
   },
 
   veto_onboard: async ({ args }) => {
@@ -579,21 +588,22 @@ export const generatorHandlers: HandlerMap = {
       try { readme = readFileSync(join(projectDir, name), 'utf8').slice(0, 3000); break; } catch { /* skip */ }
     }
 
-    const onboardResult = await executeOne({
+    const onboardRun = await runHandlerAgent('veto_onboard', {
       id:          'onboard-1',
       agent:       'documentation' as WorkerAgentType,
       task:        `Write a complete onboarding guide for a new ${role || 'fullstack'} developer joining this project. Include: (1) Setup steps (clone, install, env vars, first run), (2) Architecture overview (key directories and their purpose), (3) Key files to understand first, (4) How to run tests, (5) Development workflow, (6) First PR checklist (what to check before submitting). Be specific to this codebase.`,
       context:     [buildContextString(projectDir), readme ? `README:\n${readme}` : ''].filter(Boolean).join('\n\n') || undefined,
       project_dir: projectDir,
-    });
+    }, args?.agent_response);
+    const onboardResult = onboardRun.result;
 
     const onboardQuality = onboardResult.analysis?.score ?? Math.round(onboardResult.output.confidence * 100);
     recordOutcome('onboard', 50, 2, 'documentation', onboardQuality);
 
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       guide:    onboardResult.plan?.approach ?? onboardResult.output.recommendation ?? '',
       role:     role || 'fullstack',
       sections: ['Setup', 'Architecture', 'Key Files', 'Testing', 'Workflow', 'First PR'],
-    }, null, 2) }] };
+    }, onboardRun);
   },
 };

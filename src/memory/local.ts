@@ -108,6 +108,7 @@ export function getDb(): DatabaseSync {
   migrateCouncilColumns(_db);
   migrateSessionColumns(_db);
   migrateCouncilDuration(_db);
+  migrateCouncilProjectDir(_db);
   migrateRateUsageTokens(_db);
   migrateUsageLog(_db);
   migrateSessionSaveType(_db);
@@ -291,6 +292,24 @@ function migrateCouncilDuration(db: DatabaseSync): void {
   const cols = db.prepare('PRAGMA table_info(council_outcomes)').all() as Array<{ name: string }>;
   const names = new Set(cols.map(c => c.name));
   if (!names.has('duration_ms')) db.exec('ALTER TABLE council_outcomes ADD COLUMN duration_ms INTEGER DEFAULT 0');
+}
+
+// Adds project_dir to council_outcomes so verdicts can be scoped per-project (the HUD
+// and statusline previously showed the globally-newest verdict regardless of workspace).
+// Idempotent: the column is only added once, and the backfill only touches rows that are
+// still NULL, copying project_dir from the linked session where one exists. Task-only
+// debates (no session_id) legitimately stay NULL and are treated as unscoped.
+function migrateCouncilProjectDir(db: DatabaseSync): void {
+  const cols = db.prepare('PRAGMA table_info(council_outcomes)').all() as Array<{ name: string }>;
+  const names = new Set(cols.map(c => c.name));
+  if (!names.has('project_dir')) db.exec('ALTER TABLE council_outcomes ADD COLUMN project_dir TEXT');
+  db.exec(`
+    UPDATE council_outcomes
+       SET project_dir = (SELECT s.project_dir FROM sessions s WHERE s.id = council_outcomes.session_id)
+     WHERE project_dir IS NULL
+       AND session_id IS NOT NULL
+       AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = council_outcomes.session_id AND s.project_dir IS NOT NULL)
+  `);
 }
 
 // Adds active_client, last_resumed_at, and connection_type columns if they don't exist
@@ -493,6 +512,7 @@ export type SaveCouncilOutcomeInput = {
   security: string;
   recommended: string;
   duration_ms?: number;
+  project_dir?: string;
 };
 
 export function saveCouncilOutcome(input: SaveCouncilOutcomeInput): string {
@@ -501,11 +521,12 @@ export function saveCouncilOutcome(input: SaveCouncilOutcomeInput): string {
   const now = new Date().toISOString();
   db.prepare(`
     INSERT INTO council_outcomes
-      (id, session_id, task, verdict, lead_dev, pm, architect, ux, devil, legal, security, recommended, debated_at, duration_ms)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, session_id, task, verdict, lead_dev, pm, architect, ux, devil, legal, security, recommended, debated_at, duration_ms, project_dir)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, input.session_id ?? null, input.task, input.verdict,
     input.lead_dev, input.pm, input.architect, input.ux, input.devil,
-    input.legal, input.security, input.recommended, now, input.duration_ms ?? 0);
+    input.legal, input.security, input.recommended, now, input.duration_ms ?? 0,
+    normalizeProjectDir(input.project_dir) ?? null);
   return id;
 }
 

@@ -6,7 +6,7 @@
 // External readers (e.g. veto-vscode, `veto statusline`) read veto.db directly.
 // The tables/columns they depend on are a STABLE READ SURFACE:
 //   sessions(id, platform, active_client, started_at, summary, token_count, project_dir, created_at)
-//   council_outcomes(id, verdict, lead_dev, pm, architect, ux, devil, legal, security, recommended, debated_at)
+//   council_outcomes(id, verdict, lead_dev, pm, architect, ux, devil, legal, security, recommended, debated_at, project_dir)
 //   patterns(pattern_key, pattern_val, confidence, seen_count, updated_at)
 //   rate_usage(platform, request_count, token_count, date_key)
 //   knowledge_base(id, title, tags, project_dir, type, created_at)
@@ -99,7 +99,8 @@ export const CREATE_TABLES = `
     security    TEXT,
     recommended TEXT,
     debated_at  TEXT NOT NULL,
-    duration_ms INTEGER DEFAULT 0
+    duration_ms INTEGER DEFAULT 0,
+    project_dir TEXT
   );
 
   CREATE TABLE IF NOT EXISTS learning_data (

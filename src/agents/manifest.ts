@@ -22,13 +22,13 @@ export const AGENT_MANIFEST: AgentManifestEntry[] = [
   { id: 'frontend',    role: 'Builds UI components and client-side logic. Plans component hierarchy, state management, and accessibility requirements.',                                         output_type: 'plan',     domain: 'development' },
   { id: 'backend',     role: 'Implements server-side services, business logic, and data layers. Advises on architecture patterns and dependency injection.',                                     output_type: 'plan',     domain: 'development' },
   { id: 'devops',      role: 'Plans CI/CD pipelines, containerization, and deployment strategies. Covers infrastructure-as-code, monitoring, and rollback procedures.',                         output_type: 'plan',     domain: 'development' },
-  { id: 'performance', role: 'Identifies bottlenecks and plans optimization work. Prioritizes by impact-to-effort ratio and recommends profiling and benchmarking approaches.',                  output_type: 'plan',     domain: 'development' },
+  { id: 'performance', role: 'Identifies bottlenecks and plans optimization work. Prioritizes by impact-to-effort ratio and recommends profiling and benchmarking approaches.',                  output_type: 'analysis', domain: 'development' },
   { id: 'migration',   role: 'Plans safe data and schema migrations. Sequences steps to avoid downtime and designs rollback strategies for production environments.',                            output_type: 'plan',     domain: 'development' },
 
   // Security
   { id: 'security-scanner',  role: 'Scans code for OWASP Top 10 and CWE-mapped vulnerabilities including injection, broken auth, and insecure deserialization. Returns severity-scored findings.',  output_type: 'analysis', domain: 'security' },
-  { id: 'auth',              role: 'Reviews authentication and authorization implementations. Plans secure token handling, session management, and role-based access control.',                        output_type: 'plan',     domain: 'security' },
-  { id: 'privacy',           role: 'Audits data handling for GDPR, CCPA, and privacy best practices. Flags PII exposure risks and recommends data minimization and retention strategies.',          output_type: 'plan',     domain: 'security' },
+  { id: 'auth',              role: 'Reviews authentication and authorization implementations. Plans secure token handling, session management, and role-based access control.',                        output_type: 'analysis', domain: 'security' },
+  { id: 'privacy',           role: 'Audits data handling for GDPR, CCPA, and privacy best practices. Flags PII exposure risks and recommends data minimization and retention strategies.',          output_type: 'analysis', domain: 'security' },
   { id: 'secrets',           role: 'Detects hardcoded secrets, API keys, and credentials in code and config files. Returns severity-scored findings with remediation steps.',                        output_type: 'analysis', domain: 'security' },
   { id: 'dependency-audit',  role: 'Audits third-party dependencies for known CVEs and outdated packages. Returns severity-scored findings with upgrade and patching recommendations.',              output_type: 'analysis', domain: 'security' },
   { id: 'penetration',       role: 'Plans penetration testing scenarios and attack surface analysis. Identifies entry points, trust boundaries, and likely exploit paths.',                          output_type: 'plan',     domain: 'security' },
@@ -53,7 +53,7 @@ export const AGENT_MANIFEST: AgentManifestEntry[] = [
   { id: 'code-quality',    role: 'Audits code for complexity, duplication, and maintainability anti-patterns. Returns scored findings with targeted refactoring suggestions.',          output_type: 'analysis', domain: 'quality' },
   { id: 'documentation',   role: 'Reviews documentation coverage for APIs, modules, and workflows. Identifies gaps and returns findings with structured improvement recommendations.',  output_type: 'analysis', domain: 'quality' },
   { id: 'accessibility',   role: 'Audits UI code for WCAG 2.1 compliance and screen reader compatibility. Returns findings with specific ARIA and semantic HTML fix recommendations.',  output_type: 'analysis', domain: 'quality' },
-  { id: 'compatibility',   role: 'Checks code for browser, runtime, and platform compatibility issues. Plans polyfills, feature detection, and graceful degradation strategies.',       output_type: 'plan',     domain: 'quality' },
+  { id: 'compatibility',   role: 'Checks code for browser, runtime, and platform compatibility issues. Plans polyfills, feature detection, and graceful degradation strategies.',       output_type: 'analysis', domain: 'quality' },
   { id: 'error-handling',  role: 'Reviews error handling coverage and propagation paths. Flags swallowed exceptions, missing guards, and unhelpful error messages.',                    output_type: 'analysis', domain: 'quality' },
 
   // Workflow

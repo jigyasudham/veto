@@ -35,13 +35,29 @@ import { versionUpdateInstruction } from './server/update-check.js';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+// Always-present usage directive. Weaker models (e.g. Gemini Flash) tend to read a bare
+// `veto_*` command as a task to perform by hand — reverse-engineering the tool from Veto's
+// source, writing throwaway node scripts, and reading/writing ~/.veto/veto.db directly. That
+// produces fabricated, unscoped results (wrong project_dir, faked council verdicts) and
+// corrupts state. This directive tells every client that the veto_* tools are live and must
+// be called directly.
+const TOOL_USAGE_DIRECTIVE =
+  'IMPORTANT — Veto tools are live MCP tools, available right now in this session. When the ' +
+  'user names a Veto action (e.g. `veto_continue`, `veto_session_save`, `veto_council_debate`, ' +
+  'or any `veto_*`), CALL that MCP tool directly with the given arguments. Do NOT reconstruct a ' +
+  "tool's behavior by reading Veto's source code, writing node scripts, or reading/writing " +
+  '~/.veto/veto.db by hand — that yields fabricated, wrongly-scoped results and corrupts state. ' +
+  'If the exact name has no match, call the closest veto_* tool (e.g. `veto_save_session` → ' +
+  '`veto_session_save`).';
+
 // Startup nudges surfaced to the agent via the MCP `instructions` field (computed once
-// at startup, non-blocking). Two independent tips, each self-resolving:
+// at startup, non-blocking). The usage directive above is always present; the rest are
+// independent, self-resolving tips:
 //   • versionUpdateInstruction() — a newer Veto is on npm; restart to pick it up.
 //   • statuslineSetupInstruction() — until the user enables the Veto status line.
 // Neither can be an interactive stdio prompt (the stdio channel is JSON-RPC), so we
 // hand the offer to the agent, which relays it to the user.
-const instructions = [versionUpdateInstruction(), statuslineSetupInstruction()]
+const instructions = [TOOL_USAGE_DIRECTIVE, versionUpdateInstruction(), statuslineSetupInstruction()]
   .filter(Boolean)
   .join('\n\n') || undefined;
 

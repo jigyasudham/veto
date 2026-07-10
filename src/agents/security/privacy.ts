@@ -1,4 +1,4 @@
-import type { AgentPlan } from '../types.js';
+import type { AgentPlan, AgentAnalysis, AgentFinding, FindingSeverity } from '../types.js';
 
 // ─── Data-type detection ───────────────────────────────────────────────────
 
@@ -281,5 +281,161 @@ export function plan(task: string, context?: string): AgentPlan {
     pitfalls: PITFALLS[scenario],
     patterns: PATTERNS[scenario],
     duration_estimate: context?.includes('enterprise') ? '2-4 weeks' : durationMap[scenario],
+  };
+}
+
+// ─── PII / privacy check patterns ──────────────────────────────────────────
+//
+// Scope: personal-data EXPOSURE risks (GDPR/CCPA), deliberately distinct from
+// the `secrets` agent (credentials) and `security-scanner` (OWASP injection/authz).
+// Checks are ordered by priority — one finding per source line (first match wins).
+
+interface PrivacyCheck {
+  regex: RegExp;
+  severity: FindingSeverity;
+  category: string;
+  description: string;
+  fix: string;
+  cwe?: string;
+}
+
+const CHECKS: PrivacyCheck[] = [
+  // Personal data written to logs — the single most common privacy leak.
+  {
+    regex: /(?:console\.(?:log|info|warn|error|debug)|logger?\.\w+|log\.\w+)\s*\([^)]*\b(?:e-?mail|ssn|social_?security|passport|phone|dob|date_?of_?birth|first_?name|last_?name|full_?name|home_?address|credit_?card)\b/i,
+    severity: 'high',
+    category: 'PII in Logs',
+    description: 'Personal data appears to be written to logs — logs are often retained, shipped to third parties, and searchable.',
+    fix: 'Never log personal data. Log an opaque user id instead, or redact PII fields before passing them to the logger.',
+    cwe: 'CWE-532',
+  },
+  // Real US Social Security Number literal in source.
+  {
+    regex: /\b\d{3}-\d{2}-\d{4}\b/,
+    severity: 'high',
+    category: 'Hardcoded PII',
+    description: 'A value matching a US Social Security Number (NNN-NN-NNNN) is present in source.',
+    fix: 'Remove real personal data from source and tests. Use clearly-synthetic fixtures (e.g. 000-00-0000).',
+    cwe: 'CWE-359',
+  },
+  // Payment card number literal (Visa / Mastercard / Amex).
+  {
+    regex: /\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\b/,
+    severity: 'high',
+    category: 'Hardcoded PII',
+    description: 'A value matching a payment-card number is present in source (PCI-DSS scope).',
+    fix: 'Never store raw card numbers. Use a PCI-compliant processor token; keep synthetic PANs out of source.',
+    cwe: 'CWE-359',
+  },
+  // Personal data forwarded to analytics / third-party SDKs.
+  {
+    regex: /(?:analytics|mixpanel|amplitude|segment|posthog|gtag|fbq|heap)\s*[.(][^;]{0,120}\b(?:e-?mail|ssn|phone|full_?name|user_?email)\b/i,
+    severity: 'medium',
+    category: 'PII Shared With Third Party',
+    description: 'Personal data appears to be sent to an analytics or third-party SDK, which usually requires a lawful basis and a DPA.',
+    fix: 'Pseudonymise before sending (hash/opaque id), obtain consent, and confirm a Data Processing Agreement covers the field.',
+    cwe: 'CWE-359',
+  },
+  // Special-category (Art. 9) / health data handling.
+  {
+    regex: /\b(?:diagnosis|medical_?record|health_?record|patient_?data|biometric|fingerprint_?data|genetic|ethnicity|religion|sexual_?orientation)\b/i,
+    severity: 'medium',
+    category: 'Special Category Data (GDPR Art. 9)',
+    description: 'Special-category personal data is referenced — it carries stricter consent and safeguarding obligations.',
+    fix: 'Require explicit consent, encrypt at rest, restrict access, and document the Art. 9 processing condition.',
+    cwe: 'CWE-359',
+  },
+  // Analytics/tracking initialised with no visible consent gate.
+  {
+    regex: /\b(?:gtag\s*\(\s*['"]config['"]|fbq\s*\(\s*['"]init['"]|ga\s*\(\s*['"]create['"])/,
+    severity: 'medium',
+    category: 'Tracking Without Consent',
+    description: 'A tracking pixel/analytics tag is initialised directly — under ePrivacy it must be gated behind opt-in consent.',
+    fix: 'Load tracking only after the user grants consent via a consent-management platform; block it by default.',
+    cwe: 'CWE-359',
+  },
+  // PII placed in a URL / query string (leaks into logs, referrers, history).
+  {
+    regex: /[?&](?:e-?mail|ssn|phone|dob|full_?name)=/i,
+    severity: 'medium',
+    category: 'PII in URL',
+    description: 'Personal data is passed in a URL query string, which leaks into server logs, browser history and Referer headers.',
+    fix: 'Move personal data out of the URL into a POST body or an opaque token.',
+    cwe: 'CWE-598',
+  },
+  // PII persisted to browser storage.
+  {
+    regex: /(?:localStorage|sessionStorage)\s*\.\s*setItem\s*\(\s*['"][^'"]*(?:e-?mail|ssn|phone|full_?name|dob)[^'"]*['"]/i,
+    severity: 'low',
+    category: 'PII in Client Storage',
+    description: 'Personal data is stored in browser storage, which is unencrypted and readable by any script on the page.',
+    fix: 'Keep PII server-side keyed by an opaque session id; store only non-identifying flags in the browser.',
+    cwe: 'CWE-359',
+  },
+  // Analytics explicitly configured NOT to anonymise IPs.
+  {
+    regex: /anonymize_?ip\s*[:=]\s*false/i,
+    severity: 'low',
+    category: 'Analytics IP Not Anonymised',
+    description: 'IP anonymisation is explicitly disabled — the full IP is personal data under GDPR.',
+    fix: 'Enable IP anonymisation (e.g. anonymize_ip: true) or avoid collecting the full address.',
+    cwe: 'CWE-359',
+  },
+];
+
+// ─── Analysis API ──────────────────────────────────────────────────────────
+
+export function analyze(code: string, context?: string): AgentAnalysis {
+  const findings: AgentFinding[] = [];
+  const lines = code.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    for (const check of CHECKS) {
+      if (check.regex.test(line)) {
+        const finding: AgentFinding = {
+          severity: check.severity,
+          category: check.category,
+          description: check.description,
+          fix: check.fix,
+          location: `line ${i + 1}`,
+        };
+        if (check.cwe) finding.cwe = check.cwe;
+        findings.push(finding);
+        break; // one finding per line — highest-priority check wins
+      }
+    }
+  }
+
+  const critical = findings.filter(f => f.severity === 'critical').length;
+  const high = findings.filter(f => f.severity === 'high').length;
+  const medium = findings.filter(f => f.severity === 'medium').length;
+  const low = findings.filter(f => f.severity === 'low').length;
+
+  const raw = 100 - (critical * 25 + high * 10 + medium * 5 + low * 2);
+  const score = Math.max(0, raw);
+
+  const verdict: AgentAnalysis['verdict'] =
+    score >= 90 ? 'approved'
+    : score >= 70 ? 'approved_with_warnings'
+    : score >= 50 ? 'needs_revision'
+    : 'rejected';
+
+  const subject = context ?? 'provided code';
+
+  const summary =
+    findings.length === 0
+      ? `No personal-data exposure risks detected in ${subject}. Score: ${score}/100.`
+      : `Found ${findings.length} privacy issue(s) in ${subject}: ${critical} critical, ${high} high, ${medium} medium, ${low} low. Score: ${score}/100 — ${verdict.replace(/_/g, ' ')}.`;
+
+  return {
+    agent: 'privacy',
+    subject,
+    findings,
+    score,
+    verdict,
+    summary,
+    critical_count: critical,
+    high_count: high,
   };
 }
