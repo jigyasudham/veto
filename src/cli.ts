@@ -970,6 +970,51 @@ async function statuslineCommand() {
   process.exit(1);
 }
 
+async function transcriptsCommand() {
+  const sub = process.argv[3] ?? 'status';
+  const { enableCapture, disableCapture, captureStatus, consentText } = await import('./transcripts/config.js');
+
+  if (sub === 'enable') {
+    const r = enableCapture();
+    console.log('');
+    console.log(c.green(c.bold('  ✓ Transcript capture enabled')));
+    console.log('');
+    console.log('  ' + consentText(r.dir, r.retention_days).replace(/\n/g, '\n  '));
+    console.log('');
+    if (r.reconsented) console.log(c.dim('  (Disclosure changed since you last enabled — consent re-recorded.)\n'));
+    return;
+  }
+
+  if (sub === 'disable') {
+    disableCapture();
+    console.log('');
+    console.log(c.yellow('  ✓ Transcript capture disabled.') + c.dim(' Existing archives are kept — remove them with: veto transcripts purge'));
+    console.log('');
+    return;
+  }
+
+  if (sub === 'status') {
+    const s = captureStatus();
+    console.log('');
+    console.log(c.bold('  Veto Transcript Capture'));
+    console.log(c.dim('  ─────────────────────────────────────────────────────'));
+    const state = s.effective ? c.green('enabled') : s.needsReconsent ? c.yellow('needs re-consent — run: veto transcripts enable') : c.dim('disabled');
+    console.log(`  Capture:     ${state}`);
+    console.log(`  Archive dir: ${c.dim(s.dir)}${s.usingDefaultDir ? c.dim('  (default)') : ''}`);
+    console.log(`  Retention:   ${s.retention_days} days`);
+    if (s.consent_at) console.log(`  Consent:     ${c.dim(`v${s.consent_version} · accepted ${s.consent_at}`)}`);
+    if (s.cloudSyncWarning) console.log(c.yellow(`  ⚠ Archive dir looks cloud-synced (${s.cloudSyncWarning}) — consider a local path.`));
+    console.log('');
+    console.log(c.dim('  Enable: veto transcripts enable    Disable: veto transcripts disable'));
+    console.log('');
+    return;
+  }
+
+  console.error(c.red(`  Unknown transcripts subcommand: ${sub}`));
+  console.error(c.dim('  Usage: veto transcripts <enable|disable|status>'));
+  process.exit(1);
+}
+
 function shortHelpCommand() {
   console.log('');
   console.log(c.bold(c.cyan('  veto')) + c.dim(` v${VERSION}`) + c.dim(` — 93 agentic tools. 49 specialists. Every major AI CLI. Zero extra cost on subscriptions.`));
@@ -988,6 +1033,8 @@ function shortHelpCommand() {
   console.log(`                         Routing feedback loop (opt-in signal storage)`);
   console.log(`  ${c.cyan('veto statusline')} ${c.dim('[install|uninstall|print|status]')}`);
   console.log(`                         Compact Veto line under your AI CLI prompt`);
+  console.log(`  ${c.cyan('veto transcripts')} ${c.dim('[enable|disable|status]')}`);
+  console.log(`                         Opt-in local session-transcript capture (off by default)`);
   console.log(`  ${c.cyan('veto version')}                 Show version (alias for status)`);
   console.log(`  ${c.cyan('veto hook install')}            Install pre-commit secrets scan hook`);
   console.log(`  ${c.cyan('veto hook remove')}             Remove the veto pre-commit hook`);
@@ -1490,6 +1537,13 @@ switch (command) {
 
   case 'statusline':
     statuslineCommand().catch((err) => {
+      console.error(c.red(`Error: ${err.message}`));
+      process.exit(1);
+    });
+    break;
+
+  case 'transcripts':
+    transcriptsCommand().catch((err) => {
       console.error(c.red(`Error: ${err.message}`));
       process.exit(1);
     });
