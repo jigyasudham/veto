@@ -9,10 +9,11 @@
 
 import { getTranscriptsDb } from './store.js';
 
-const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
-const FILE_RE = /"(?:file_path|filePath|notebook_path|file|path)"\s*:\s*"([^"]+)"/;
-const COMMAND_RE = /"command"\s*:\s*"([^"]+)"/;
-const ERROR_RE = /\b(error|errno|failed|failure|exception|traceback|not found|cannot|denied|refused|non-zero|exit code [1-9])\b/i;
+// Shared deterministic extractors (reused by the TOC in Step 9).
+export const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+export const FILE_RE = /"(?:file_path|filePath|notebook_path|file|path)"\s*:\s*"([^"]+)"/;
+export const COMMAND_RE = /"command"\s*:\s*"([^"]+)"/;
+export const ERROR_RE = /\b(error|errno|failed|failure|exception|traceback|not found|cannot|denied|refused|non-zero|exit code [1-9])\b/i;
 
 export type SpineEntry = { seq: number; role: string; kind: string; ts: string | null; text: string };
 
