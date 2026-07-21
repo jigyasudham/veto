@@ -91,6 +91,17 @@ export const sessionHandlers: HandlerMap = {
     } else {
       result = saveSession(sessionInput);
     }
+    // Best-effort transcript capture (VERSION-3 item 6): archive this session's host
+    // transcript for later recall. Gated on opt-in + Claude; NEVER throws or blocks
+    // correctness — any failure is swallowed so a save can never break on capture.
+    try {
+      const { isCaptureEnabled } = await import('../../transcripts/config.js');
+      if (savePlatform === 'claude' && isCaptureEnabled()) {
+        const { captureSession } = await import('../../transcripts/archive.js');
+        await captureSession({ source: 'claude', projectDir: sessionProjectDir, vetoSessionId: result.session_id });
+      }
+    } catch { /* transcript capture is best-effort; never breaks save */ }
+
     // Cache for auto-save: future veto_status calls with high token_count will re-save this context
     const resolvedWindow = resolveContextWindow(savePlatform, saveModel);
     autoSave.cached = { summary: saveSummary, context: saveContext, task_state: saveTaskState, platform: savePlatform, project_dir: sessionProjectDir, context_window: resolvedWindow };
