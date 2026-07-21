@@ -8,7 +8,13 @@
 // re-open is idempotent.
 
 // Highest migration version defined below.
-export const TRANSCRIPTS_SCHEMA_VERSION = 1;
+export const TRANSCRIPTS_SCHEMA_VERSION = 2;
+
+// The common vocabulary every source normalizes into.
+export const EVENT_KINDS = [
+  'user_message', 'assistant_message', 'tool_call', 'tool_result', 'reasoning', 'meta', 'unknown',
+] as const;
+export type EventKind = (typeof EVENT_KINDS)[number];
 
 export type Migration = { version: number; up: string };
 
@@ -52,6 +58,41 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_session_map_project ON session_map(project_dir);
     `,
   },
+  {
+    // v2 — normalized events, one row per conversational unit derived from L0.
+    // text is ALWAYS masked (Step 3). raw_offset/raw_length point into the
+    // UNCOMPRESSED L0 bytes for exact expansion (Step 11). Unknown/unparsed lines
+    // are stored+ordered (kind='unknown') so format drift never loses data.
+    version: 2,
+    up: `
+      CREATE TABLE IF NOT EXISTS events (
+        id                TEXT PRIMARY KEY,
+        archive_id        TEXT NOT NULL,
+        source_session_id TEXT NOT NULL,
+        seq               INTEGER NOT NULL,        -- monotonic per archive, per event
+        line_index        INTEGER NOT NULL,        -- source JSONL line (0-based)
+        block_index       INTEGER NOT NULL DEFAULT 0,
+        kind              TEXT NOT NULL,           -- EVENT_KINDS
+        source_type       TEXT,                    -- verbatim source 'type' (user/assistant/system/…)
+        role              TEXT,
+        tool_name         TEXT,                    -- for tool_call/tool_result
+        text              TEXT,                    -- normalized + MASKED content for FTS
+        secret_count      INTEGER NOT NULL DEFAULT 0,
+        event_uuid        TEXT,                    -- native uuid (Claude)
+        parent_uuid       TEXT,                    -- native parentUuid (tree)
+        is_sidechain      INTEGER NOT NULL DEFAULT 0,
+        ts_source         TEXT,                    -- verbatim timestamp string
+        ts_utc            TEXT,                    -- normalized ISO
+        raw_offset        INTEGER NOT NULL DEFAULT 0,
+        raw_length        INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(archive_id, seq),
+        FOREIGN KEY (archive_id) REFERENCES archives(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_events_archive ON events(archive_id, seq);
+      CREATE INDEX IF NOT EXISTS idx_events_session ON events(source_session_id);
+      CREATE INDEX IF NOT EXISTS idx_events_kind    ON events(kind);
+    `,
+  },
 ];
 
 export type ArchiveRow = {
@@ -77,4 +118,26 @@ export type SessionMapRow = {
   transcript_path: string;
   project_dir: string | null;
   last_seen_at: string;
+};
+
+export type EventRow = {
+  id: string;
+  archive_id: string;
+  source_session_id: string;
+  seq: number;
+  line_index: number;
+  block_index: number;
+  kind: EventKind;
+  source_type: string | null;
+  role: string | null;
+  tool_name: string | null;
+  text: string | null;
+  secret_count: number;
+  event_uuid: string | null;
+  parent_uuid: string | null;
+  is_sidechain: number;
+  ts_source: string | null;
+  ts_utc: string | null;
+  raw_offset: number;
+  raw_length: number;
 };

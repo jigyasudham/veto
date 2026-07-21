@@ -39,6 +39,9 @@ const MASK_PATTERNS: MaskPattern[] = [
   { type: 'MongoDB URI Password', regex: /mongodb(?:\+srv)?:\/\/[^\s:@/]+:([^\s@/]+)@/i, group: 1 },
   { type: 'Postgres URI Password', regex: /postgres(?:ql)?:\/\/[^\s:@/]+:([^\s@/]+)@/i, group: 1 },
   { type: 'MySQL URI Password', regex: /mysql:\/\/[^\s:@/]+:([^\s@/]+)@/i, group: 1 },
+  // JSON-style "key":"value" (tool inputs are JSON) — the quote sits before the
+  // colon, so the key[:=]value patterns above don't catch it.
+  { type: 'JSON secret field', regex: /"(?:password|passwd|secret|token|api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|client[_-]?secret|jwt[_-]?secret|auth[_-]?token|private[_-]?key|passphrase)"\s*:\s*"([^"]{4,})"/i, group: 1 },
   { type: 'API Key (generic)', regex: /(?:api[_-]?key)\s*[:=]\s*['"]([A-Za-z0-9_-]{20,})['"]/i, group: 1 },
   { type: 'JWT Secret', regex: /jwt_secret\s*[:=]\s*['"]([^'"]{8,})['"]/i, group: 1 },
   { type: 'Password', regex: /password\s*[:=]\s*['"]([^'"]{4,})['"]/i, group: 1 },

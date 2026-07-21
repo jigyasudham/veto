@@ -110,12 +110,12 @@ export async function captureSession(opts: CaptureOptions = {}): Promise<Capture
     const formatHint = source === 'claude' ? 'claude-jsonl' : source;
     const id = existing?.id ?? randomUUID();
     if (existing) {
-      // Content changed (grew): overwrite the row, reset the index watermark so
-      // Step 6 re-derives from the new bytes.
+      // Content changed (grew): overwrite the row, reset the index watermark AND
+      // parser_version so Step 6 re-derives events from the new bytes.
       db.prepare(
         `UPDATE archives SET archive_path=?, content_sha256=?, source_bytes=?, archive_bytes=?,
            project_dir=COALESCE(?, project_dir), veto_session_id=COALESCE(?, veto_session_id),
-           updated_at=?, indexed_through_seq=0 WHERE id=?`
+           updated_at=?, indexed_through_seq=0, parser_version=0 WHERE id=?`
       ).run(archivePath, sha256, bytes, archiveBytes, proj, opts.vetoSessionId ?? null, now, id);
     } else {
       db.prepare(
