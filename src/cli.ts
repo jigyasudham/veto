@@ -972,6 +972,7 @@ async function statuslineCommand() {
 
 async function transcriptsCommand() {
   const sub = process.argv[3] ?? 'status';
+  const args = process.argv.slice(4);
   const { enableCapture, disableCapture, captureStatus, consentText } = await import('./transcripts/config.js');
 
   if (sub === 'enable') {
@@ -995,6 +996,8 @@ async function transcriptsCommand() {
 
   if (sub === 'status') {
     const s = captureStatus();
+    const { transcriptsDiskUsage, fmtBytes } = await import('./transcripts/manage.js');
+    let disk; try { disk = transcriptsDiskUsage(); } catch { disk = null; }
     console.log('');
     console.log(c.bold('  Veto Transcript Capture'));
     console.log(c.dim('  ─────────────────────────────────────────────────────'));
@@ -1002,16 +1005,70 @@ async function transcriptsCommand() {
     console.log(`  Capture:     ${state}`);
     console.log(`  Archive dir: ${c.dim(s.dir)}${s.usingDefaultDir ? c.dim('  (default)') : ''}`);
     console.log(`  Retention:   ${s.retention_days} days`);
+    if (disk) console.log(`  Disk usage:  ${fmtBytes(disk.totalBytes)} ${c.dim(`(${disk.archives} session(s); ${fmtBytes(disk.archiveBytes)} archives + ${fmtBytes(disk.dbBytes)} index)`)}`);
     if (s.consent_at) console.log(`  Consent:     ${c.dim(`v${s.consent_version} · accepted ${s.consent_at}`)}`);
     if (s.cloudSyncWarning) console.log(c.yellow(`  ⚠ Archive dir looks cloud-synced (${s.cloudSyncWarning}) — consider a local path.`));
     console.log('');
-    console.log(c.dim('  Enable: veto transcripts enable    Disable: veto transcripts disable'));
+    console.log(c.dim('  enable · disable · list · show <id> · purge <id>|--project <dir>|--all'));
+    console.log('');
+    return;
+  }
+
+  if (sub === 'list') {
+    const { listArchives, fmtBytes } = await import('./transcripts/manage.js');
+    const projFlag = args.find(a => a.startsWith('--project='))?.split('=')[1];
+    const rows = listArchives({ projectDir: projFlag });
+    console.log('');
+    console.log(c.bold(`  Archived transcripts${projFlag ? ` (project ${projFlag})` : ''}`));
+    console.log(c.dim('  ─────────────────────────────────────────────────────'));
+    if (rows.length === 0) console.log(c.dim('  (none captured yet)'));
+    for (const r of rows) {
+      console.log(`  ${c.cyan(r.sourceSessionId)}  ${c.dim(r.source)}  ${r.events} ev  ${fmtBytes(r.archiveBytes)}  ${c.dim(r.updatedAt)}${r.indexed ? '' : c.yellow(' (unindexed)')}`);
+      if (r.projectDir) console.log(`     ${c.dim(r.projectDir)}`);
+    }
+    console.log('');
+    return;
+  }
+
+  if (sub === 'show') {
+    const id = args[0];
+    if (!id) { console.error(c.red('  Usage: veto transcripts show <source_session_id>')); process.exit(1); }
+    const { showArchive, fmtBytes } = await import('./transcripts/manage.js');
+    const { renderTOC } = await import('./transcripts/toc.js');
+    const { renderFacts } = await import('./transcripts/pyramid.js');
+    const d = showArchive(id);
+    if (!d) { console.error(c.red(`  No archive for session ${id}`)); process.exit(1); }
+    console.log('');
+    console.log(c.bold(`  Transcript ${id}`));
+    console.log(c.dim('  ─────────────────────────────────────────────────────'));
+    console.log(`  ${d.summary.events} events · ${fmtBytes(d.summary.archiveBytes)} · captured ${d.summary.capturedAt}`);
+    console.log('');
+    console.log(c.bold('  Facts')); console.log('  ' + renderFacts(d.facts).replace(/\n/g, '\n  '));
+    console.log('');
+    console.log(c.bold(`  Table of contents (${d.toc.length} phases)`));
+    console.log('  ' + renderTOC(d.toc).replace(/\n/g, '\n  '));
+    console.log('');
+    return;
+  }
+
+  if (sub === 'purge') {
+    const { purgeSession, purgeProject, purgeAll } = await import('./transcripts/manage.js');
+    const projFlag = args.find(a => a.startsWith('--project='))?.split('=')[1];
+    const all = args.includes('--all');
+    const id = args.find(a => !a.startsWith('--'));
+    let r;
+    if (all) r = purgeAll();
+    else if (projFlag) r = purgeProject(projFlag);
+    else if (id) r = purgeSession(id);
+    else { console.error(c.red('  Usage: veto transcripts purge <source_session_id> | --project=<dir> | --all')); process.exit(1); }
+    console.log('');
+    console.log(c.green(`  ✓ Purged ${r.archives} archive(s): ${r.events} events, ${r.ftsRows} index rows, ${r.files} file(s), ${r.mappings} mapping(s) removed.`));
     console.log('');
     return;
   }
 
   console.error(c.red(`  Unknown transcripts subcommand: ${sub}`));
-  console.error(c.dim('  Usage: veto transcripts <enable|disable|status>'));
+  console.error(c.dim('  Usage: veto transcripts <enable|disable|status|list|show|purge>'));
   process.exit(1);
 }
 
