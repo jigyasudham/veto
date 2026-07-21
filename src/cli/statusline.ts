@@ -186,6 +186,10 @@ export function composeStatusline(data: StatuslineData, opts: ComposeOptions = {
 // We read the pre-computed context-window usage plus the live rate-limit gauges;
 // everything else is ignored. See https://code.claude.com/docs/en/statusline.
 export interface ClaudeStatusInput {
+  // Present on every Claude Code statusLine render; used by transcript capture
+  // (VERSION-3 item 6) to map the live session to its on-disk transcript file.
+  session_id?: string | null;
+  transcript_path?: string | null;
   context_window?: { used_percentage?: number | null } | null;
   rate_limits?: {
     five_hour?: { used_percentage?: number | null } | null;
@@ -236,6 +240,33 @@ export function parseClaudeCwd(raw: string): string | null {
     const j = JSON.parse(raw) as ClaudeStatusInput;
     const dir = j?.workspace?.current_dir ?? j?.workspace?.project_dir ?? j?.cwd;
     return typeof dir === 'string' && dir.length > 0 ? dir : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface ClaudeSessionRef {
+  sessionId: string;
+  transcriptPath: string;
+  projectDir: string | null;
+}
+
+// Extract the live session's id + transcript path (+ workspace dir) from the stdin
+// payload, for transcript-capture mapping. Returns null unless BOTH ids are present —
+// so a Claude Code build that omits them (or bad/empty JSON) degrades to "no mapping"
+// and capture later no-ops, rather than guessing.
+export function parseClaudeSession(raw: string): ClaudeSessionRef | null {
+  try {
+    const j = JSON.parse(raw) as ClaudeStatusInput;
+    const sessionId = typeof j?.session_id === 'string' && j.session_id.length > 0 ? j.session_id : null;
+    const transcriptPath = typeof j?.transcript_path === 'string' && j.transcript_path.length > 0 ? j.transcript_path : null;
+    if (!sessionId || !transcriptPath) return null;
+    const dir = j?.workspace?.current_dir ?? j?.workspace?.project_dir ?? j?.cwd;
+    return {
+      sessionId,
+      transcriptPath,
+      projectDir: typeof dir === 'string' && dir.length > 0 ? dir : null,
+    };
   } catch {
     return null;
   }
@@ -308,6 +339,34 @@ export async function printStatusline(opts: ComposeOptions = {}, capturePath?: s
     try { process.stdout.write(line + '\n', () => resolve()); }
     catch { resolve(); }
   });
+
+  // AFTER the line is flushed (so this never delays the prompt): fire-and-forget
+  // session-mapping write. Best-effort — see maybeRecordSessionMapping.
+  await maybeRecordSessionMapping(raw);
+}
+
+// The hot-path fire-and-forget mapping write, extracted so the gate is unit-testable
+// without mocking stdin. Only writes when transcript capture is opted-in AND the
+// payload carries both a session id and transcript path. Never throws; returns
+// whether a mapping was recorded. Non-users pay only one config read and stop.
+export async function maybeRecordSessionMapping(raw: string | null): Promise<boolean> {
+  if (!raw) return false;
+  try {
+    const { isCaptureEnabled } = await import('../transcripts/config.js');
+    if (!isCaptureEnabled()) return false;
+    const ref = parseClaudeSession(raw);
+    if (!ref) return false;
+    const { recordSessionMapping } = await import('../transcripts/mapping.js');
+    recordSessionMapping({
+      source: 'claude',
+      sourceSessionId: ref.sessionId,
+      transcriptPath: ref.transcriptPath,
+      projectDir: ref.projectDir,
+    });
+    return true;
+  } catch {
+    return false; // mapping is best-effort; never affects the prompt
+  }
 }
 
 // ─── settings.json install / uninstall ─────────────────────────────────────────
