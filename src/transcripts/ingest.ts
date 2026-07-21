@@ -12,7 +12,9 @@ import { gunzipSync } from 'node:zlib';
 import { randomUUID } from 'node:crypto';
 import { getTranscriptsDb } from './store.js';
 import { parseClaudeTranscript } from './adapters/claude.js';
-import type { ArchiveRow, EventRow } from './schema.js';
+import { SEARCHABLE_KINDS, type ArchiveRow, type EventRow } from './schema.js';
+
+const SEARCHABLE = new Set<string>(SEARCHABLE_KINDS);
 
 // Bump when the parser changes in a way that should re-derive existing archives.
 export const PARSER_VERSION = 1;
@@ -58,15 +60,25 @@ export function ingestArchive(archiveId: string): IngestResult {
          ts_source, ts_utc, raw_offset, raw_length)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
+    const insFts = db.prepare(
+      `INSERT INTO events_fts (text, event_id, archive_id, source_session_id, project_dir, seq, kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
     db.exec('BEGIN');
     try {
       db.prepare(`DELETE FROM events WHERE archive_id = ?`).run(archiveId);
+      db.prepare(`DELETE FROM events_fts WHERE archive_id = ?`).run(archiveId);
       for (const e of events) {
+        const eventId = randomUUID();
         ins.run(
-          randomUUID(), archiveId, row.source_session_id, e.seq, e.lineIndex, e.blockIndex, e.kind,
+          eventId, archiveId, row.source_session_id, e.seq, e.lineIndex, e.blockIndex, e.kind,
           e.sourceType, e.role, e.toolName, e.text, e.secretCount, e.eventUuid, e.parentUuid, e.isSidechain ? 1 : 0,
           e.tsSource, e.tsUtc, e.rawOffset, e.rawLength,
         );
+        // Index the searchable, non-empty events into FTS (text is already masked).
+        if (SEARCHABLE.has(e.kind) && e.text && e.text.trim()) {
+          insFts.run(e.text, eventId, archiveId, row.source_session_id, row.project_dir, e.seq, e.kind);
+        }
       }
       db.prepare(`UPDATE archives SET indexed_through_seq = ?, parser_version = ? WHERE id = ?`)
         .run(events.length, PARSER_VERSION, archiveId);

@@ -8,7 +8,7 @@
 // re-open is idempotent.
 
 // Highest migration version defined below.
-export const TRANSCRIPTS_SCHEMA_VERSION = 2;
+export const TRANSCRIPTS_SCHEMA_VERSION = 3;
 
 // The common vocabulary every source normalizes into.
 export const EVENT_KINDS = [
@@ -93,7 +93,30 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_events_kind    ON events(kind);
     `,
   },
+  {
+    // v3 — FTS5 lexical index over the spine + tool digests (B2). Standalone
+    // (not external-content) so DELETE-by-archive on re-ingest is simple. Porter
+    // stemming; identifiers survive as exact tokens. Metadata columns are
+    // UNINDEXED (stored, filterable, not tokenized). Verified in node:sqlite v24.
+    version: 3,
+    up: `
+      CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+        text,
+        event_id UNINDEXED,
+        archive_id UNINDEXED,
+        source_session_id UNINDEXED,
+        project_dir UNINDEXED,
+        seq UNINDEXED,
+        kind UNINDEXED,
+        tokenize = 'porter unicode61'
+      );
+    `,
+  },
 ];
+
+// Event kinds worth indexing for recall — spine + tool digests. Reasoning
+// (verbose thinking) and meta/unknown are excluded.
+export const SEARCHABLE_KINDS: EventKind[] = ['user_message', 'assistant_message', 'tool_call', 'tool_result'];
 
 export type ArchiveRow = {
   id: string;

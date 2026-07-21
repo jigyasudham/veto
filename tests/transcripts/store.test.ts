@@ -46,11 +46,12 @@ describe('transcripts sidecar DB — foundation', () => {
   it('opens at the current schema version with the foundation tables', () => {
     const db = getTranscriptsDb();
     expect(schemaVersion(db)).toBe(TRANSCRIPTS_SCHEMA_VERSION);
-    expect(schemaVersion(db)).toBe(2);
+    expect(schemaVersion(db)).toBe(3);
     const tables = tableNames(db);
     expect(tables).toContain('archives');
     expect(tables).toContain('session_map');
     expect(tables).toContain('events');
+    expect(tables).toContain('events_fts');
   });
 
   it('runs in WAL with a busy_timeout (so the HUD can read veto.db uncontended)', () => {
