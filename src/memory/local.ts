@@ -445,6 +445,7 @@ export function updateSession(session_id: string, input: SaveSessionInput): Upda
       task_state  = ?,
       token_count = ?,
       save_type   = 'manual',
+      tags        = COALESCE(?, tags),
       created_at  = ?
     WHERE id = ?
   `).run(
@@ -452,6 +453,9 @@ export function updateSession(session_id: string, input: SaveSessionInput): Upda
     input.context ? JSON.stringify(input.context) : null,
     input.task_state ? JSON.stringify(input.task_state) : null,
     input.token_count ?? 0,
+    // Only overwrite tags when the caller supplies them; otherwise keep existing
+    // (COALESCE(NULL, tags) = tags). saveSession serializes tags the same way.
+    input.tags ? JSON.stringify(input.tags) : null,
     now,
     session_id
   );
@@ -475,14 +479,28 @@ export function restoreSession(session_id: string, active_client?: string): Rest
   return { found: true, session: row };
 }
 
+const SEARCH_COLUMNS = ['summary', 'context', 'task_state', 'tags', 'project_dir'] as const;
+
 export function listSessions(limit = 10, query?: string): SessionRow[] {
   const db = getDb();
-  if (query) {
-    const q = `%${query}%`;
+  // Tokenize the query: each whitespace-separated term must appear in at least one
+  // searchable column (AND across terms, OR across columns). The old code used the
+  // WHOLE query as a single LIKE pattern, so a multi-word query only matched an
+  // exact contiguous phrase — e.g. "transcript capture worktree" found nothing even
+  // when all three words were present. Cap terms to bound the query size.
+  const terms = query ? query.trim().split(/\s+/).filter(Boolean).slice(0, 12) : [];
+  if (terms.length > 0) {
+    const perTerm = `(${SEARCH_COLUMNS.map(c => `${c} LIKE ?`).join(' OR ')})`;
+    const whereClause = terms.map(() => perTerm).join(' AND ');
+    const params: (string | number)[] = [];
+    for (const t of terms) {
+      const like = `%${t}%`;
+      for (let i = 0; i < SEARCH_COLUMNS.length; i++) params.push(like);
+    }
+    params.push(limit);
     return db.prepare(
-      `SELECT * FROM sessions WHERE summary LIKE ? OR context LIKE ? OR task_state LIKE ? OR tags LIKE ? OR project_dir LIKE ?
-       ORDER BY created_at DESC LIMIT ?`
-    ).all(q, q, q, q, q, limit) as SessionRow[];
+      `SELECT * FROM sessions WHERE ${whereClause} ORDER BY created_at DESC LIMIT ?`
+    ).all(...params) as SessionRow[];
   }
   return db.prepare(
     'SELECT * FROM sessions ORDER BY created_at DESC LIMIT ?'
