@@ -20,6 +20,7 @@ const {
   captureStatus,
   detectCloudSync,
   consentText,
+  firstCaptureNote,
 } = await import('../../src/transcripts/config.js');
 const { getConfig, setConfig } = await import('../../src/memory/config.js');
 
@@ -127,6 +128,16 @@ describe('consent disclosure text', () => {
     expect(text).toContain('THIS machine only');
     expect(text.toLowerCase()).toContain('third parties');
     expect(text).toContain('veto transcripts disable');
+  });
+});
+
+describe('firstCaptureNote — one-time only', () => {
+  it('returns a note the first time, then null forever after', () => {
+    const first = firstCaptureNote();
+    expect(first).not.toBeNull();
+    expect(first).toContain('veto transcripts');
+    expect(firstCaptureNote()).toBeNull();
+    expect(firstCaptureNote()).toBeNull();
   });
 });
 

@@ -13,6 +13,7 @@ export type TranscriptsConfig = {
   retention_days: number;
   consent_version: number; // 0 = never consented
   consent_at: string | null;
+  first_capture_at: string | null; // set on first real capture; drives the one-time note
 };
 
 export type VetoConfig = {
@@ -56,6 +57,7 @@ export const DEFAULT_TRANSCRIPTS: TranscriptsConfig = {
   retention_days: 180,
   consent_version: 0,
   consent_at: null,
+  first_capture_at: null,
 };
 
 function normalizeTranscripts(raw: Partial<TranscriptsConfig> | undefined): TranscriptsConfig {
@@ -67,6 +69,7 @@ function normalizeTranscripts(raw: Partial<TranscriptsConfig> | undefined): Tran
       : DEFAULT_TRANSCRIPTS.retention_days,
     consent_version: typeof raw?.consent_version === 'number' ? raw.consent_version : 0,
     consent_at: typeof raw?.consent_at === 'string' ? raw.consent_at : null,
+    first_capture_at: typeof raw?.first_capture_at === 'string' ? raw.first_capture_at : null,
   };
 }
 

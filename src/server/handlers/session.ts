@@ -91,14 +91,14 @@ export const sessionHandlers: HandlerMap = {
     } else {
       result = saveSession(sessionInput);
     }
-    // Best-effort transcript capture (VERSION-3 item 6): archive this session's host
-    // transcript for later recall. Gated on opt-in + Claude; NEVER throws or blocks
-    // correctness — any failure is swallowed so a save can never break on capture.
+    // Best-effort transcript capture (VERSION-3 item 6): archive + index this session's
+    // host transcript for later recall, and surface the leak count / first-capture note.
+    // Gated on opt-in + Claude; NEVER throws or blocks correctness.
+    let transcriptOnSave: import('../../transcripts/on-save.js').OnSaveTranscript | null = null;
     try {
-      const { isCaptureEnabled } = await import('../../transcripts/config.js');
-      if (savePlatform === 'claude' && isCaptureEnabled()) {
-        const { captureSession } = await import('../../transcripts/archive.js');
-        await captureSession({ source: 'claude', projectDir: sessionProjectDir, vetoSessionId: result.session_id });
+      if (savePlatform === 'claude') {
+        const { captureOnSave } = await import('../../transcripts/on-save.js');
+        transcriptOnSave = await captureOnSave({ projectDir: sessionProjectDir, vetoSessionId: result.session_id });
       }
     } catch { /* transcript capture is best-effort; never breaks save */ }
 
@@ -136,6 +136,7 @@ export const sessionHandlers: HandlerMap = {
       ...(autoSumFailed ? { auto_summarize_warning: 'MCP Sampling unavailable — saved provided values instead. For best results use Claude Code or another host that supports sampling.' } : {}),
       ...(wasUpdate ? {} : { usage_pct: result.usage_pct, context_warning: result.context_warning }),
       ...(truncationWarnings.length > 0 ? { truncation_warnings: truncationWarnings } : {}),
+      ...(transcriptOnSave ? { transcript: transcriptOnSave } : {}),
     };
     if (result.continuation_prompt) responseObj.continuation_prompt = result.continuation_prompt;
 

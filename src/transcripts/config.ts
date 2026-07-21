@@ -76,6 +76,19 @@ export function disableCapture(): void {
   setConfig({ transcripts: { ...current, enabled: false } });
 }
 
+/**
+ * Returns a one-time note the FIRST time a real capture happens, then null
+ * forever after (records first_capture_at). Lets the save response tell the user
+ * capture is working without nagging on every save.
+ */
+export function firstCaptureNote(): string | null {
+  const current = getConfig().transcripts;
+  if (current.first_capture_at) return null;
+  setConfig({ transcripts: { ...current, first_capture_at: new Date().toISOString() } });
+  return 'Veto archived this session to your local transcript store (opt-in, on this machine only). '
+    + 'Recall past detail later with veto_session_replay; manage with `veto transcripts`.';
+}
+
 export type CaptureStatus = {
   enabled: boolean;
   effective: boolean; // enabled AND consent current
