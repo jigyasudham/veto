@@ -252,7 +252,7 @@ veto doctor
 
   Veto Doctor — system health check
   ─────────────────────────────────────────────────────
-  ✓ Node.js v22.5.0
+  ✓ Node.js v22.13.0
   ✓ ~/.veto exists
   ✓ Database ~/.veto/veto.db
     17 sessions · 12 memories · 3 patterns
@@ -536,7 +536,7 @@ Every handler module is importable in isolation, so behaviour is covered by `tes
 ## Tech Stack
 
 - **Language:** TypeScript (strict mode)
-- **Runtime:** Node.js 22.5+ (built-in `node:sqlite` — no native compilation)
+- **Runtime:** Node.js 22.13+ or 23.4+ (built-in `node:sqlite` — no native compilation). It exists from 22.5 but only behind `--experimental-sqlite`, so 22.13 is the real floor.
 - **Dependencies:** `@modelcontextprotocol/sdk` only — one package, zero native addons
 - **Memory:** Local SQLite — zero config, works offline, portable via JSON export
 - **Platforms:** Claude Code · Gemini CLI · Antigravity CLI · Codex CLI · Cursor · Windsurf · Zed

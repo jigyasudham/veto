@@ -18,7 +18,7 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { getDbPath, getDb, normalizeProjectDir } from '../memory/local.js';
 
-// node:sqlite is a Node 22.5+ built-in — use createRequire so bundlers skip it.
+// node:sqlite is unflagged from Node 22.13+/23.4+ — use createRequire so bundlers skip it.
 // Required lazily inside openReadOnly so importing this module (server.ts pulls in
 // statuslineSetupInstruction at startup) never dies on runtimes without node:sqlite.
 const _require = createRequire(import.meta.url);

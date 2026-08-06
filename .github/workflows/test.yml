@@ -23,9 +23,10 @@ jobs:
         # passed on Windows and failed on Linux purely on machine speed, so a
         # single-OS matrix can hide a real defect in either direction.
         os: [ubuntu-latest, windows-latest]
-        # 22.5 is the floor declared in package.json engines; 22 is the latest of
-        # that line; 24 is what development actually runs on.
-        node: ['22.5', '22', '24']
+        # 22.13 is the real floor — node:sqlite exists from 22.5 but only behind
+        # --experimental-sqlite until 22.13/23.4, and CI proved 22.5 red on both
+        # platforms. 22 is the latest of that line; 24 is what development runs on.
+        node: ['22.13', '22', '24']
 
     steps:
       - uses: actions/checkout@v7
