@@ -1,0 +1,46 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A superseded run on the same ref is not worth the minutes.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # package.json declares engines >=22.5, but the suite exercises
+        # node:sqlite, which is still flagged on the older 22.x line — a 22.5 job
+        # would need --experimental-sqlite and has not been validated against this
+        # suite yet. Add it here once someone confirms it is green, rather than
+        # landing a permanently red check.
+        node: ['24']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # npm install rather than npm ci: main's package-lock.json is stale at 2.1.1
+      # while package.json says 2.9.0, and npm ci refuses to run when the two are
+      # out of sync. The 3.0.0 PR regenerates the lock — switch this step to
+      # `npm ci` once that has merged.
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run build
+
+      - name: Test
+        run: npm test
