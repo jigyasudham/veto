@@ -60,6 +60,23 @@ describe('council verdict is scoped to the current project', () => {
     expect(readStatuslineData().verdict).toBe('GREEN');
   });
 
+  it('breaks a same-millisecond tie by insertion order, not arbitrarily', () => {
+    // debated_at has millisecond resolution and id is a random UUID, so two debates
+    // recorded in the same millisecond used to have no defined order — SQLite could
+    // return either. That made the "global newest" lookup a coin flip, which showed
+    // up only on machines fast enough to write both rows inside one millisecond.
+    // Force the collision instead of racing for it.
+    const first = outcome('RED', 'd:\\tie-a');
+    const second = outcome('GREEN', 'd:\\tie-b');
+    const ts = '2026-08-06T12:00:00.000Z';
+    getDb().prepare('UPDATE council_outcomes SET debated_at = ? WHERE id IN (?, ?)').run(ts, first, second);
+
+    // The row written second must win, both globally and per-project.
+    expect(readStatuslineData().verdict).toBe('GREEN');
+    expect(readStatuslineData('d:\\tie-a').verdict).toBe('RED');
+    expect(readStatuslineData('d:\\tie-b').verdict).toBe('GREEN');
+  });
+
   it('backfills project_dir from the linked session on migration', () => {
     // Simulate a legacy row: a session carries the project, the council row does not.
     const { session_id: sid } = saveSession({ platform: 'claude', project_dir: 'D:\\legacy-proj', summary: 's' });

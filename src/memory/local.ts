@@ -1,5 +1,5 @@
 // Local SQLite memory — all operations for session save/restore
-// Uses Node.js built-in node:sqlite (Node 22.5+, no native compilation needed)
+// Uses Node.js built-in node:sqlite (Node 22.13+/23.4+, no native compilation needed)
 
 import { createRequire } from 'node:module';
 import type { DatabaseSync } from 'node:sqlite';
@@ -8,7 +8,8 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { mkdirSync } from 'node:fs';
 
-// node:sqlite is a Node 22.5+ built-in — use createRequire so bundlers (Vite/esbuild) skip it.
+// node:sqlite ships behind a flag from 22.5 and is only unflagged in 22.13+/23.4+ — use
+// createRequire so bundlers (Vite/esbuild) skip it.
 // Loaded LAZILY so the server still starts (and lists all tools) on runtimes without it —
 // e.g. registry capability scanners or older Nodes. Persistence tools then fail per-call
 // with a clear message instead of the whole process dying at import time.
@@ -21,8 +22,8 @@ function requireDbSync(): typeof import('node:sqlite').DatabaseSync {
       _DbSync = (_require('node:sqlite') as typeof import('node:sqlite')).DatabaseSync;
     } catch {
       throw new Error(
-        `node:sqlite is not available on Node ${process.version} — Veto persistence needs Node >= 22.5 ` +
-        '(unflagged in 22.13+/23.4+). Memory, sessions, and learning are disabled until you upgrade ' +
+        `node:sqlite is not available on Node ${process.version} — Veto persistence needs Node ` +
+        '>= 22.13 (or >= 23.4). Memory, sessions, and learning are disabled until you upgrade ' +
         'Node; all other tools keep working.',
       );
     }
@@ -1077,7 +1078,9 @@ export type LatestCouncilOutcome = {
 export function getLatestCouncilOutcome(): LatestCouncilOutcome | null {
   const db = getDb();
   const row = db.prepare(
-    'SELECT verdict, recommended, task, debated_at FROM council_outcomes ORDER BY debated_at DESC LIMIT 1'
+    // rowid tie-breaks debates recorded in the same millisecond — see the matching
+    // query in src/cli/statusline.ts. Both must agree on what "latest" means.
+    'SELECT verdict, recommended, task, debated_at FROM council_outcomes ORDER BY debated_at DESC, rowid DESC LIMIT 1'
   ).get() as LatestCouncilOutcome | undefined;
   return row ?? null;
 }
