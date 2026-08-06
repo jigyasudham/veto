@@ -13,17 +13,19 @@ concurrency:
 
 jobs:
   test:
-    name: node ${{ matrix.node }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} · node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
     strategy:
+      # Report every combination — a partial matrix tells you less than nothing.
       fail-fast: false
       matrix:
-        # package.json declares engines >=22.5, but the suite exercises
-        # node:sqlite, which is still flagged on the older 22.x line — a 22.5 job
-        # would need --experimental-sqlite and has not been validated against this
-        # suite yet. Add it here once someone confirms it is green, rather than
-        # landing a permanently red check.
-        node: ['24']
+        # Both platforms, deliberately. The same-millisecond council-verdict bug
+        # passed on Windows and failed on Linux purely on machine speed, so a
+        # single-OS matrix can hide a real defect in either direction.
+        os: [ubuntu-latest, windows-latest]
+        # 22.5 is the floor declared in package.json engines; 22 is the latest of
+        # that line; 24 is what development actually runs on.
+        node: ['22.5', '22', '24']
 
     steps:
       - uses: actions/checkout@v7
@@ -44,3 +46,38 @@ jobs:
 
       - name: Test
         run: npm test
+
+  package:
+    name: package contents
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+      # The npm tarball must never carry internal docs, local databases, or
+      # captured transcripts. package.json's "files" allowlist is what enforces
+      # this today; this job fails the build if that allowlist is ever loosened,
+      # rather than finding out after publish.
+      - name: Assert the tarball ships nothing unexpected
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e '
+            const pack = JSON.parse(require("fs").readFileSync("pack.json", "utf8"));
+            const files = pack[0].files.map(f => f.path.replace(/\\/g, "/"));
+            const allowed = new Set(["README.md", "LICENSE", "package.json", "server.json"]);
+            const bad = files.filter(f => !f.startsWith("dist/") && !allowed.has(f));
+            if (bad.length) {
+              console.error("Unexpected files in the npm tarball:\n  " + bad.join("\n  "));
+              process.exit(1);
+            }
+            console.log(`OK — ${files.length} files, all within dist/ or the allowed root set.`);
+          '
