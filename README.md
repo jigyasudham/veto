@@ -76,7 +76,7 @@ The 7-agent **Council** is LLM-first — its value is the multi-agent debate —
 
 ---
 
-## MCP Tools (92)
+## MCP Tools (93)
 
 | Category | Tools |
 |---|---|
@@ -90,7 +90,7 @@ The 7-agent **Council** is LLM-first — its value is the multi-agent debate —
 | **Quality** | `veto_clone_detector` · `veto_lint_rules` · `veto_api_contract` · `veto_a11y_advisor` · `veto_type_coverage` · `veto_test_gaps` |
 | **Advisors** | `veto_dep_advisor` · `veto_dep_verify` · `veto_query_advisor` · `veto_bundle_advisor` · `veto_dead_code` · `veto_hitl_checkpoint` · `veto_drift_check` |
 | **Watching** | `veto_watch` · `veto_watch_poll` · `veto_watch_stop` |
-| **Memory** | `veto_memory_store` · `veto_memory_search` · `veto_memory_delete` · `veto_project_map_update` · `veto_project_map_get` · `veto_pattern_store` · `veto_patterns_list` · `veto_memory_export` · `veto_memory_import` |
+| **Memory** | `veto_memory_store` · `veto_memory_search` · `veto_memory_delete` · `veto_decisions` · `veto_project_map_update` · `veto_project_map_get` · `veto_pattern_store` · `veto_patterns_list` · `veto_memory_export` · `veto_memory_import` |
 | **Learning** | `veto_record_outcome` · `veto_learning_stats` · `veto_learning_apply` |
 | **Handoff** | `veto_handoff` · `veto_continue` · `veto_platform_setup` |
 | **Observability** | `veto_usage_status` · `veto_audit_log` · `veto_health` · `veto_metrics` · `veto_snapshot` |
