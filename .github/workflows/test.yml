@@ -35,12 +35,12 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      # npm install rather than npm ci: main's package-lock.json is stale at 2.1.1
-      # while package.json says 2.9.0, and npm ci refuses to run when the two are
-      # out of sync. The 3.0.0 PR regenerates the lock — switch this step to
-      # `npm ci` once that has merged.
+      # npm ci, not npm install: it installs strictly from the lockfile, so a run
+      # cannot silently drift onto different dependency versions than the ones
+      # pinned. Viable now that this PR brings package-lock.json back in sync with
+      # package.json (it had been stale at 2.1.1).
       - name: Install
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Typecheck
         run: npm run build
@@ -59,7 +59,7 @@ jobs:
           node-version: '24'
 
       - name: Install
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Build
         run: npm run build
