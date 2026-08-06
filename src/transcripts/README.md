@@ -57,9 +57,10 @@ Recall runs through `veto_session_replay` (two calls):
 ## Success metric (v3.0)
 
 Recall must surface exact detail a summary cannot. Validated against a real
-784-line Claude session (`src/transcripts/VALUE-GATE.md`): query
-`"smithery capability scan"` → 4 cited BM25 hits → expand to the exact line
-(turn 525, timestamped), which the ~1k-token L3 summary could not reconstruct. The
+784-line Claude session (3,010 KB → 1,306 KB L0 archive, 788 events, 23 TOC
+phases): a three-word query returned 4 cited BM25 hits, and expanding the top
+hit produced the exact source line — masked, attributed to its turn and
+timestamp — which the ~1k-token L3 summary could not reconstruct. The
 end-to-end suite (`tests/transcripts/e2e.test.ts`) proves the enable→save→recall→
 expand path and that a pasted secret never leaks through any stage.
 
