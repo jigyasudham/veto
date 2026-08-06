@@ -1,9 +1,15 @@
+# NOTE: package.json has a "files" allowlist (dist, server.json), which takes
+# precedence over this file. These rules are defence-in-depth in case that
+# allowlist is ever loosened.
+
 node_modules/
 src/
 tests/
-.claude/
 .git/
 .github/
+.claude/
+.mcp-tools/
+.antigravitycli/
 docs/
 scripts/
 
@@ -11,18 +17,41 @@ scripts/
 AGENTS.md
 BUGS.md
 PLAN.md
-VETO_VISION_FINAL.md
 Prelaunch.md
 improvements.md
+VETO_VISION_FINAL.md
+SMITHERY.md
+SMITHERY-SUPPORT-EMAIL.md
+PUBLISH-DIRECTORY.md
+VERSION-3.md
+VETO-MCP-DIAGNOSTIC.md
+MCP-REGISTRY.md
+LAUNCH-KIT.md
+metadata_session_summary_retrievel.md
+VALUE-GATE.md
+
+# Local state / secrets — must never ship
+*.db
+*.db-wal
+*.db-shm
+.veto/
+*.jsonl.gz
+.env
+.env.*
 
 # Build / test config (not needed by consumers of the built package)
 vitest.config.ts
 tsconfig.json
+Dockerfile
+.dockerignore
 
 # One-off maintenance/codemod scripts — never ship
 *.cjs
 
 # Artifacts
+*.mcpb
 *.tgz
 *.log
+coverage/
 .DS_Store
+Thumbs.db
