@@ -41,6 +41,11 @@ Recall runs through `veto_session_replay` (two calls):
 
 - **Off by default**; nothing is captured until `veto transcripts enable`. Consent
   is versioned; a material change re-prompts.
+- **It is a copy, and it outlives the original**: the host CLI's transcript file is
+  read, never modified — but Veto's archive is independent of it. Clearing the
+  client's own history (or the client rotating its logs) does NOT remove the
+  archive; only `veto transcripts purge` or the retention window does. The consent
+  disclosure states this explicitly, because it is the non-obvious part.
 - **Secrets never transit into an AI context**: detected + masked to
   `REDACTED[sha256:…]` on write into every derived layer AND again on every byte
   range served from L0. Raw L0 stays on disk only; `veto transcripts redact` is the

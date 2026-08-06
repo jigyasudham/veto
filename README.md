@@ -238,6 +238,8 @@ veto patterns [prefix]           # List learned agent/routing patterns
 veto tools [filter]              # List all 93 MCP tools (--json for machine output)
 veto agents [filter]             # List all 49 specialists — workers + council (--json)
 veto routing [status|log|reset]  # Inspect the opt-in routing feedback loop
+veto transcripts <sub>           # Opt-in transcript capture (off by default) —
+                                 #   enable|status|list|show|purge|disable
 veto hook install                # Install pre-commit secrets scan hook
 veto hook remove                 # Remove the veto pre-commit hook
 veto check                       # Scan staged changes for secrets (used by hook)
@@ -441,7 +443,46 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 
 ---
 
+## Session Transcript Capture (opt-in)
+
+`veto_session_save` writes a ~1k-token summary. That is enough to resume, but not enough to answer *"three weeks ago, what exactly did we conclude, and when?"* Transcript capture keeps the detail a summary throws away and makes it searchable — with no embeddings, no model downloads, and no API keys. It is a metadata table-of-contents plus SQLite FTS5/BM25, with your AI as the reranker, and it adds zero new runtime dependencies.
+
+> ### ⚠️ Read this before you enable it
+>
+> **Veto copies your AI client's own conversation memory.** On save, Veto archives a byte-for-byte copy of the host CLI's transcript file — every message you sent, every reply, and all tool activity — into its own local store.
+>
+> - **The copy is independent.** The original file is never modified, but Veto's copy outlives it. Clearing your AI client's history, or the client rotating its own logs, will **not** remove the archive. Only `veto transcripts purge` or the retention window does.
+> - **It inherits whatever was in the session.** Secrets, customer data, third parties' information — if you pasted it, it is in the archive. Detected secrets are masked everywhere an AI can read them, but the raw archive on disk is private data. Treat it like your shell history.
+> - **Local only.** Nothing is uploaded or shared. The archive directory deliberately avoids cloud-synced folders, and a sync path is flagged if one is detected.
+> - **Off until you say so.** Capture is disabled by default. `veto transcripts enable` prints this disclosure in full and records versioned consent; if the disclosure materially changes, you are re-prompted.
+
+```bash
+veto transcripts enable          # Opt in — prints what/where/retention, records consent
+veto transcripts status          # State, archive dir, retention, disk usage
+veto transcripts list            # Archived sessions
+veto transcripts show <id>       # One session's table-of-contents + facts
+veto transcripts purge <id>      # Delete an archive (also --project=<dir> | --all)
+veto transcripts disable         # Stop capturing (existing archives are kept)
+```
+
+Recall runs through `veto_session_replay` as a two-call loop — search, then expand:
+
+```
+{ query: "npm E404 publish" }   →  table-of-contents + top BM25 hits with snippets
+{ expand: { event_id: 412 } }   →  the exact lines, masked, with a turn + timestamp citation
+```
+
+Claude Code is the only adapter in 3.0.0; Codex and Gemini follow.
+
+---
+
 ## Release Notes
+
+### 3.0.0
+- **Never lose a session again — opt-in transcript capture with vectorless recall.** A saved session has always carried a ~1k-token summary, which is enough to resume but cannot answer "what exactly did we conclude three weeks ago, and when?" Veto can now archive a copy of your host CLI's own conversation transcript and build a memory pyramid over it — the raw gzipped original, deterministic facts, the conversation spine, and the existing summary — then search it with a metadata table-of-contents plus SQLite FTS5/BM25. No embeddings, no model downloads, no API keys, no new runtime dependencies. Recall is a two-call loop through `veto_session_replay`: query for a table-of-contents and ranked snippets, then expand a hit into the exact source lines with a turn-and-timestamp citation. Validated against a real 784-line session, where recall pinpointed a conclusion the summary could not reconstruct. Claude Code is the only adapter in this release.
+- **Capture is off until you turn it on, and it tells you exactly what it takes.** `veto transcripts enable` prints a plain-language disclosure — that Veto copies the AI client's own session memory, that the copy outlives the client's own history, that the archive inherits the sensitivity of anything you pasted, and where on disk it lands — then records versioned consent, re-prompting if that disclosure ever materially changes. Archives stay on your machine, are kept out of cloud-synced directories, are pruned on a configurable retention window, and are removed by `veto transcripts purge` as a true cascade with no orphan rows.
+- **Secrets cannot transit into an AI context.** Detected credentials are masked to `REDACTED[sha256:…]` on the way into every derived layer *and* again on every byte range served back out of the raw archive — so a secret sitting in an untouched original still cannot reach a model through recall. Recalled content is returned as data-not-instructions, and tool results are treated as untrusted input.
+- **`veto.db` is untouched.** All capture state lives in a sidecar `transcripts.db`, leaving the VS Code HUD's read-contract unaffected.
 
 ### 2.9.0
 - **Four more agents do real analysis.** The privacy, performance, auth, and compatibility agents were structured playbooks; they are now dual-mode analyzers with hand-written deterministic checks — PII/PHI handling, runtime anti-patterns, auth defects (e.g. JWT `alg: none`), and outdated-API usage — growing the analyze-capable roster from 8 to 12. Each is scoped to avoid duplicating the security scanner's and secrets agent's findings, and all keep their LLM upgrade path.
