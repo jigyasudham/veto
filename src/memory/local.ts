@@ -1059,7 +1059,9 @@ export type LatestCouncilOutcome = {
 export function getLatestCouncilOutcome(): LatestCouncilOutcome | null {
   const db = getDb();
   const row = db.prepare(
-    'SELECT verdict, recommended, task, debated_at FROM council_outcomes ORDER BY debated_at DESC LIMIT 1'
+    // rowid tie-breaks debates recorded in the same millisecond — see the matching
+    // query in src/cli/statusline.ts. Both must agree on what "latest" means.
+    'SELECT verdict, recommended, task, debated_at FROM council_outcomes ORDER BY debated_at DESC, rowid DESC LIMIT 1'
   ).get() as LatestCouncilOutcome | undefined;
   return row ?? null;
 }

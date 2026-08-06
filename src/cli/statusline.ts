@@ -91,10 +91,14 @@ function queryStatusline(db: DatabaseSync, projectDir?: string): StatuslineData 
     // shows the globally-newest debate, which may belong to a different project. When
     // projectDir is provided we do NOT fall back to another project's verdict; the
     // segment simply drops if this project has no council row yet.
+    // debated_at is an ISO string with millisecond resolution and `id` is a random
+    // UUID, so two debates recorded in the same millisecond have no ordering at all
+    // and SQLite is free to return either. Tie-break on rowid, which increments per
+    // insert, so "newest" always means the row written last.
     const scoped = projectDir ? normalizeProjectDir(projectDir) : undefined;
     const row = (scoped
-      ? db.prepare('SELECT verdict FROM council_outcomes WHERE project_dir = ? ORDER BY debated_at DESC LIMIT 1').get(scoped)
-      : db.prepare('SELECT verdict FROM council_outcomes ORDER BY debated_at DESC LIMIT 1').get()
+      ? db.prepare('SELECT verdict FROM council_outcomes WHERE project_dir = ? ORDER BY debated_at DESC, rowid DESC LIMIT 1').get(scoped)
+      : db.prepare('SELECT verdict FROM council_outcomes ORDER BY debated_at DESC, rowid DESC LIMIT 1').get()
     ) as { verdict?: string } | undefined;
     const v = (row?.verdict ?? '').toUpperCase();
     if (v === 'GREEN' || v === 'YELLOW' || v === 'RED') data.verdict = v;
