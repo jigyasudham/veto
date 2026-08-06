@@ -1,5 +1,5 @@
 // Local SQLite memory — all operations for session save/restore
-// Uses Node.js built-in node:sqlite (Node 22.5+, no native compilation needed)
+// Uses Node.js built-in node:sqlite (Node 22.13+/23.4+, no native compilation needed)
 
 import { createRequire } from 'node:module';
 import type { DatabaseSync } from 'node:sqlite';
@@ -8,7 +8,8 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { mkdirSync } from 'node:fs';
 
-// node:sqlite is a Node 22.5+ built-in — use createRequire so bundlers (Vite/esbuild) skip it.
+// node:sqlite ships behind a flag from 22.5 and is only unflagged in 22.13+/23.4+ — use
+// createRequire so bundlers (Vite/esbuild) skip it.
 // Loaded LAZILY so the server still starts (and lists all tools) on runtimes without it —
 // e.g. registry capability scanners or older Nodes. Persistence tools then fail per-call
 // with a clear message instead of the whole process dying at import time.
@@ -21,8 +22,8 @@ function requireDbSync(): typeof import('node:sqlite').DatabaseSync {
       _DbSync = (_require('node:sqlite') as typeof import('node:sqlite')).DatabaseSync;
     } catch {
       throw new Error(
-        `node:sqlite is not available on Node ${process.version} — Veto persistence needs Node >= 22.5 ` +
-        '(unflagged in 22.13+/23.4+). Memory, sessions, and learning are disabled until you upgrade ' +
+        `node:sqlite is not available on Node ${process.version} — Veto persistence needs Node ` +
+        '>= 22.13 (or >= 23.4). Memory, sessions, and learning are disabled until you upgrade ' +
         'Node; all other tools keep working.',
       );
     }
@@ -445,6 +446,7 @@ export function updateSession(session_id: string, input: SaveSessionInput): Upda
       task_state  = ?,
       token_count = ?,
       save_type   = 'manual',
+      tags        = COALESCE(?, tags),
       created_at  = ?
     WHERE id = ?
   `).run(
@@ -452,6 +454,9 @@ export function updateSession(session_id: string, input: SaveSessionInput): Upda
     input.context ? JSON.stringify(input.context) : null,
     input.task_state ? JSON.stringify(input.task_state) : null,
     input.token_count ?? 0,
+    // Only overwrite tags when the caller supplies them; otherwise keep existing
+    // (COALESCE(NULL, tags) = tags). saveSession serializes tags the same way.
+    input.tags ? JSON.stringify(input.tags) : null,
     now,
     session_id
   );
@@ -475,14 +480,28 @@ export function restoreSession(session_id: string, active_client?: string): Rest
   return { found: true, session: row };
 }
 
+const SEARCH_COLUMNS = ['summary', 'context', 'task_state', 'tags', 'project_dir'] as const;
+
 export function listSessions(limit = 10, query?: string): SessionRow[] {
   const db = getDb();
-  if (query) {
-    const q = `%${query}%`;
+  // Tokenize the query: each whitespace-separated term must appear in at least one
+  // searchable column (AND across terms, OR across columns). The old code used the
+  // WHOLE query as a single LIKE pattern, so a multi-word query only matched an
+  // exact contiguous phrase — e.g. "transcript capture worktree" found nothing even
+  // when all three words were present. Cap terms to bound the query size.
+  const terms = query ? query.trim().split(/\s+/).filter(Boolean).slice(0, 12) : [];
+  if (terms.length > 0) {
+    const perTerm = `(${SEARCH_COLUMNS.map(c => `${c} LIKE ?`).join(' OR ')})`;
+    const whereClause = terms.map(() => perTerm).join(' AND ');
+    const params: (string | number)[] = [];
+    for (const t of terms) {
+      const like = `%${t}%`;
+      for (let i = 0; i < SEARCH_COLUMNS.length; i++) params.push(like);
+    }
+    params.push(limit);
     return db.prepare(
-      `SELECT * FROM sessions WHERE summary LIKE ? OR context LIKE ? OR task_state LIKE ? OR tags LIKE ? OR project_dir LIKE ?
-       ORDER BY created_at DESC LIMIT ?`
-    ).all(q, q, q, q, q, limit) as SessionRow[];
+      `SELECT * FROM sessions WHERE ${whereClause} ORDER BY created_at DESC LIMIT ?`
+    ).all(...params) as SessionRow[];
   }
   return db.prepare(
     'SELECT * FROM sessions ORDER BY created_at DESC LIMIT ?'
@@ -1059,7 +1078,9 @@ export type LatestCouncilOutcome = {
 export function getLatestCouncilOutcome(): LatestCouncilOutcome | null {
   const db = getDb();
   const row = db.prepare(
-    'SELECT verdict, recommended, task, debated_at FROM council_outcomes ORDER BY debated_at DESC LIMIT 1'
+    // rowid tie-breaks debates recorded in the same millisecond — see the matching
+    // query in src/cli/statusline.ts. Both must agree on what "latest" means.
+    'SELECT verdict, recommended, task, debated_at FROM council_outcomes ORDER BY debated_at DESC, rowid DESC LIMIT 1'
   ).get() as LatestCouncilOutcome | undefined;
   return row ?? null;
 }

@@ -514,17 +514,20 @@ Recommended start sequence:
 
   // ── Post-install health check ───────────────────────────────────────────────
   // Confirm the server can actually run before the user discovers a failure inside
-  // their AI client. The one real runtime risk is node:sqlite (needs Node >= 22.5).
+  // their AI client. The one real runtime risk is node:sqlite (unflagged in 22.13+/23.4+).
   console.log('  ' + c.bold('Post-install check'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
   let healthOk = true;
 
-  const initNodeMajor = parseInt(process.version.slice(1).split('.')[0], 10);
-  const initNodeMinor = parseInt(process.version.slice(1).split('.')[1] || '0', 10);
-  if (initNodeMajor > 22 || (initNodeMajor === 22 && initNodeMinor >= 5)) {
+  // Ask the runtime whether it can actually load node:sqlite rather than deriving it
+  // from the version number. The arithmetic version of this check accepted 22.5–22.12
+  // and 23.0–23.3, where the module exists only behind --experimental-sqlite, so
+  // `veto doctor` reported a green tick on installs whose persistence was dead.
+  const { sqliteAvailable } = await import('./memory/local.js');
+  if (sqliteAvailable()) {
     console.log(`  ${c.green('✓')} Node.js ${process.version}`);
   } else {
-    console.log(`  ${c.red('✗')} Node.js ${process.version} — Veto needs >= 22.5 (node:sqlite); the server will not start`);
+    console.log(`  ${c.red('✗')} Node.js ${process.version} — Veto needs >= 22.13 (or >= 23.4) for node:sqlite; persistence will not work`);
     healthOk = false;
   }
 

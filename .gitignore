@@ -3,10 +3,24 @@ dist/
 *.js.map
 *.d.ts
 *.d.ts.map
-veto.db
+
+# Local state — veto.db, the v3 sidecar transcripts.db, and SQLite journals
+*.db
+*.db-wal
+*.db-shm
+.veto/
+
+# Captured transcript archives (v3 item 6) — raw session content, never commit
+*.jsonl.gz
+
+# Secrets / local env
 .env
+.env.*
+
+# Host-CLI and tooling state
 .claude/
 .mcp-tools/
+.antigravitycli/
 
 # Internal — not for public repo
 SMITHERY.md
@@ -14,8 +28,9 @@ SMITHERY-SUPPORT-EMAIL.md
 PUBLISH-DIRECTORY.md
 VERSION-3.md
 VETO-MCP-DIAGNOSTIC.md
-.antigravitycli/
 VETO_VISION_FINAL.md
+metadata_session_summary_retrievel.md
+VALUE-GATE.md
 PLAN.md
 BUGS.md
 Prelaunch.md
@@ -28,3 +43,10 @@ AGENTS.md
 
 # MCPB bundles (built per-release for Smithery)
 *.mcpb
+
+# Build / test / packaging artifacts
+*.tgz
+*.log
+coverage/
+.DS_Store
+Thumbs.db

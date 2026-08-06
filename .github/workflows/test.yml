@@ -1,0 +1,87 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A superseded run on the same ref is not worth the minutes.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report every combination — a partial matrix tells you less than nothing.
+      fail-fast: false
+      matrix:
+        # Both platforms, deliberately. The same-millisecond council-verdict bug
+        # passed on Windows and failed on Linux purely on machine speed, so a
+        # single-OS matrix can hide a real defect in either direction.
+        os: [ubuntu-latest, windows-latest]
+        # 22.13 is the real floor — node:sqlite exists from 22.5 but only behind
+        # --experimental-sqlite until 22.13/23.4, and CI proved 22.5 red on both
+        # platforms. 22 is the latest of that line; 24 is what development runs on.
+        node: ['22.13', '22', '24']
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+
+      # npm install rather than npm ci: main's package-lock.json is stale at 2.1.1
+      # while package.json says 2.9.0, and npm ci refuses to run when the two are
+      # out of sync. The 3.0.0 PR regenerates the lock — switch this step to
+      # `npm ci` once that has merged.
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+  package:
+    name: package contents
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+      # The npm tarball must never carry internal docs, local databases, or
+      # captured transcripts. package.json's "files" allowlist is what enforces
+      # this today; this job fails the build if that allowlist is ever loosened,
+      # rather than finding out after publish.
+      - name: Assert the tarball ships nothing unexpected
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e '
+            const raw = JSON.parse(require("fs").readFileSync("pack.json", "utf8"));
+            // npm <=11 emits an array here; npm 12 emits an object keyed by package
+            // name. Normalise so an npm upgrade cannot quietly break this guard.
+            const pack = Array.isArray(raw) ? raw : Object.values(raw);
+            const files = pack[0].files.map(f => f.path.split("\\").join("/"));
+            const allowed = new Set(["README.md", "LICENSE", "package.json", "server.json"]);
+            const bad = files.filter(f => !f.startsWith("dist/") && !allowed.has(f));
+            if (bad.length) {
+              console.error("Unexpected files in the npm tarball:\n  " + bad.join("\n  "));
+              process.exit(1);
+            }
+            console.log(`OK — ${files.length} files, all within dist/ or the allowed root set.`);
+          '
