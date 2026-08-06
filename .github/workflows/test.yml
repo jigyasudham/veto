@@ -72,8 +72,11 @@ jobs:
         run: |
           npm pack --dry-run --json > pack.json
           node -e '
-            const pack = JSON.parse(require("fs").readFileSync("pack.json", "utf8"));
-            const files = pack[0].files.map(f => f.path.replace(/\\/g, "/"));
+            const raw = JSON.parse(require("fs").readFileSync("pack.json", "utf8"));
+            // npm <=11 emits an array here; npm 12 emits an object keyed by package
+            // name. Normalise so an npm upgrade cannot quietly break this guard.
+            const pack = Array.isArray(raw) ? raw : Object.values(raw);
+            const files = pack[0].files.map(f => f.path.split("\\").join("/"));
             const allowed = new Set(["README.md", "LICENSE", "package.json", "server.json"]);
             const bad = files.filter(f => !f.startsWith("dist/") && !allowed.has(f));
             if (bad.length) {
