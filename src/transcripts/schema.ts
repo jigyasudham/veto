@@ -112,9 +112,13 @@ export const MIGRATIONS: Migration[] = [
     version: 3,
     up: `
       -- One row per indexed event. project_dir/session denormalized so the
-      -- hot query is a single join (same shape events_fts had).
+      -- hot query is a single join (same shape events_fts had). The INTEGER id
+      -- exists so postings never carry a 36-char uuid — measured, that uuid
+      -- (stored twice per posting: PK + purge index) was ~3x the entire
+      -- index's justified size.
       CREATE TABLE IF NOT EXISTS search_docs (
-        event_id          TEXT PRIMARY KEY,
+        id                INTEGER PRIMARY KEY,
+        event_id          TEXT NOT NULL UNIQUE,
         archive_id        TEXT NOT NULL,
         source_session_id TEXT NOT NULL,
         project_dir       TEXT,
@@ -133,12 +137,12 @@ export const MIGRATIONS: Migration[] = [
       );
 
       CREATE TABLE IF NOT EXISTS search_postings (
-        term_id  INTEGER NOT NULL,
-        event_id TEXT NOT NULL,
-        tf       INTEGER NOT NULL,
-        PRIMARY KEY (term_id, event_id)
+        term_id INTEGER NOT NULL,
+        doc_id  INTEGER NOT NULL,
+        tf      INTEGER NOT NULL,
+        PRIMARY KEY (term_id, doc_id)
       ) WITHOUT ROWID;
-      CREATE INDEX IF NOT EXISTS idx_postings_event ON search_postings(event_id);
+      CREATE INDEX IF NOT EXISTS idx_postings_doc ON search_postings(doc_id);
     `,
   },
 ];
@@ -173,6 +177,7 @@ export type SessionMapRow = {
 };
 
 export type SearchDocRow = {
+  id: number;
   event_id: string;
   archive_id: string;
   source_session_id: string;
@@ -184,7 +189,7 @@ export type SearchDocRow = {
 
 export type SearchPostingRow = {
   term_id: number;
-  event_id: string;
+  doc_id: number;
   tf: number;
 };
 

@@ -116,7 +116,7 @@ export function searchEvents(query: string, opts: SearchOptions = {}): SearchHit
 
   const rows = db.prepare(
     `SELECT p.term_id, p.tf, d.event_id, d.archive_id, d.source_session_id, d.project_dir, d.seq, d.kind, d.len
-       FROM search_postings p JOIN search_docs d ON d.event_id = p.event_id
+       FROM search_postings p JOIN search_docs d ON d.id = p.doc_id
       WHERE ${where.join(' AND ')}`
   ).all(...params) as ({ term_id: number; tf: number } & SearchDocRow)[];
   if (rows.length === 0) return [];

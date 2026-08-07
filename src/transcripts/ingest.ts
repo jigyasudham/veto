@@ -65,14 +65,14 @@ export function ingestArchive(archiveId: string): IngestResult {
     );
     const insDoc = db.prepare(
       `INSERT INTO search_docs (event_id, archive_id, source_session_id, project_dir, seq, kind, len)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`
     );
     const insTerm = db.prepare(
       `INSERT INTO search_terms (term) VALUES (?)
        ON CONFLICT(term) DO UPDATE SET term = term RETURNING id`
     );
     const insPosting = db.prepare(
-      `INSERT INTO search_postings (term_id, event_id, tf) VALUES (?, ?, ?)`
+      `INSERT INTO search_postings (term_id, doc_id, tf) VALUES (?, ?, ?)`
     );
     // Term ids are cached per ingest run — a session reuses its vocabulary
     // heavily, so most lookups never hit the upsert.
@@ -89,7 +89,7 @@ export function ingestArchive(archiveId: string): IngestResult {
     try {
       db.prepare(`DELETE FROM events WHERE archive_id = ?`).run(archiveId);
       db.prepare(
-        `DELETE FROM search_postings WHERE event_id IN (SELECT event_id FROM search_docs WHERE archive_id = ?)`
+        `DELETE FROM search_postings WHERE doc_id IN (SELECT id FROM search_docs WHERE archive_id = ?)`
       ).run(archiveId);
       db.prepare(`DELETE FROM search_docs WHERE archive_id = ?`).run(archiveId);
       for (const e of events) {
@@ -104,8 +104,10 @@ export function ingestArchive(archiveId: string): IngestResult {
           const tokens = tokenize(e.text);
           const tf = new Map<string, number>();
           for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
-          insDoc.run(eventId, archiveId, row.source_session_id, row.project_dir, e.seq, e.kind, tokens.length);
-          for (const [term, count] of tf) insPosting.run(termId(term), eventId, count);
+          const docId = Number((insDoc.get(
+            eventId, archiveId, row.source_session_id, row.project_dir, e.seq, e.kind, tokens.length,
+          ) as { id: number | bigint }).id);
+          for (const [term, count] of tf) insPosting.run(termId(term), docId, count);
         }
       }
       db.prepare(`UPDATE archives SET indexed_through_seq = ?, parser_version = ? WHERE id = ?`)

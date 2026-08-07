@@ -63,12 +63,12 @@ function purgeArchiveRows(archives: ArchiveRow[]): PurgeResult {
       res.events += (db.prepare(`SELECT COUNT(*) n FROM events WHERE archive_id = ?`).get(a.id) as { n: number }).n;
       res.indexRows += (db.prepare(
         `SELECT (SELECT COUNT(*) FROM search_docs WHERE archive_id = ?1)
-              + (SELECT COUNT(*) FROM search_postings WHERE event_id IN
-                   (SELECT event_id FROM search_docs WHERE archive_id = ?1)) n`
+              + (SELECT COUNT(*) FROM search_postings WHERE doc_id IN
+                   (SELECT id FROM search_docs WHERE archive_id = ?1)) n`
       ).get(a.id) as { n: number }).n;
       db.prepare(`DELETE FROM events WHERE archive_id = ?`).run(a.id);
       db.prepare(
-        `DELETE FROM search_postings WHERE event_id IN (SELECT event_id FROM search_docs WHERE archive_id = ?)`
+        `DELETE FROM search_postings WHERE doc_id IN (SELECT id FROM search_docs WHERE archive_id = ?)`
       ).run(a.id);
       db.prepare(`DELETE FROM search_docs WHERE archive_id = ?`).run(a.id);
       db.prepare(`DELETE FROM archives WHERE id = ?`).run(a.id);

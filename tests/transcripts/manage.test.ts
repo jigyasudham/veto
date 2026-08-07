@@ -28,7 +28,7 @@ function orphanCounts() {
   const db = getTranscriptsDb();
   const events = (db.prepare(`SELECT COUNT(*) n FROM events WHERE archive_id NOT IN (SELECT id FROM archives)`).get() as { n: number }).n;
   const docs = (db.prepare(`SELECT COUNT(*) n FROM search_docs WHERE archive_id NOT IN (SELECT id FROM archives)`).get() as { n: number }).n;
-  const postings = (db.prepare(`SELECT COUNT(*) n FROM search_postings WHERE event_id NOT IN (SELECT event_id FROM search_docs)`).get() as { n: number }).n;
+  const postings = (db.prepare(`SELECT COUNT(*) n FROM search_postings WHERE doc_id NOT IN (SELECT id FROM search_docs)`).get() as { n: number }).n;
   return { events, docs, postings };
 }
 
