@@ -16,8 +16,18 @@ builds a memory pyramid over it:
 - **L3** — the ~1k-token summary `veto_session_save` already writes.
 
 Recall is **vectorless** — no embeddings, no model downloads, no API keys:
-a metadata table-of-contents (B1) + SQLite FTS5/BM25 (B2), with the host AI as the
-reranker (B3). Zero new runtime dependencies.
+a metadata table-of-contents (B1) + a portable BM25 index (B2), with the host AI
+as the reranker (B3). Zero new runtime dependencies.
+
+**Why not FTS5?** `node:sqlite` compiles SQLite with *Node's* build flags, and
+those vary by Node version — FTS5 exists on some runtimes and not others (PR #28
+failed CI with `no such module: fts5` on node 22.13). The index therefore uses
+only core SQL: three plain tables (`search_docs`, `search_terms`,
+`search_postings`) holding a positionless inverted index, with BM25 scored in
+JS (even SQL's `log()` is a compile-time flag) and snippets rebuilt in JS for
+returned rows only. One shared tokenizer (`tokenize.ts`) serves both indexing
+and queries — identifier-preserving, sub-token expansion instead of stemming,
+property-tested for index/query symmetry. Scores are positive-higher-is-better.
 
 ## Using it
 
@@ -74,15 +84,16 @@ expand path and that a pasted secret never leaks through any stage.
 | File | Role |
 |---|---|
 | `config.ts` | opt-in consent/config, platform dir, cloud-sync guard |
-| `store.ts` / `schema.ts` | sidecar DB, WAL, additive migrations (v1 archives+map, v2 events, v3 FTS) |
+| `store.ts` / `schema.ts` | sidecar DB, WAL, additive migrations (v1 archives+map, v2 events, v3 search index) |
+| `tokenize.ts` | the shared tokenizer — single source of truth for index + query |
 | `mask.ts` | shared secret detection + fingerprint masking |
 | `mapping.ts` | session→transcript map (statusline UPSERT) |
 | `archive.ts` | L0 gzip capture (dedup, best-effort) |
 | `adapters/claude.ts` | Claude JSONL → normalized masked events |
-| `ingest.ts` | derive events + FTS (idempotent, watermark, session-mismatch skip) |
+| `ingest.ts` | derive events + index postings (idempotent, watermark, session-mismatch skip) |
 | `expand.ts` | mask-on-expansion of L0 (bounds-validated) |
 | `pyramid.ts` / `toc.ts` | L1 facts, L2 spine, phase segmentation |
-| `search.ts` | FTS5/BM25 query (injection-safe) |
+| `search.ts` | portable BM25 query, scored in JS (terms are bound parameters — no query language) |
 | `recall.ts` | the two-call loop |
 | `manage.ts` | list/show/purge + disk usage |
 | `on-save.ts` | save-time capture + inline index + leak count / note |

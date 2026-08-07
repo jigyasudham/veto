@@ -94,22 +94,51 @@ export const MIGRATIONS: Migration[] = [
     `,
   },
   {
-    // v3 — FTS5 lexical index over the spine + tool digests (B2). Standalone
-    // (not external-content) so DELETE-by-archive on re-ingest is simple. Porter
-    // stemming; identifiers survive as exact tokens. Metadata columns are
-    // UNINDEXED (stored, filterable, not tokenized). Verified in node:sqlite v24.
+    // v3 — portable lexical index: plain tables + JS scoring (B2, redone).
+    // The FTS5 version of this migration never shipped: PR #28 died on
+    // `no such module: fts5` because node:sqlite bundles SQLite with NODE's
+    // build flags, so ANY compile-time feature (FTS5, even math functions)
+    // is a version lottery. Rule: core SQL only. BM25 is scored in JS.
+    //
+    // Postings carry no positions — the query path ANDs independent terms and
+    // never phrase-matches, so positions are pure cost. Snippets are rebuilt
+    // in JS from events.text for the few returned rows. No stored df: purge /
+    // re-ingest would have to decrement it transactionally or IDF drifts;
+    // COUNT(*) on the postings PK answers it per query term instead.
+    //
+    // NOTE: never CREATE or DROP events_fts here — touching a virtual table
+    // loads its module, which throws on exactly the Nodes this redo supports.
+    // Databases that ran the old dev-only v3 keep an inert orphan table.
     version: 3,
     up: `
-      CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
-        text,
-        event_id UNINDEXED,
-        archive_id UNINDEXED,
-        source_session_id UNINDEXED,
-        project_dir UNINDEXED,
-        seq UNINDEXED,
-        kind UNINDEXED,
-        tokenize = 'porter unicode61'
+      -- One row per indexed event. project_dir/session denormalized so the
+      -- hot query is a single join (same shape events_fts had).
+      CREATE TABLE IF NOT EXISTS search_docs (
+        event_id          TEXT PRIMARY KEY,
+        archive_id        TEXT NOT NULL,
+        source_session_id TEXT NOT NULL,
+        project_dir       TEXT,
+        seq               INTEGER NOT NULL,
+        kind              TEXT NOT NULL,
+        len               INTEGER NOT NULL   -- token count, for BM25 length norm
       );
+      CREATE INDEX IF NOT EXISTS idx_search_docs_archive ON search_docs(archive_id);
+      CREATE INDEX IF NOT EXISTS idx_search_docs_scope
+        ON search_docs(project_dir, source_session_id);
+
+      -- Term dictionary: term text stored once, compact integer join key.
+      CREATE TABLE IF NOT EXISTS search_terms (
+        id   INTEGER PRIMARY KEY,
+        term TEXT NOT NULL UNIQUE
+      );
+
+      CREATE TABLE IF NOT EXISTS search_postings (
+        term_id  INTEGER NOT NULL,
+        event_id TEXT NOT NULL,
+        tf       INTEGER NOT NULL,
+        PRIMARY KEY (term_id, event_id)
+      ) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS idx_postings_event ON search_postings(event_id);
     `,
   },
 ];
@@ -141,6 +170,22 @@ export type SessionMapRow = {
   transcript_path: string;
   project_dir: string | null;
   last_seen_at: string;
+};
+
+export type SearchDocRow = {
+  event_id: string;
+  archive_id: string;
+  source_session_id: string;
+  project_dir: string | null;
+  seq: number;
+  kind: EventKind;
+  len: number;
+};
+
+export type SearchPostingRow = {
+  term_id: number;
+  event_id: string;
+  tf: number;
 };
 
 export type EventRow = {

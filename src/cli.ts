@@ -1065,7 +1065,7 @@ async function transcriptsCommand() {
     else if (id) r = purgeSession(id);
     else { console.error(c.red('  Usage: veto transcripts purge <source_session_id> | --project=<dir> | --all')); process.exit(1); }
     console.log('');
-    console.log(c.green(`  ✓ Purged ${r.archives} archive(s): ${r.events} events, ${r.ftsRows} index rows, ${r.files} file(s), ${r.mappings} mapping(s) removed.`));
+    console.log(c.green(`  ✓ Purged ${r.archives} archive(s): ${r.events} events, ${r.indexRows} index rows, ${r.files} file(s), ${r.mappings} mapping(s) removed.`));
     console.log('');
     return;
   }

@@ -1,10 +1,10 @@
 // Management: list / show / purge + disk usage (VERSION-3 item 6, Step 13).
 //
 // Purge is a TRUE cascading delete — for each archive it removes the events, the
-// FTS rows, the archive row, the session mapping, and the L0 file, leaving no
-// orphan rows (Step 14 asserts zero orphans). Row deletes run in one transaction;
-// the L0 file is unlinked best-effort afterwards (a leftover file is harmless disk,
-// a dangling row is not).
+// search index rows (docs + postings), the archive row, the session mapping, and
+// the L0 file, leaving no orphan rows (Step 14 asserts zero orphans). Row deletes
+// run in one transaction; the L0 file is unlinked best-effort afterwards (a
+// leftover file is harmless disk, a dangling row is not).
 
 import { statSync, existsSync, rmSync } from 'node:fs';
 import { getTranscriptsDb, transcriptsDbPath } from './store.js';
@@ -51,19 +51,26 @@ export function showArchive(sourceSessionId: string, source = 'claude'): Archive
   return { summary: toSummary(r), toc: buildTOC(r.id), facts: buildFacts(r.id) };
 }
 
-export type PurgeResult = { archives: number; events: number; ftsRows: number; files: number; mappings: number };
+export type PurgeResult = { archives: number; events: number; indexRows: number; files: number; mappings: number };
 
 function purgeArchiveRows(archives: ArchiveRow[]): PurgeResult {
   const db = getTranscriptsDb();
-  const res: PurgeResult = { archives: 0, events: 0, ftsRows: 0, files: 0, mappings: 0 };
+  const res: PurgeResult = { archives: 0, events: 0, indexRows: 0, files: 0, mappings: 0 };
   const paths: string[] = [];
   db.exec('BEGIN');
   try {
     for (const a of archives) {
       res.events += (db.prepare(`SELECT COUNT(*) n FROM events WHERE archive_id = ?`).get(a.id) as { n: number }).n;
-      res.ftsRows += (db.prepare(`SELECT COUNT(*) n FROM events_fts WHERE archive_id = ?`).get(a.id) as { n: number }).n;
+      res.indexRows += (db.prepare(
+        `SELECT (SELECT COUNT(*) FROM search_docs WHERE archive_id = ?1)
+              + (SELECT COUNT(*) FROM search_postings WHERE event_id IN
+                   (SELECT event_id FROM search_docs WHERE archive_id = ?1)) n`
+      ).get(a.id) as { n: number }).n;
       db.prepare(`DELETE FROM events WHERE archive_id = ?`).run(a.id);
-      db.prepare(`DELETE FROM events_fts WHERE archive_id = ?`).run(a.id);
+      db.prepare(
+        `DELETE FROM search_postings WHERE event_id IN (SELECT event_id FROM search_docs WHERE archive_id = ?)`
+      ).run(a.id);
+      db.prepare(`DELETE FROM search_docs WHERE archive_id = ?`).run(a.id);
       db.prepare(`DELETE FROM archives WHERE id = ?`).run(a.id);
       const m = db.prepare(`DELETE FROM session_map WHERE source = ? AND source_session_id = ?`).run(a.source, a.source_session_id);
       res.mappings += Number(m.changes ?? 0);

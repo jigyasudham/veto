@@ -5,7 +5,7 @@
 //   • L1 facts: deterministic aggregates — files touched, commands, tool usage,
 //     error count, message counts, timespan. Cheap, no LLM. Injected on resume.
 //   • L2 spine: user messages verbatim + assistant conclusions, tool chatter
-//     stripped. The searchable conversation backbone (FTS indexes it in Step 10).
+//     stripped. The searchable conversation backbone (the portable index indexes it in Step 10).
 
 import { getTranscriptsDb } from './store.js';
 

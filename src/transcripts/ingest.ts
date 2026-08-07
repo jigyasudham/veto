@@ -12,12 +12,15 @@ import { gunzipSync } from 'node:zlib';
 import { randomUUID } from 'node:crypto';
 import { getTranscriptsDb } from './store.js';
 import { parseClaudeTranscript } from './adapters/claude.js';
+import { tokenize } from './tokenize.js';
 import { SEARCHABLE_KINDS, type ArchiveRow, type EventRow } from './schema.js';
 
 const SEARCHABLE = new Set<string>(SEARCHABLE_KINDS);
 
 // Bump when the parser changes in a way that should re-derive existing archives.
-export const PARSER_VERSION = 1;
+// v2: the portable search index replaced events_fts — archives ingested at v1
+// have events but no search_docs/postings rows, so they must re-derive.
+export const PARSER_VERSION = 2;
 
 export type IngestStatus =
   | 'indexed' | 'already_indexed' | 'not_found' | 'archive_missing' | 'session_mismatch' | 'error';
@@ -60,14 +63,35 @@ export function ingestArchive(archiveId: string): IngestResult {
          ts_source, ts_utc, raw_offset, raw_length)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
-    const insFts = db.prepare(
-      `INSERT INTO events_fts (text, event_id, archive_id, source_session_id, project_dir, seq, kind)
+    const insDoc = db.prepare(
+      `INSERT INTO search_docs (event_id, archive_id, source_session_id, project_dir, seq, kind, len)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     );
+    const insTerm = db.prepare(
+      `INSERT INTO search_terms (term) VALUES (?)
+       ON CONFLICT(term) DO UPDATE SET term = term RETURNING id`
+    );
+    const insPosting = db.prepare(
+      `INSERT INTO search_postings (term_id, event_id, tf) VALUES (?, ?, ?)`
+    );
+    // Term ids are cached per ingest run — a session reuses its vocabulary
+    // heavily, so most lookups never hit the upsert.
+    const termIds = new Map<string, number>();
+    const termId = (term: string): number => {
+      let id = termIds.get(term);
+      if (id === undefined) {
+        id = Number((insTerm.get(term) as { id: number | bigint }).id);
+        termIds.set(term, id);
+      }
+      return id;
+    };
     db.exec('BEGIN');
     try {
       db.prepare(`DELETE FROM events WHERE archive_id = ?`).run(archiveId);
-      db.prepare(`DELETE FROM events_fts WHERE archive_id = ?`).run(archiveId);
+      db.prepare(
+        `DELETE FROM search_postings WHERE event_id IN (SELECT event_id FROM search_docs WHERE archive_id = ?)`
+      ).run(archiveId);
+      db.prepare(`DELETE FROM search_docs WHERE archive_id = ?`).run(archiveId);
       for (const e of events) {
         const eventId = randomUUID();
         ins.run(
@@ -75,9 +99,13 @@ export function ingestArchive(archiveId: string): IngestResult {
           e.sourceType, e.role, e.toolName, e.text, e.secretCount, e.eventUuid, e.parentUuid, e.isSidechain ? 1 : 0,
           e.tsSource, e.tsUtc, e.rawOffset, e.rawLength,
         );
-        // Index the searchable, non-empty events into FTS (text is already masked).
+        // Index the searchable, non-empty events (text is already masked).
         if (SEARCHABLE.has(e.kind) && e.text && e.text.trim()) {
-          insFts.run(e.text, eventId, archiveId, row.source_session_id, row.project_dir, e.seq, e.kind);
+          const tokens = tokenize(e.text);
+          const tf = new Map<string, number>();
+          for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
+          insDoc.run(eventId, archiveId, row.source_session_id, row.project_dir, e.seq, e.kind, tokens.length);
+          for (const [term, count] of tf) insPosting.run(termId(term), eventId, count);
         }
       }
       db.prepare(`UPDATE archives SET indexed_through_seq = ?, parser_version = ? WHERE id = ?`)

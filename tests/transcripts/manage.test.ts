@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll } from 'vitest';
+﻿import { describe, it, expect, afterAll } from 'vitest';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
@@ -27,8 +27,9 @@ async function seed(sessionId: string, project: string) {
 function orphanCounts() {
   const db = getTranscriptsDb();
   const events = (db.prepare(`SELECT COUNT(*) n FROM events WHERE archive_id NOT IN (SELECT id FROM archives)`).get() as { n: number }).n;
-  const fts = (db.prepare(`SELECT COUNT(*) n FROM events_fts WHERE archive_id NOT IN (SELECT id FROM archives)`).get() as { n: number }).n;
-  return { events, fts };
+  const docs = (db.prepare(`SELECT COUNT(*) n FROM search_docs WHERE archive_id NOT IN (SELECT id FROM archives)`).get() as { n: number }).n;
+  const postings = (db.prepare(`SELECT COUNT(*) n FROM search_postings WHERE event_id NOT IN (SELECT event_id FROM search_docs)`).get() as { n: number }).n;
+  return { events, docs, postings };
 }
 
 afterAll(() => {
@@ -57,7 +58,7 @@ describe('list / show', () => {
 });
 
 describe('purge — true cascade, zero orphans', () => {
-  it('purgeSession removes archive + events + fts + mapping + L0 file', async () => {
+  it('purgeSession removes archive + events + index + mapping + L0 file', async () => {
     const arch = getArchive('M1')!;
     const file = arch.archive_path;
     expect(existsSync(file)).toBe(true);
@@ -72,7 +73,7 @@ describe('purge — true cascade, zero orphans', () => {
     expect(getArchive('M1')).toBeNull();
     expect(getSessionMapping('M1')).toBeNull();
     expect(existsSync(file)).toBe(false);
-    expect(orphanCounts()).toEqual({ events: 0, fts: 0 }); // nothing dangling
+    expect(orphanCounts()).toEqual({ events: 0, docs: 0, postings: 0 }); // nothing dangling
   });
 
   it('purgeAll clears everything with no orphans left', async () => {
@@ -80,7 +81,7 @@ describe('purge — true cascade, zero orphans', () => {
     await seed('M4', 'd:\\gamma');
     purgeAll();
     expect(listArchives().length).toBe(0);
-    expect(orphanCounts()).toEqual({ events: 0, fts: 0 });
+    expect(orphanCounts()).toEqual({ events: 0, docs: 0, postings: 0 });
     const db = getTranscriptsDb();
     expect((db.prepare(`SELECT COUNT(*) n FROM events`).get() as { n: number }).n).toBe(0);
     expect((db.prepare(`SELECT COUNT(*) n FROM session_map`).get() as { n: number }).n).toBe(0);
@@ -92,7 +93,7 @@ describe('purge — true cascade, zero orphans', () => {
     purgeProject('d:\\one');
     expect(getArchive('P1')).toBeNull();
     expect(getArchive('P2')).not.toBeNull();
-    expect(orphanCounts()).toEqual({ events: 0, fts: 0 });
+    expect(orphanCounts()).toEqual({ events: 0, docs: 0, postings: 0 });
   });
 });
 
@@ -105,3 +106,4 @@ describe('disk usage', () => {
     expect(du.totalBytes).toBeGreaterThanOrEqual(du.archiveBytes);
   });
 });
+

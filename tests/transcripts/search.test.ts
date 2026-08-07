@@ -10,7 +10,7 @@ process.env.VETO_TRANSCRIPTS_DIR = ROOT;
 const { captureSession } = await import('../../src/transcripts/archive.js');
 const { recordSessionMapping } = await import('../../src/transcripts/mapping.js');
 const { ingestSession } = await import('../../src/transcripts/ingest.js');
-const { searchEvents, toFtsQuery } = await import('../../src/transcripts/search.js');
+const { searchEvents, buildSnippet } = await import('../../src/transcripts/search.js');
 const { resetTranscriptsDb } = await import('../../src/transcripts/store.js');
 
 async function addSession(sessionId: string, project: string, lines: string[]) {
@@ -29,13 +29,18 @@ afterAll(() => {
   delete process.env.VETO_TRANSCRIPTS_DIR;
 });
 
-describe('toFtsQuery — safe MATCH building', () => {
-  it('quotes each token and neutralizes FTS operators/quotes', () => {
-    expect(toFtsQuery('E404 publish')).toBe('"E404" "publish"');
-    expect(toFtsQuery('normalizeProjectDir')).toBe('"normalizeProjectDir"');
-    // A crafted operator string cannot inject — it becomes quoted phrases.
-    expect(toFtsQuery('foo OR bar" AND')).toBe('"foo" "OR" "bar" "AND"');
-    expect(toFtsQuery('   ')).toBe('');
+describe('buildSnippet — JS excerpt with highlights', () => {
+  it('wraps matched terms in brackets and clips with ellipses', () => {
+    const text = 'a very long preamble that goes on for quite a while before we hit an npm E404 error on publish and then keeps going afterwards too';
+    const snip = buildSnippet(text, new Set(['e404', 'publish']));
+    expect(snip).toContain('[E404]');
+    expect(snip).toContain('[publish]');
+    expect(snip.startsWith('…')).toBe(true);
+  });
+
+  it('matches through sub-tokens (camelCase and paths)', () => {
+    const snip = buildSnippet('the fix landed in normalizeProjectDir yesterday', new Set(['project']));
+    expect(snip).toContain('[normalizeProjectDir]');
   });
 });
 
@@ -73,10 +78,37 @@ describe('searchEvents — BM25 recall with snippets', () => {
     expect(searchEvents('   ', {})).toEqual([]);
   });
 
-  it('re-ingest does not duplicate FTS rows', async () => {
+  it('re-ingest does not duplicate index rows', async () => {
     ingestSession('SS1'); // already indexed → no-op
     const hits = searchEvents('login', { sourceSessionId: 'SS1' });
     // exactly one event mentions "login"
     expect(hits.length).toBe(1);
+  });
+
+  it('scores are positive and sorted descending (contract flip vs FTS5)', async () => {
+    const hits = searchEvents('npm E404 publish', { projectDir: 'd:\\proj-a' });
+    expect(hits.length).toBeGreaterThan(1);
+    for (const h of hits) expect(h.score).toBeGreaterThan(0);
+    for (let i = 1; i < hits.length; i += 1) expect(hits[i - 1].score).toBeGreaterThanOrEqual(hits[i].score);
+  });
+
+  it('ranks the event with the rare term above one with only common terms', async () => {
+    await addSession('SS3', 'd:\\proj-rank', [
+      'the deploy failed with EIDENTMISMATCH on the registry',
+      'the deploy went fine',
+      'the deploy went fine again',
+      'the deploy went fine as always',
+    ]);
+    const hits = searchEvents('deploy EIDENTMISMATCH', { projectDir: 'd:\\proj-rank' });
+    expect(hits[0].snippet).toContain('[EIDENTMISMATCH]');
+  });
+
+  it('df cap: a term present in every document does not blow up or dominate', async () => {
+    // "deploy" is in all 4 SS3 events (df/N > 0.5 within that project's corpus
+    // contribution); query still works and stays scoped.
+    const hits = searchEvents('deploy', { projectDir: 'd:\\proj-rank' });
+    // Either capped-but-kept (all terms common) or returned normally — must not throw
+    // and must return only proj-rank docs.
+    expect(hits.every(h => h.sourceSessionId === 'SS3')).toBe(true);
   });
 });

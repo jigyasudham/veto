@@ -51,7 +51,12 @@ describe('transcripts sidecar DB — foundation', () => {
     expect(tables).toContain('archives');
     expect(tables).toContain('session_map');
     expect(tables).toContain('events');
-    expect(tables).toContain('events_fts');
+    expect(tables).toContain('search_docs');
+    expect(tables).toContain('search_terms');
+    expect(tables).toContain('search_postings');
+    // The FTS5 vtab is gone from the schema — creating OR dropping it loads
+    // the fts5 module, which does not exist on every Node. Core SQL only.
+    expect(tables).not.toContain('events_fts');
   });
 
   it('runs in WAL with a busy_timeout (so the HUD can read veto.db uncontended)', () => {
