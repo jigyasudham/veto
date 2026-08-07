@@ -61,10 +61,13 @@ function purgeArchiveRows(archives: ArchiveRow[]): PurgeResult {
   try {
     for (const a of archives) {
       res.events += (db.prepare(`SELECT COUNT(*) n FROM events WHERE archive_id = ?`).get(a.id) as { n: number }).n;
+      // Two plain queries, not one with a reused ?1 — node 22.13's sqlite
+      // binding doesn't dedupe numbered parameters (SQLITE_RANGE on CI).
       res.indexRows += (db.prepare(
-        `SELECT (SELECT COUNT(*) FROM search_docs WHERE archive_id = ?1)
-              + (SELECT COUNT(*) FROM search_postings WHERE doc_id IN
-                   (SELECT id FROM search_docs WHERE archive_id = ?1)) n`
+        `SELECT COUNT(*) n FROM search_docs WHERE archive_id = ?`
+      ).get(a.id) as { n: number }).n;
+      res.indexRows += (db.prepare(
+        `SELECT COUNT(*) n FROM search_postings WHERE doc_id IN (SELECT id FROM search_docs WHERE archive_id = ?)`
       ).get(a.id) as { n: number }).n;
       db.prepare(`DELETE FROM events WHERE archive_id = ?`).run(a.id);
       db.prepare(
