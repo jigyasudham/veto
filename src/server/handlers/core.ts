@@ -19,7 +19,7 @@ import { VERSION, autoSave, maybeAutoSave } from '../runtime.js';
 import type { HandlerMap } from '../registry.js';
 
 export const coreHandlers: HandlerMap = {
-  veto_status: ({ args }) => {
+  veto_status: async ({ args }) => {
     const statusTokenCount = typeof args?.token_count === 'number' ? args.token_count : null;
     const statusPlatform = args?.platform ? String(args.platform) : 'claude';
     const statusModel = args?.model ? String(args.model) : undefined;
@@ -34,6 +34,17 @@ export const coreHandlers: HandlerMap = {
       });
     }
     const autoSaveResult = statusTokenCount !== null ? maybeAutoSave(statusTokenCount, statusPlatform, statusModel) : null;
+    // Transcript capture disk usage (VERSION-3 item 6) — only when opted in.
+    let transcriptsInfo: Record<string, unknown> | undefined;
+    try {
+      const { isCaptureEnabled, captureStatus } = await import('../../transcripts/config.js');
+      if (isCaptureEnabled()) {
+        const { transcriptsDiskUsage } = await import('../../transcripts/manage.js');
+        const cs = captureStatus();
+        const du = transcriptsDiskUsage();
+        transcriptsInfo = { enabled: true, archives: du.archives, disk_bytes: du.totalBytes, retention_days: cs.retention_days, dir: cs.dir };
+      }
+    } catch { /* transcripts optional */ }
     return {
       content: [
         {
@@ -67,6 +78,7 @@ export const coreHandlers: HandlerMap = {
               billing_mode: getConfig().billing_mode,
               ...(getConfig().billing_mode === 'api' ? { billing_warning: 'API billing detected — MCP Sampling calls count toward your token usage. Zero extra cost applies to subscription plans only.' } : {}),
               ...(autoSaveResult?.triggered ? { auto_save: { triggered: true, session_id: autoSaveResult.session_id, usage_pct: autoSaveResult.usage_pct } } : {}),
+              ...(transcriptsInfo ? { transcripts: transcriptsInfo } : {}),
             },
             null,
             2

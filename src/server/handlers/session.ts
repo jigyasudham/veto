@@ -91,6 +91,17 @@ export const sessionHandlers: HandlerMap = {
     } else {
       result = saveSession(sessionInput);
     }
+    // Best-effort transcript capture (VERSION-3 item 6): archive + index this session's
+    // host transcript for later recall, and surface the leak count / first-capture note.
+    // Gated on opt-in + Claude; NEVER throws or blocks correctness.
+    let transcriptOnSave: import('../../transcripts/on-save.js').OnSaveTranscript | null = null;
+    try {
+      if (savePlatform === 'claude') {
+        const { captureOnSave } = await import('../../transcripts/on-save.js');
+        transcriptOnSave = await captureOnSave({ projectDir: sessionProjectDir, vetoSessionId: result.session_id });
+      }
+    } catch { /* transcript capture is best-effort; never breaks save */ }
+
     // Cache for auto-save: future veto_status calls with high token_count will re-save this context
     const resolvedWindow = resolveContextWindow(savePlatform, saveModel);
     autoSave.cached = { summary: saveSummary, context: saveContext, task_state: saveTaskState, platform: savePlatform, project_dir: sessionProjectDir, context_window: resolvedWindow };
@@ -125,6 +136,7 @@ export const sessionHandlers: HandlerMap = {
       ...(autoSumFailed ? { auto_summarize_warning: 'MCP Sampling unavailable — saved provided values instead. For best results use Claude Code or another host that supports sampling.' } : {}),
       ...(wasUpdate ? {} : { usage_pct: result.usage_pct, context_warning: result.context_warning }),
       ...(truncationWarnings.length > 0 ? { truncation_warnings: truncationWarnings } : {}),
+      ...(transcriptOnSave ? { transcript: transcriptOnSave } : {}),
     };
     if (result.continuation_prompt) responseObj.continuation_prompt = result.continuation_prompt;
 
@@ -280,9 +292,44 @@ export const sessionHandlers: HandlerMap = {
     };
   },
 
-  veto_session_replay: ({ args }) => {
+  veto_session_replay: async ({ args }) => {
+    // Transcript recall (VERSION-3 item 6). Phase 2 — expand to exact masked lines.
+    if (args?.expand && typeof args.expand === 'object') {
+      try {
+        const { recallExpand } = await import('../../transcripts/recall.js');
+        const e = args.expand as Record<string, unknown>;
+        const res = recallExpand({
+          eventId: e.event_id ? String(e.event_id) : undefined,
+          archiveId: e.archive_id ? String(e.archive_id) : undefined,
+          sourceSessionId: e.source_session_id ? String(e.source_session_id) : undefined,
+          segmentIndex: typeof e.segment_index === 'number' ? e.segment_index : undefined,
+          fromSeq: typeof e.from_seq === 'number' ? e.from_seq : undefined,
+          toSeq: typeof e.to_seq === 'number' ? e.to_seq : undefined,
+        });
+        return { content: [{ type: 'text', text: JSON.stringify(res, null, 2) }], ...(res.ok ? {} : { isError: true }) };
+      } catch (err) {
+        return { content: [{ type: 'text', text: `recall expand failed: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+    // Phase 1 — query the transcript archive (TOC + BM25 hits).
+    if (args?.query) {
+      try {
+        const { recallQuery } = await import('../../transcripts/recall.js');
+        const projectDir = args.project_dir ? normalizeProjectDir(String(args.project_dir)) : (getActiveProjectDir() ?? undefined);
+        const res = recallQuery({
+          query: String(args.query),
+          projectDir: projectDir ?? undefined,
+          sourceSessionId: args.source_session_id ? String(args.source_session_id) : undefined,
+          limit: typeof args.limit === 'number' ? args.limit : undefined,
+        });
+        return { content: [{ type: 'text', text: JSON.stringify(res, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: 'text', text: `recall query failed: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+    // Legacy — chronological tool-call trace by veto session id.
     const sessionId = String(args?.session_id ?? '').trim();
-    if (!sessionId) return { content: [{ type: 'text', text: 'session_id is required.' }], isError: true };
+    if (!sessionId) return { content: [{ type: 'text', text: 'Pass session_id (event trace), or query / expand (transcript recall).' }], isError: true };
     const traces = getSessionReplay(sessionId);
     return { content: [{ type: 'text', text: JSON.stringify({ success: true, session_id: sessionId, events: traces }, null, 2) }] };
   },

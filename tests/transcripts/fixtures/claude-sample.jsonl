@@ -1,0 +1,15 @@
+{"type":"mode","mode":"default","sessionId":"FIXA"}
+{"type":"permission-mode","permissionMode":"acceptEdits","sessionId":"FIXA"}
+{"type":"ai-title","aiTitle":"Fixing the login flow","sessionId":"FIXA"}
+{"parentUuid":null,"isSidechain":false,"type":"user","uuid":"u1","timestamp":"2026-07-21T10:00:00.000Z","sessionId":"FIXA","cwd":"D:\\proj","message":{"role":"user","content":"add a login form and run the tests"}}
+{"parentUuid":"u1","isSidechain":false,"type":"assistant","uuid":"a1","timestamp":"2026-07-21T10:00:05.000Z","sessionId":"FIXA","message":{"role":"assistant","content":[{"type":"thinking","thinking":"I should create the component then run tests"},{"type":"text","text":"Creating the login form."},{"type":"tool_use","name":"Write","input":{"file_path":"login.tsx","content":"export const Login = () => null"}}]}}
+{"parentUuid":"a1","isSidechain":false,"type":"user","uuid":"u2","timestamp":"2026-07-21T10:00:07.000Z","sessionId":"FIXA","message":{"role":"user","content":[{"type":"tool_result","content":"file written"}]}}
+{"parentUuid":"u2","isSidechain":false,"type":"assistant","uuid":"a2","timestamp":"2026-07-21T10:00:10.000Z","sessionId":"FIXA","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"npm test"}}]}}
+{"parentUuid":"a2","isSidechain":false,"type":"user","uuid":"u3","timestamp":"2026-07-21T10:00:15.000Z","sessionId":"FIXA","message":{"role":"user","content":[{"type":"tool_result","content":"Error: 1 test failed"}]}}
+{"parentUuid":"u3","isSidechain":false,"type":"system","subtype":"info","durationMs":12,"uuid":"s1","timestamp":"2026-07-21T10:00:16.000Z","sessionId":"FIXA","isMeta":true}
+{"parentUuid":"u1","isSidechain":false,"type":"attachment","uuid":"at1","timestamp":"2026-07-21T10:00:01.000Z","sessionId":"FIXA","attachment":{"kind":"image"}}
+{"type":"file-history-snapshot","messageId":"a1","snapshot":{"login.tsx":"hash"},"isSnapshotUpdate":false}
+{"type":"last-prompt","lastPrompt":"add a login form and run the tests","leafUuid":"u3","sessionId":"FIXA"}
+{"type":"bridge-session","sessionId":"FIXA","bridgeSessionId":"BR1","lastSequenceNum":8}
+{"type":"pr-link","sessionId":"FIXA","prNumber":42,"prUrl":"https://github.com/x/y/pull/42","prRepository":"x/y","timestamp":"2026-07-21T10:05:00.000Z"}
+{ this line is deliberately malformed json to exercise drift tolerance
