@@ -48,6 +48,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@jigyasudham/veto-model": "1.0.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "web-tree-sitter": "^0.26.9",
     "zod": "^4.4.3"
