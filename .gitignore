@@ -46,6 +46,8 @@ scripts/*
 !scripts/repack-model.py
 # ...and the generator for the committed CI fixture, same reasoning.
 !scripts/make-tiny-model.ts
+# ...and the Veto <-> veto-model integration proof.
+!scripts/verify-integration.ts
 improvements.md
 AGENTS.md
 
