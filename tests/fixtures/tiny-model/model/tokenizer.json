@@ -1,0 +1,45 @@
+{
+  "version": "1.0",
+  "normalizer": {
+    "type": "BertNormalizer",
+    "clean_text": true,
+    "handle_chinese_chars": true,
+    "strip_accents": null,
+    "lowercase": true
+  },
+  "pre_tokenizer": {
+    "type": "BertPreTokenizer"
+  },
+  "model": {
+    "type": "WordPiece",
+    "unk_token": "[UNK]",
+    "continuing_subword_prefix": "##",
+    "max_input_chars_per_word": 100,
+    "vocab": {
+      "[PAD]": 0,
+      "[UNK]": 1,
+      "credentials": 2,
+      "expired": 3,
+      "registry": 4,
+      "rejected": 5,
+      "upload": 6,
+      "authentication": 7,
+      "lapsed": 8,
+      "package": 9,
+      "push": 10,
+      "refused": 11,
+      "kitchen": 12,
+      "sink": 13,
+      "dishes": 14,
+      "full": 15,
+      "the": 16,
+      "and": 17,
+      "was": 18,
+      "so": 19,
+      "a": 20,
+      "of": 21,
+      "is": 22,
+      "note": 23
+    }
+  }
+}

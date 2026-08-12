@@ -31,13 +31,21 @@ VETO-MCP-DIAGNOSTIC.md
 VETO_VISION_FINAL.md
 metadata_session_summary_retrievel.md
 VALUE-GATE.md
+SEARCH-REDESIGN.md
 PLAN.md
 BUGS.md
 Prelaunch.md
 MCP-REGISTRY.md
 LAUNCH-KIT.md
 docs/
-scripts/
+# scripts/ stays private EXCEPT the model repack pipeline: condition #7 wants
+# it tracked so a published @jigyasudham/veto-model artifact is reproducible
+# from source. (A parent dir cannot be un-ignored per-file, hence scripts/*.)
+# It never ships — package.json `files` is dist + server.json only.
+scripts/*
+!scripts/repack-model.py
+# ...and the generator for the committed CI fixture, same reasoning.
+!scripts/make-tiny-model.ts
 improvements.md
 AGENTS.md
 
