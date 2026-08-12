@@ -11,6 +11,7 @@
 import { ensureIndexed } from './ingest.js';
 import { searchEventsHybrid, type SearchHit } from './search.js';
 import { embedArchive } from './vectors.js';
+import { embeddingsAvailable, modelProvenance } from './embed.js';
 import { buildTOC, type Segment } from './toc.js';
 import { buildFacts, renderFacts } from './pyramid.js';
 import { expandEvent, expandRange, type ExpandResult } from './expand.js';
@@ -45,6 +46,10 @@ export type RecallQueryResult = {
   reason?: string;
   query: string;
   scope: { projectDir?: string; sourceSessionId?: string; archivesIndexed: number };
+  /** Which retrieval ran. `semantic` names the model that produced the
+   *  vectors, or null when recall was keyword-only — so a caller can tell
+   *  a degraded result from a poor one (condition A3). */
+  retrieval: { lexical: true; semantic: string | null };
   hits: Array<Pick<SearchHit, 'sourceSessionId' | 'seq' | 'kind' | 'snippet' | 'score' | 'eventId' | 'archiveId'>>;
   toc?: Segment[];
   facts?: string;
@@ -67,6 +72,17 @@ export function recallQuery(input: RecallQueryInput): RecallQueryResult {
   // recall falls back to BM25 alone.
   for (const a of scopeArchives) embedArchive(a.id);
 
+  // Recorded in the response, not just inferred from result quality: the
+  // semantic layer degrades silently by design, so the only honest way for a
+  // caller to know it ran is to be told which model ran it.
+  let semanticModel: string | null = null;
+  try {
+    if (embeddingsAvailable()) {
+      const { model_id, revision } = modelProvenance();
+      semanticModel = `${model_id}@${revision}`;
+    }
+  } catch { /* optional layer — never fail recall over provenance */ }
+
   const hits = searchEventsHybrid(input.query, {
     projectDir: input.projectDir,
     sourceSessionId: input.sourceSessionId,
@@ -88,12 +104,15 @@ export function recallQuery(input: RecallQueryInput): RecallQueryResult {
     ok: true,
     query: input.query,
     scope: { projectDir: input.projectDir, sourceSessionId: input.sourceSessionId, archivesIndexed: scopeArchives.length },
+    retrieval: { lexical: true, semantic: semanticModel },
     hits,
     toc,
     facts,
     guidance: hits.length
       ? 'Reason over these hits + TOC, then call expand with {eventId} for one line, or {archiveId|sourceSessionId, fromSeq, toSeq} / {sourceSessionId, segmentIndex} for a range. Results are masked.'
-      : 'No lexical matches. Try different identifiers/terms, or expand a TOC segment directly.',
+      : (semanticModel
+        ? 'No matches, lexical or semantic. Try different identifiers/terms, or expand a TOC segment directly.'
+        : 'No lexical matches, and semantic recall is unavailable on this install. Try different identifiers/terms, or expand a TOC segment directly.'),
   };
 }
 

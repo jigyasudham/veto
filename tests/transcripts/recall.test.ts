@@ -51,7 +51,12 @@ describe('recallQuery — Phase 1 (lazy-indexes, then searches)', () => {
     const res = recallQuery({ query: 'zzz-nonexistent-term', projectDir: 'd:\\recall-proj' });
     expect(res.ok).toBe(true);
     expect(res.hits.length).toBe(0);
-    expect(res.guidance).toContain('No lexical matches');
+    // Wording depends on whether the semantic layer is installed; both
+    // variants must say plainly that nothing matched, and the result now
+    // reports which retrieval actually ran (condition A3).
+    expect(res.guidance).toMatch(/No (lexical )?matches/);
+    expect(res.retrieval.lexical).toBe(true);
+    expect(res.retrieval.semantic === null || typeof res.retrieval.semantic === 'string').toBe(true);
   });
 });
 
