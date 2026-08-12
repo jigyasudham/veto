@@ -8,7 +8,7 @@
 // re-open is idempotent.
 
 // Highest migration version defined below.
-export const TRANSCRIPTS_SCHEMA_VERSION = 3;
+export const TRANSCRIPTS_SCHEMA_VERSION = 4;
 
 // The common vocabulary every source normalizes into.
 export const EVENT_KINDS = [
@@ -145,6 +145,38 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_postings_doc ON search_postings(doc_id);
     `,
   },
+  {
+    // v4 — chunk vectors for the semantic layer (Phase B).
+    //
+    // One row per WINDOW, not per event: whole-event vectors fail the
+    // paraphrase gate to mean-pooling dilution (spec §11 amendment). Keyed by
+    // the same INTEGER doc_id the postings use — storing the 36-char event
+    // uuid here would repeat the mistake that made the lexical index 3x too
+    // big. Chunks are internal (C6): nothing outside search.ts sees them.
+    //
+    // No `scale` column: cosine similarity is invariant to a positive
+    // per-vector scalar, so the dequantization scale cancels entirely. The
+    // stored `norm` is the L2 norm of the int8 vector itself, precomputed so a
+    // query is one dot product and one divide.
+    //
+    // Vectors live in their own lifecycle: `archives.chunker_version` and
+    // `archives.embed_model` gate re-derivation independently of
+    // parser_version, so ingest never depends on the model being installed and
+    // installing it later backfills without re-parsing anything.
+    version: 4,
+    up: `
+      CREATE TABLE IF NOT EXISTS search_vectors (
+        doc_id      INTEGER NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        vec         BLOB NOT NULL,     -- int8, one byte per dimension
+        norm        REAL NOT NULL,     -- L2 norm of the int8 vector
+        PRIMARY KEY (doc_id, chunk_index)
+      );
+
+      ALTER TABLE archives ADD COLUMN chunker_version INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE archives ADD COLUMN embed_model TEXT;
+    `,
+  },
 ];
 
 // Event kinds worth indexing for recall — spine + tool digests. Reasoning
@@ -166,6 +198,17 @@ export type ArchiveRow = {
   indexed_through_seq: number;
   captured_at: string;
   updated_at: string;
+  /** 0 until chunk vectors exist; gates re-derivation independently of parsing. */
+  chunker_version: number;
+  /** `model_id@revision` that produced the stored vectors, or null. */
+  embed_model: string | null;
+};
+
+export type SearchVectorRow = {
+  doc_id: number;
+  chunk_index: number;
+  vec: Uint8Array;
+  norm: number;
 };
 
 export type SessionMapRow = {
