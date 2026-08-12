@@ -445,7 +445,7 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 
 ## Session Transcript Capture (opt-in)
 
-`veto_session_save` writes a ~1k-token summary. That is enough to resume, but not enough to answer *"three weeks ago, what exactly did we conclude, and when?"* Transcript capture keeps the detail a summary throws away and makes it searchable — with no embeddings, no model downloads, and no API keys. It is a metadata table-of-contents plus a portable BM25 index built on core SQLite only — no FTS5, so it works on every supported Node — with your AI as the reranker, and it adds zero new runtime dependencies.
+`veto_session_save` writes a ~1k-token summary. That is enough to resume, but not enough to answer *"three weeks ago, what exactly did we conclude, and when?"* Transcript capture keeps the detail a summary throws away and makes it searchable — with no API keys, no per-query cost, and nothing leaving your machine. It is a metadata table-of-contents plus a portable BM25 index built on core SQLite only — no FTS5, so it works on every supported Node — fused with local semantic search, and your AI as the reranker.
 
 > ### ⚠️ Read this before you enable it
 >
@@ -468,15 +468,53 @@ veto transcripts disable         # Stop capturing (existing archives are kept)
 Recall runs through `veto_session_replay` as a two-call loop — search, then expand:
 
 ```
-{ query: "npm E404 publish" }   →  table-of-contents + top BM25 hits with snippets
+{ query: "npm E404 publish" }   →  table-of-contents + top hits with snippets
 { expand: { event_id: 412 } }   →  the exact lines, masked, with a turn + timestamp citation
 ```
 
-Claude Code is the only adapter in 3.0.0; Codex and Gemini follow.
+Claude Code is the only adapter in 3.1.0; Codex and Gemini follow.
+
+### Semantic recall — finding what you can't quite remember
+
+Keyword search fails on the question you actually have. You remember *what was
+decided*, not the words it was written in — so "why did the upload fail" never
+finds the note that says "the credentials had expired".
+
+Veto searches meaning as well as words. Each captured event is split into
+overlapping windows and embedded locally; a query is embedded the same way, and
+the two rankings — keywords and meaning — are fused so neither can bury the
+other. An exact identifier like `E404` still ranks first, and a question sharing
+no vocabulary with its answer still finds it.
+
+**This runs entirely on your machine.** No API key, no per-query cost, no text
+leaving the disk, and it works offline. What buys that is a **7 MB embedding
+table** installed as a normal dependency:
+
+- It is **downloaded once per machine** by npm's shared cache, not per project.
+- It ships with Veto whether or not you enable transcript capture. That is the
+  honest cost of the design: pinning an immutable package means the bytes can
+  never change under a released version, and it removes the runtime download,
+  checksum and mirror machinery that a fetch-on-demand model would need.
+- It is loaded **lazily, at the first semantic query — never at startup.** If it
+  is missing or damaged, search silently falls back to keywords only and Veto
+  keeps working.
+
+The table is [potion-base-8M](https://huggingface.co/minishlab/potion-base-8M)
+by [Minish Lab](https://github.com/MinishLab/model2vec) (MIT), distilled from
+`baai/bge-base-en-v1.5` and repacked to int8. It is a static lookup table, not a
+neural network: there is no model running at query time, which is why a search
+costs milliseconds. The inference code is Veto's own.
 
 ---
 
 ## Release Notes
+
+### 3.1.0
+- **Semantic recall — search finds what you meant, not just what you typed.** Transcript search now fuses the existing keyword index with local semantic search, so a question that shares no vocabulary with its answer still finds it: "why did the upload fail" surfaces the note saying "the credentials had expired". Each captured event is split into overlapping windows and scored by its best match, because embedding a whole event dilutes the one sentence that answers the question. Exact identifiers are unaffected — `E404` still ranks first. The two rankings are fused by reciprocal rank rather than blended scores, so neither ranker can bury the other.
+- **It runs on your machine, offline, at no per-query cost.** What pays for that is a 7 MB embedding table — [potion-base-8M](https://huggingface.co/minishlab/potion-base-8M) by [Minish Lab](https://github.com/MinishLab/model2vec) (MIT), distilled from `baai/bge-base-en-v1.5`, repacked to int8, shipped as the pinned package `@jigyasudham/veto-model`. npm's cache downloads it once per machine. It installs with Veto whether or not you enable capture: pinning an immutable version means the bytes can never change under a release, with no download, checksum or mirror machinery at runtime. It is a static lookup table, not a neural network — nothing executes at query time, and the inference code is Veto's own.
+- **The model is never load-bearing.** It resolves at the first semantic query and never at startup, so a missing or damaged copy degrades search to keyword-only with everything else untouched. Veto's own package is unchanged in size; the table is a dependency, not contents.
+- **Search got roughly 5x faster at scale, keyword search included.** Project-wide recall over a 50-session archive went from 178 ms to 38 ms, and keyword-only from 65 ms to 13 ms, by loading the index once instead of re-reading it per query. That also removes a latency ceiling that affected 3.0.0. Beyond roughly 100 archived sessions in one project, recall degrades gradually and remains usable.
+- **Correction to 3.0.0's release note:** it described transcript search as "SQLite FTS5/BM25". FTS5 was removed before 3.0.0 shipped precisely because it is absent on some Node builds; the index has always been portable BM25 on core SQLite.
 
 ### 3.0.0
 - **Never lose a session again — opt-in transcript capture with vectorless recall.** A saved session has always carried a ~1k-token summary, which is enough to resume but cannot answer "what exactly did we conclude three weeks ago, and when?" Veto can now archive a copy of your host CLI's own conversation transcript and build a memory pyramid over it — the raw gzipped original, deterministic facts, the conversation spine, and the existing summary — then search it with a metadata table-of-contents plus a portable BM25 index that uses core SQLite only, so it runs on every supported Node. No embeddings, no model downloads, no API keys, no new runtime dependencies. Recall is a two-call loop through `veto_session_replay`: query for a table-of-contents and ranked snippets, then expand a hit into the exact source lines with a turn-and-timestamp citation. Validated against a real 784-line session, where recall pinpointed a conclusion the summary could not reconstruct. Claude Code is the only adapter in this release.
