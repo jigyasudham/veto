@@ -9,7 +9,8 @@
 // archives in scope are ensured-indexed at query time.
 
 import { ensureIndexed } from './ingest.js';
-import { searchEvents, type SearchHit } from './search.js';
+import { searchEventsHybrid, type SearchHit } from './search.js';
+import { embedArchive } from './vectors.js';
 import { buildTOC, type Segment } from './toc.js';
 import { buildFacts, renderFacts } from './pyramid.js';
 import { expandEvent, expandRange, type ExpandResult } from './expand.js';
@@ -60,7 +61,13 @@ export function recallQuery(input: RecallQueryInput): RecallQueryResult {
 
   for (const a of scopeArchives) ensureIndexed(a.id);
 
-  const hits = searchEvents(input.query, {
+  // Semantic vectors are built here, at the first query that needs them, and
+  // never at server boot (condition A2). embedArchive is a no-op when the
+  // model package is absent, so this whole block silently costs nothing and
+  // recall falls back to BM25 alone.
+  for (const a of scopeArchives) embedArchive(a.id);
+
+  const hits = searchEventsHybrid(input.query, {
     projectDir: input.projectDir,
     sourceSessionId: input.sourceSessionId,
     limit: input.limit ?? 8,
