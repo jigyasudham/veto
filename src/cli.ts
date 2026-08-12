@@ -635,6 +635,36 @@ async function doctorCommand() {
     issues++;
   }
 
+  // Semantic search model. It degrades SILENTLY at query time — by design, so a
+  // damaged copy can never take recall down — which is precisely why its state
+  // belongs in a health check. Without this line, a missing model is
+  // indistinguishable from search simply getting worse.
+  try {
+    const { isCaptureEnabled } = await import('./transcripts/config.js');
+    const { embeddingsAvailable, modelProvenance } = await import('./transcripts/embed.js');
+    const captureOn = isCaptureEnabled();
+
+    if (embeddingsAvailable()) {
+      const { model_id, revision } = modelProvenance();
+      console.log(`  ${c.green('✓')} Semantic search ${c.dim(`${model_id}@${revision.slice(0, 12)}`)}`);
+      if (!captureOn) {
+        console.log(`  ${c.dim(`    transcript capture is off — enable with ${c.cyan('veto transcripts enable')}`)}`);
+      }
+    } else if (captureOn) {
+      // Only an issue when capture is on: that is the one case where a user is
+      // actively searching and silently getting less than they should.
+      console.log(`  ${c.yellow('⚠')} Semantic search unavailable — recall is keyword-only`);
+      console.log(`  ${c.dim(`    the embedding table ships with Veto; reinstall to restore it: ${c.cyan('npm i -g @jigyasudham/veto@latest')}`)}`);
+      issues++;
+    } else {
+      console.log(`  ${c.dim('·')} Semantic search idle ${c.dim('— transcript capture is off')}`);
+    }
+  } catch {
+    // The whole feature is optional; a health check must never be the thing
+    // that fails because an optional dependency is absent.
+    console.log(`  ${c.dim('·')} Semantic search unavailable ${c.dim('— recall would run keyword-only')}`);
+  }
+
   console.log('');
   console.log('  ' + c.bold('MCP Registrations'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));

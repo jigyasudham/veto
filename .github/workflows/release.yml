@@ -1,0 +1,108 @@
+name: release
+
+# Publishing from CI rather than a laptop, for one reason: npm can only attest
+# provenance from a supported CI with OIDC. A local `npm publish --provenance`
+# fails outright, which is why 3.0.0 and veto-model@1.0.0 both shipped without
+# it (council condition A3 asked for 2FA *and* provenance; only the 2FA half
+# held). Provenance ties a published tarball to the commit and workflow that
+# built it, so a compromised npm account alone cannot ship altered bytes.
+#
+# Manual by design — `workflow_dispatch`, not a tag trigger. Releases here have
+# always been a deliberate act with checks either side, and a tag push is too
+# easy to do by accident for something immutable.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and verify without publishing'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  # Required for provenance. Without it npm cannot mint the attestation and the
+  # publish silently degrades to an unattested one.
+  id-token: write
+
+jobs:
+  release:
+    name: publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      # Everything the test workflow asserts, re-asserted here. A release must
+      # never be the first place a check runs.
+      - name: Typecheck
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      # Condition A1. Veto pins an exact veto-model version; if that version is
+      # not installable, every fresh install of this release 404s at the
+      # dependency step. Checked again at release because the registry state
+      # can differ from when the branch was last tested.
+      - name: Assert the model pin resolves
+        run: |
+          PIN=$(node -p "require('./package.json').dependencies['@jigyasudham/veto-model']")
+          case "$PIN" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::model pin must be exact, got '$PIN'"; exit 1 ;;
+          esac
+          RESOLVED=$(npm view "@jigyasudham/veto-model@$PIN" version 2>/dev/null || true)
+          if [ "$RESOLVED" != "$PIN" ]; then
+            echo "::error::@jigyasudham/veto-model@$PIN does not resolve — publish the model first."
+            exit 1
+          fi
+          echo "model pin $PIN resolves."
+
+      # Publishing the same version twice fails with a 409 and leaves a
+      # confusing half-run; catching it here says why in one line.
+      - name: Assert this version is unpublished
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if npm view "@jigyasudham/veto@$V" version >/dev/null 2>&1; then
+            echo "::error::@jigyasudham/veto@$V is already published. Bump the version."
+            exit 1
+          fi
+          echo "@jigyasudham/veto@$V is unpublished — proceeding."
+
+      - name: Verify tarball contents
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e '
+            const raw = JSON.parse(require("fs").readFileSync("pack.json", "utf8"));
+            const pack = Array.isArray(raw) ? raw : Object.values(raw);
+            const files = pack[0].files.map(f => f.path.split("\\").join("/"));
+            const allowed = new Set(["README.md", "LICENSE", "package.json", "server.json"]);
+            const bad = files.filter(f => !f.startsWith("dist/") && !allowed.has(f));
+            if (bad.length) {
+              console.error("Unexpected files in the npm tarball:\n  " + bad.join("\n  "));
+              process.exit(1);
+            }
+            console.log(`OK — ${files.length} files.`);
+          '
+
+      - name: Publish
+        if: ${{ inputs.dry_run == false }}
+        run: npm publish --provenance --access public
+        env:
+          # A granular automation token scoped to this package only. It bypasses
+          # the interactive 2FA prompt that makes CI publishing impossible;
+          # provenance plus a scoped token is the stronger perimeter here,
+          # because it binds the artifact to this repo and workflow.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Dry run notice
+        if: ${{ inputs.dry_run == true }}
+        run: echo "Dry run — every gate passed, nothing published. Re-run with dry_run=false to publish."

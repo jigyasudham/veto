@@ -46,7 +46,7 @@ describe('transcripts sidecar DB — foundation', () => {
   it('opens at the current schema version with the foundation tables', () => {
     const db = getTranscriptsDb();
     expect(schemaVersion(db)).toBe(TRANSCRIPTS_SCHEMA_VERSION);
-    expect(schemaVersion(db)).toBe(3);
+    expect(schemaVersion(db)).toBe(4);
     const tables = tableNames(db);
     expect(tables).toContain('archives');
     expect(tables).toContain('session_map');
@@ -54,6 +54,7 @@ describe('transcripts sidecar DB — foundation', () => {
     expect(tables).toContain('search_docs');
     expect(tables).toContain('search_terms');
     expect(tables).toContain('search_postings');
+    expect(tables).toContain('search_vectors');
     // The FTS5 vtab is gone from the schema — creating OR dropping it loads
     // the fts5 module, which does not exist on every Node. Core SQL only.
     expect(tables).not.toContain('events_fts');

@@ -8,6 +8,7 @@
 
 import { statSync, existsSync, rmSync } from 'node:fs';
 import { getTranscriptsDb, transcriptsDbPath } from './store.js';
+import { resetCaches } from './cache.js';
 import { normalizeProjectDir } from '../memory/local.js';
 import { buildTOC, type Segment } from './toc.js';
 import { buildFacts, type SessionFacts } from './pyramid.js';
@@ -69,9 +70,17 @@ function purgeArchiveRows(archives: ArchiveRow[]): PurgeResult {
       res.indexRows += (db.prepare(
         `SELECT COUNT(*) n FROM search_postings WHERE doc_id IN (SELECT id FROM search_docs WHERE archive_id = ?)`
       ).get(a.id) as { n: number }).n;
+      // Chunk vectors hang off the same doc ids, so they orphan the same way
+      // postings would if this were forgotten (C3 asserts zero orphans).
+      res.indexRows += (db.prepare(
+        `SELECT COUNT(*) n FROM search_vectors WHERE doc_id IN (SELECT id FROM search_docs WHERE archive_id = ?)`
+      ).get(a.id) as { n: number }).n;
       db.prepare(`DELETE FROM events WHERE archive_id = ?`).run(a.id);
       db.prepare(
         `DELETE FROM search_postings WHERE doc_id IN (SELECT id FROM search_docs WHERE archive_id = ?)`
+      ).run(a.id);
+      db.prepare(
+        `DELETE FROM search_vectors WHERE doc_id IN (SELECT id FROM search_docs WHERE archive_id = ?)`
       ).run(a.id);
       db.prepare(`DELETE FROM search_docs WHERE archive_id = ?`).run(a.id);
       db.prepare(`DELETE FROM archives WHERE id = ?`).run(a.id);
@@ -81,6 +90,7 @@ function purgeArchiveRows(archives: ArchiveRow[]): PurgeResult {
       if (a.archive_path) paths.push(a.archive_path);
     }
     db.exec('COMMIT');
+    resetCaches();
   } catch (e) {
     db.exec('ROLLBACK');
     throw e;

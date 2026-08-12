@@ -48,6 +48,67 @@ jobs:
       - name: Test
         run: npm test
 
+  # Veto pins an exact version of @jigyasudham/veto-model. If that version is
+  # not resolvable on the registry, every fresh install of Veto 404s at the
+  # dependency step — the failure the two-package split can cause, and the one
+  # this gate exists to make impossible to ship (council condition A1).
+  #
+  # This is not paranoia about a publish failing. During the 1.0.0 pairing the
+  # publish returned 200 and the version document was live, yet `npm install`
+  # 404'd for several minutes because the packument had not reached the read
+  # CDN. Publish status is not resolution status, so resolution is what gets
+  # asserted here.
+  model-pin:
+    name: model pin resolves
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Assert the pin is exact and resolvable
+        run: |
+          node -e '
+            const pkg = require("./package.json");
+            const name = "@jigyasudham/veto-model";
+            const pin = (pkg.dependencies || {})[name];
+            if (!pin) {
+              console.error(`${name} is not in dependencies.`);
+              process.exit(1);
+            }
+            // A range would let the embedding table change under a published
+            // Veto version, which is exactly what pinning is for.
+            if (!/^\d+\.\d+\.\d+$/.test(pin)) {
+              console.error(`${name} must be pinned exactly, got "${pin}".`);
+              process.exit(1);
+            }
+            console.log(`${name}@${pin}`);
+            require("fs").writeFileSync("pin.txt", pin);
+          '
+          PIN=$(cat pin.txt)
+          echo "Resolving @jigyasudham/veto-model@$PIN on the registry…"
+          RESOLVED=$(npm view "@jigyasudham/veto-model@$PIN" version 2>/dev/null || true)
+          if [ "$RESOLVED" != "$PIN" ]; then
+            echo "::error::@jigyasudham/veto-model@$PIN does not resolve on the registry."
+            echo "Publish the model package first and wait for it to be installable."
+            exit 1
+          fi
+          echo "OK — resolves to $RESOLVED."
+
+      # Resolving is necessary but not sufficient: the published bytes must also
+      # be the ones the golden vectors were blessed against (condition A4).
+      - name: Install from the registry and verify the payload
+        run: |
+          npm ci --no-audit --no-fund
+          node -e '
+            const { paths } = require("@jigyasudham/veto-model");
+            const h = require(paths.header);
+            console.log(`payload ${h.vocab_size} x ${h.dim}, upstream ${h.upstream.model_id}@${h.upstream.revision.slice(0,12)}`);
+            if (h.format !== "veto-model/1") { console.error("unexpected payload format"); process.exit(1); }
+          '
+
   package:
     name: package contents
     runs-on: ubuntu-latest

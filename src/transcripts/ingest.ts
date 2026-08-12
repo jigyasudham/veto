@@ -11,6 +11,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { randomUUID } from 'node:crypto';
 import { getTranscriptsDb } from './store.js';
+import { resetCaches } from './cache.js';
 import { parseClaudeTranscript } from './adapters/claude.js';
 import { tokenize } from './tokenize.js';
 import { SEARCHABLE_KINDS, type ArchiveRow, type EventRow } from './schema.js';
@@ -91,6 +92,11 @@ export function ingestArchive(archiveId: string): IngestResult {
       db.prepare(
         `DELETE FROM search_postings WHERE doc_id IN (SELECT id FROM search_docs WHERE archive_id = ?)`
       ).run(archiveId);
+      // Doc ids are reassigned by this re-derive, so stale vectors would not
+      // just orphan — they would silently re-attach to the wrong events.
+      db.prepare(
+        `DELETE FROM search_vectors WHERE doc_id IN (SELECT id FROM search_docs WHERE archive_id = ?)`
+      ).run(archiveId);
       db.prepare(`DELETE FROM search_docs WHERE archive_id = ?`).run(archiveId);
       for (const e of events) {
         const eventId = randomUUID();
@@ -110,9 +116,14 @@ export function ingestArchive(archiveId: string): IngestResult {
           for (const [term, count] of tf) insPosting.run(termId(term), docId, count);
         }
       }
-      db.prepare(`UPDATE archives SET indexed_through_seq = ?, parser_version = ? WHERE id = ?`)
-        .run(events.length, PARSER_VERSION, archiveId);
+      // Vectors were just dropped with their docs; clearing the marker lets
+      // the lazy embed pass rebuild them without re-parsing the transcript.
+      db.prepare(
+        `UPDATE archives SET indexed_through_seq = ?, parser_version = ?, chunker_version = 0, embed_model = NULL
+          WHERE id = ?`
+      ).run(events.length, PARSER_VERSION, archiveId);
       db.exec('COMMIT');
+      resetCaches();
     } catch (e) {
       db.exec('ROLLBACK');
       throw e;
