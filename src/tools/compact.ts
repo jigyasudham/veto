@@ -1,5 +1,5 @@
-// Compact tool surface — progressive disclosure for clients where 92 tool
-// schemas would burn ~25K context tokens before the user types a word.
+// Compact tool surface — progressive disclosure for clients where 93 tool
+// schemas would burn ~20K context tokens before the user types a word.
 //
 // In compact mode (VETO_COMPACT=1 or config compact_tools=true) ListTools
 // exposes only a small first-class set plus two meta-tools: veto_find_tools
@@ -29,7 +29,7 @@ export const META_TOOL_DEFINITIONS: ToolDef[] = [
   {
     name: 'veto_find_tools',
     description:
-      'Searches the full Veto catalog (92 tools: agents, reviews, advisors, generators, memory, learning, git, workflow) by keyword and returns matching tool schemas. Compact mode exposes only core tools up front — call this first to discover the right tool, then invoke it via veto_call.',
+      'Searches the full Veto catalog (93 tools: agents, reviews, advisors, generators, memory, learning, git, workflow) by keyword and returns matching tool schemas. Compact mode exposes only core tools up front — call this first to discover the right tool, then invoke it via veto_call.',
     inputSchema: {
       type: 'object',
       properties: {

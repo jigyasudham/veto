@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Veto MCP Server — 92 tools, LLM council + auto-learning router
+// Veto MCP Server — 93 tools, LLM council + auto-learning router
 
 // Suppress node:sqlite experimental warning — it would corrupt the MCP stdio protocol
 process.removeAllListeners('warning');

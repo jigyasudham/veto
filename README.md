@@ -100,7 +100,7 @@ The 7-agent **Council** is LLM-first — its value is the multi-agent debate —
 
 ## Compact Mode — 93 tools without the context tax
 
-92 tool schemas cost a client ~16K context tokens before the user types a word. Compact mode advertises a surface that is **5–6× smaller**: seven core tools (`veto_status`, `veto_session_save`, `veto_session_restore`, `veto_route_task`, `veto_council_debate`, `veto_memory_search`, `veto_record_outcome`) plus two meta-tools — `veto_find_tools` searches the full catalog by keyword and returns matching schemas on demand; `veto_call` invokes any catalog tool by name. Every tool remains directly callable in both modes; compact only changes what is advertised up front.
+93 tool schemas cost a client ~20K context tokens before the user types a word. Compact mode advertises a surface that is **5–6× smaller**: seven core tools (`veto_status`, `veto_session_save`, `veto_session_restore`, `veto_route_task`, `veto_council_debate`, `veto_memory_search`, `veto_record_outcome`) plus two meta-tools — `veto_find_tools` searches the full catalog by keyword and returns matching schemas on demand; `veto_call` invokes any catalog tool by name. Every tool remains directly callable in both modes; compact only changes what is advertised up front.
 
 Enable it with `VETO_COMPACT=1` in your MCP server config env, or `"compact_tools": true` in `~/.veto/config.json`:
 
