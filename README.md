@@ -509,6 +509,9 @@ costs milliseconds. The inference code is Veto's own.
 
 ## Release Notes
 
+### 3.1.2
+- **The embedding table Veto installs is now a signed artifact.** Veto pins `@jigyasudham/veto-model` to an exact version, and that pin now points at `1.0.1`, which was published from CI with provenance — a signed attestation linking the package to the repository, workflow and commit that built it. `1.0.0` was published by hand and can never be attested, so the pin was the only way to close the gap. The payload itself is byte-for-byte identical between the two versions: same embeddings, same scales, same tokenizer, same vectors. Nothing about search behaviour, results or ranking changes.
+
 ### 3.1.1
 - **Bug fix: `veto memory export --markdown` always failed.** The markdown export assembled its query with the project filter placed after `ORDER BY`, which is not valid SQL, so the export reported failure instead of writing a file. Because the CLI always filters by the current project, the command could never succeed; the MCP tool `veto_memory_export` failed the same way whenever a project was specified. Exports without a project filter were unaffected, which is why this went unnoticed. Both queries are corrected and covered by regression tests.
 
