@@ -89,6 +89,24 @@ jobs:
           fi
           echo "model pin $PIN resolves."
 
+      # Provenance binds the artifact to the repository that built it, and npm
+      # validates that binding against package.json. If repository.url is absent
+      # or disagrees, the registry rejects the upload with a 422 *after* the
+      # bundle has been signed and written to the public transparency log —
+      # every gate green, a signature burned, and nothing published. 3.1.1 hit
+      # exactly that: the field had never existed, which no dry run could reveal
+      # because a dry run never signs anything.
+      - name: Assert repository metadata matches this repo
+        run: |
+          node -e '
+            const p = require("./package.json");
+            const url = p.repository && (typeof p.repository === "string" ? p.repository : p.repository.url) || "";
+            const want = "github.com/${{ github.repository }}";
+            if (!url) { console.error("::error::package.json has no repository.url — npm will reject the provenance bundle with a 422"); process.exit(1); }
+            if (!url.includes(want)) { console.error(`::error::package.json repository.url is "${url}", which does not match ${want}`); process.exit(1); }
+            console.log(`repository.url ${url} matches ${want}.`);
+          '
+
       # Publishing the same version twice fails with a 409 and leaves a
       # confusing half-run; catching it here says why in one line.
       - name: Assert this version is unpublished
