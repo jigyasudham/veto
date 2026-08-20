@@ -7,6 +7,14 @@ name: release
 # held). Provenance ties a published tarball to the commit and workflow that
 # built it, so a compromised npm account alone cannot ship altered bytes.
 #
+# Auth is OIDC trusted publishing, not a stored token. npm exchanges this
+# workflow's short-lived OIDC identity for publish rights, so there is no
+# NPM_TOKEN secret to leak, rotate, or forget to scope — and provenance is
+# emitted automatically, no `--provenance` flag required. The trade is that
+# trust lives in npm's package settings rather than this file: the configured
+# repository and workflow filename must match exactly, so renaming this file
+# breaks publishing until npm is updated to match.
+#
 # Manual by design — `workflow_dispatch`, not a tag trigger. Releases here have
 # always been a deliberate act with checks either side, and a tag push is too
 # easy to do by accident for something immutable.
@@ -36,6 +44,21 @@ jobs:
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs npm >= 11.5.1. Node 24 bundles an npm that may
+      # or may not clear that line depending on the patch release the runner
+      # happens to have, and a silent shortfall here fails at the publish step
+      # after every other gate has passed. Pin the floor explicitly instead.
+      - name: Ensure npm supports trusted publishing
+        run: |
+          npm install -g npm@latest
+          node -e '
+            const v = require("child_process").execSync("npm --version").toString().trim();
+            const [maj, min, pat] = v.split(".").map(Number);
+            const ok = maj > 11 || (maj === 11 && (min > 5 || (min === 5 && pat >= 1)));
+            if (!ok) { console.error(`::error::npm ${v} is below the 11.5.1 trusted-publishing floor`); process.exit(1); }
+            console.log(`npm ${v} supports trusted publishing.`);
+          '
 
       - name: Install
         run: npm ci --no-audit --no-fund
@@ -93,15 +116,13 @@ jobs:
             console.log(`OK — ${files.length} files.`);
           '
 
+      # No NODE_AUTH_TOKEN. Authentication is the OIDC exchange described at the
+      # top of this file, and provenance is emitted automatically as part of it.
+      # If npm rejects this with an auth error, the trusted publisher on
+      # npmjs.com is missing or its repo/workflow filename does not match.
       - name: Publish
         if: ${{ inputs.dry_run == false }}
-        run: npm publish --provenance --access public
-        env:
-          # A granular automation token scoped to this package only. It bypasses
-          # the interactive 2FA prompt that makes CI publishing impossible;
-          # provenance plus a scoped token is the stronger perimeter here,
-          # because it binds the artifact to this repo and workflow.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
 
       - name: Dry run notice
         if: ${{ inputs.dry_run == true }}
