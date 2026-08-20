@@ -274,7 +274,7 @@ export function exportMemoryMarkdown(projectDir?: string, outputPath?: string): 
 
   try {
     const knowledge = db.prepare(
-      `SELECT * FROM knowledge_base ORDER BY created_at DESC LIMIT 100${projectDir ? ' WHERE project_dir = ?' : ''}`
+      `SELECT * FROM knowledge_base${projectDir ? ' WHERE project_dir = ?' : ''} ORDER BY created_at DESC LIMIT 100`
     ).all(...(projectDir ? [projectDir] : [])) as Record<string, unknown>[];
 
     const patterns = db.prepare(
@@ -286,7 +286,7 @@ export function exportMemoryMarkdown(projectDir?: string, outputPath?: string): 
     ).all() as Record<string, unknown>[];
 
     const sessions = db.prepare(
-      `SELECT id, platform, summary, project_dir, started_at FROM sessions ORDER BY started_at DESC LIMIT 20${projectDir ? ' WHERE project_dir = ?' : ''}`
+      `SELECT id, platform, summary, project_dir, started_at FROM sessions${projectDir ? ' WHERE project_dir = ?' : ''} ORDER BY started_at DESC LIMIT 20`
     ).all(...(projectDir ? [projectDir] : [])) as Record<string, unknown>[];
 
     const lines: string[] = [
