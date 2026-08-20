@@ -24,6 +24,14 @@
   ],
   "author": "Jigyasu Dham <jigyasudham18@gmail.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jigyasudham/veto.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jigyasudham/veto/issues"
+  },
+  "homepage": "https://github.com/jigyasudham/veto#readme",
   "type": "module",
   "engines": {
     "node": ">=22.13.0 <23.0.0 || >=23.4.0"
