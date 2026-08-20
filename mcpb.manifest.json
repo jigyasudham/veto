@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "veto",
   "display_name": "Veto",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "93 agentic MCP tools + 49 specialist agents for every major AI CLI. Self-learning, no API keys.",
   "long_description": "An MCP server that gives Claude Code, Codex CLI, Gemini CLI, Cursor, Windsurf, Zed, and JetBrains a council of specialist agents, persistent cross-platform memory, a self-learning router, CI/CD gates, dependency-hallucination and decision-drift guards — using your existing AI subscriptions, no API keys.",
   "author": {
