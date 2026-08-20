@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { exportMemoryMarkdown } from '../../src/memory/sync.js';
 import {
   saveSession,
   restoreSession,
@@ -135,5 +139,30 @@ describe('project map', () => {
     updateProjectMap({ project_dir: '/proj', structure: { v: 2 }, tech_stack: ['React'] });
     const map = getProjectMap('/proj');
     expect(map!.tech_stack).toContain('React');
+  });
+});
+
+describe('markdown export', () => {
+  it('exportMemoryMarkdown succeeds with a project_dir filter', () => {
+    storeKnowledge({ title: 'scoped entry', content: 'scoped content', project_dir: '/my/project' });
+    storeKnowledge({ title: 'other entry', content: 'other content', project_dir: '/other/project' });
+    const outPath = join(tmpdir(), `veto-md-export-${Date.now()}.md`);
+    const result = exportMemoryMarkdown('/my/project', outPath);
+    expect(result.success).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect(result.sections.knowledge_base).toBe(1);
+    const md = readFileSync(outPath, 'utf-8');
+    expect(md).toContain('scoped entry');
+    expect(md).not.toContain('other entry');
+    rmSync(outPath, { force: true });
+  });
+
+  it('exportMemoryMarkdown succeeds without a project_dir filter', () => {
+    storeKnowledge({ title: 'global entry', content: 'global content' });
+    const outPath = join(tmpdir(), `veto-md-export-all-${Date.now()}.md`);
+    const result = exportMemoryMarkdown(undefined, outPath);
+    expect(result.success).toBe(true);
+    expect(result.sections.knowledge_base).toBeGreaterThanOrEqual(1);
+    rmSync(outPath, { force: true });
   });
 });
