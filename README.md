@@ -239,7 +239,7 @@ veto tools [filter]              # List all 93 MCP tools (--json for machine out
 veto agents [filter]             # List all 49 specialists — workers + council (--json)
 veto routing [status|log|reset]  # Inspect the opt-in routing feedback loop
 veto transcripts <sub>           # Opt-in transcript capture (off by default) —
-                                 #   enable|status|list|show|purge|disable
+                                 #   enable|status|sources|list|show|purge|disable
 veto hook install                # Install pre-commit secrets scan hook
 veto hook remove                 # Remove the veto pre-commit hook
 veto check                       # Scan staged changes for secrets (used by hook)
@@ -459,11 +459,26 @@ Platform switching is manual — Veto surfaces which platform has budget remaini
 ```bash
 veto transcripts enable          # Opt in — prints what/where/retention, records consent
 veto transcripts status          # State, archive dir, retention, disk usage
+veto transcripts sources         # Per-CLI: where sessions live + what Veto can see
 veto transcripts list            # Archived sessions
 veto transcripts show <id>       # One session's table-of-contents + facts
 veto transcripts purge <id>      # Delete an archive (also --project=<dir> | --all)
 veto transcripts disable         # Stop capturing (existing archives are kept)
 ```
+
+### Works in Claude Code, Codex CLI and Gemini CLI
+
+All three are captured and recalled through the same pipeline, each with its own
+format adapter. Claude Code reports its session through Veto's statusline; Codex
+and Gemini expose no such hook, so Veto locates their session files on disk
+instead — `veto transcripts sources` shows exactly what it can see for each.
+Pass the CLI you are running in as `platform` when you save, and recall works the
+same everywhere. Each adapter was written against real transcripts rather than
+docs, which is how two format traps got handled: Codex records every message on
+two parallel streams, and Gemini's chat log appends a fresh copy of a message
+each time it grows. Both would otherwise put several copies of the same message
+into the index.
+
 
 Recall runs through `veto_session_replay` as a two-call loop — search, then expand:
 

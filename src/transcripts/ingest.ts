@@ -12,7 +12,7 @@ import { gunzipSync } from 'node:zlib';
 import { randomUUID } from 'node:crypto';
 import { getTranscriptsDb } from './store.js';
 import { resetCaches } from './cache.js';
-import { parseClaudeTranscript } from './adapters/claude.js';
+import { parseTranscript } from './adapters/index.js';
 import { tokenize } from './tokenize.js';
 import { SEARCHABLE_KINDS, type ArchiveRow, type EventRow } from './schema.js';
 
@@ -52,7 +52,7 @@ export function ingestArchive(archiveId: string): IngestResult {
     if (!existsSync(row.archive_path)) return { status: 'archive_missing' };
 
     const buf = gunzipSync(readFileSync(row.archive_path));
-    const { events, sessionIds, secretsRedacted } = parseClaudeTranscript(buf);
+    const { events, sessionIds, secretsRedacted } = parseTranscript(row.source, buf);
 
     if (sessionIds.size > 0 && !sessionIds.has(row.source_session_id)) {
       return { status: 'session_mismatch', reason: 'archive session id not present in transcript' };

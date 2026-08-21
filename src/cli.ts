@@ -1042,7 +1042,40 @@ async function transcriptsCommand() {
     if (s.consent_at) console.log(`  Consent:     ${c.dim(`v${s.consent_version} · accepted ${s.consent_at}`)}`);
     if (s.cloudSyncWarning) console.log(c.yellow(`  ⚠ Archive dir looks cloud-synced (${s.cloudSyncWarning}) — consider a local path.`));
     console.log('');
-    console.log(c.dim('  enable · disable · list · show <id> · purge <id>|--project <dir>|--all'));
+    console.log(c.dim('  enable · disable · list · sources · show <id> · purge <id>|--project <dir>|--all'));
+    console.log('');
+    return;
+  }
+
+  // Codex and Gemini publish no session mapping of their own, so what capture
+  // can see for them is whatever discovery finds on disk. Showing that is the
+  // difference between "capture is on" and "capture will actually work here".
+  if (sub === 'sources') {
+    const { discoverCodexSessions, discoverGeminiSessions, codexSessionsDir, geminiTmpDir } =
+      await import('./transcripts/discover.js');
+    const projFlag = args.find(a => a.startsWith('--project='))?.split('=')[1];
+    const { normalizeProjectDir } = await import('./memory/local.js');
+    const want = projFlag ? normalizeProjectDir(projFlag) : null;
+    console.log('');
+    console.log(c.bold('  Transcript sources'));
+    console.log(c.dim('  ─────────────────────────────────────────────────────'));
+    console.log(`  ${c.cyan('claude')}  ${c.dim('mapped live by the statusline')} ${c.dim('(veto statusline install)')}`);
+    for (const [name, find, dir] of [
+      ['codex', discoverCodexSessions, codexSessionsDir()],
+      ['gemini', discoverGeminiSessions, geminiTmpDir()],
+    ] as const) {
+      let rows: { sourceSessionId: string; projectDir: string | null; mtimeMs: number }[] = [];
+      try { rows = find(); } catch { rows = []; }
+      const shown = want ? rows.filter(r => r.projectDir && normalizeProjectDir(r.projectDir) === want) : rows;
+      console.log(`  ${c.cyan(name)}  ${c.dim(dir)}`);
+      if (shown.length === 0) console.log(c.dim(`     (no sessions discovered${want ? ' for this project' : ''})`));
+      for (const r of shown.slice(0, 5)) {
+        console.log(`     ${r.sourceSessionId.slice(0, 8)}…  ${c.dim(new Date(r.mtimeMs).toISOString())}  ${r.projectDir ?? c.dim('(unknown project)')}`);
+      }
+      if (shown.length > 5) console.log(c.dim(`     … and ${shown.length - 5} more`));
+    }
+    console.log('');
+    console.log(c.dim('  Discovered sessions are archived at save time when you pass platform=<source>.'));
     console.log('');
     return;
   }

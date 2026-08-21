@@ -3,10 +3,16 @@
 // Runs capture, then (bounded) ingest so the save response can report the leak
 // count and the one-time first-capture note. Never throws — the caller wraps it
 // too, but this returns null on any problem so a save is never affected.
+//
+// The source is the platform the save declares (`veto_session_save`'s `platform`
+// arg), because that is the CLI whose transcript the user is actually in. Claude
+// Code publishes its own mapping from the statusline; Codex and Gemini have no
+// such hook, so their mapping is discovered from disk first (see discover.ts).
 
 import { isCaptureEnabled, firstCaptureNote, effectiveTranscriptsDir } from './config.js';
 import { captureSession } from './archive.js';
 import { ingestArchive } from './ingest.js';
+import { isTranscriptSource, type TranscriptSource } from './adapters/index.js';
 
 // Don't parse+index a monster transcript inline on the save path (architect:
 // keep save-time work bounded). Above this, capture still archives; indexing is
@@ -15,19 +21,41 @@ const INLINE_INGEST_MAX_BYTES = 16 * 1024 * 1024;
 
 export type OnSaveTranscript = {
   status: string;               // archived | unchanged | skipped | error
+  source?: string;
   events?: number;
   secrets_redacted?: number;
   archive_dir?: string;
   note?: string;
 };
 
-export async function captureOnSave(opts: { projectDir?: string | null; vetoSessionId?: string | null }): Promise<OnSaveTranscript | null> {
+/** Map a declared save platform onto a capture source; unknown platforms → claude. */
+export function sourceForPlatform(platform?: string | null): TranscriptSource {
+  const p = (platform ?? '').trim().toLowerCase();
+  return isTranscriptSource(p) ? p : 'claude';
+}
+
+export async function captureOnSave(opts: {
+  projectDir?: string | null;
+  vetoSessionId?: string | null;
+  platform?: string | null;
+}): Promise<OnSaveTranscript | null> {
   if (!isCaptureEnabled()) return null;
 
-  const cap = await captureSession({ source: 'claude', projectDir: opts.projectDir, vetoSessionId: opts.vetoSessionId });
+  const source = sourceForPlatform(opts.platform);
+
+  // Codex/Gemini publish no session mapping of their own — find theirs on disk
+  // before capture looks one up. Bounded and best-effort.
+  if (source !== 'claude') {
+    try {
+      const { discoverSessions } = await import('./discover.js');
+      discoverSessions(source);
+    } catch { /* discovery is best-effort; capture will just find no mapping */ }
+  }
+
+  const cap = await captureSession({ source, projectDir: opts.projectDir, vetoSessionId: opts.vetoSessionId });
   if (!cap.ok) return null; // skipped (no mapping / missing / too_large) or error — stay silent
 
-  const out: OnSaveTranscript = { status: cap.status };
+  const out: OnSaveTranscript = { status: cap.status, source };
 
   // Index inline for small transcripts so we can report the leak count now.
   if (cap.archiveId && cap.status === 'archived' && (cap.sourceBytes ?? 0) <= INLINE_INGEST_MAX_BYTES) {

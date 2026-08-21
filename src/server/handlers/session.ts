@@ -93,12 +93,17 @@ export const sessionHandlers: HandlerMap = {
     }
     // Best-effort transcript capture (VERSION-3 item 6): archive + index this session's
     // host transcript for later recall, and surface the leak count / first-capture note.
-    // Gated on opt-in + Claude; NEVER throws or blocks correctness.
+    // Gated on opt-in + a supported host CLI; NEVER throws or blocks correctness.
     let transcriptOnSave: import('../../transcripts/on-save.js').OnSaveTranscript | null = null;
     try {
-      if (savePlatform === 'claude') {
+      const { isTranscriptSource } = await import('../../transcripts/adapters/index.js');
+      if (isTranscriptSource(savePlatform)) {
         const { captureOnSave } = await import('../../transcripts/on-save.js');
-        transcriptOnSave = await captureOnSave({ projectDir: sessionProjectDir, vetoSessionId: result.session_id });
+        transcriptOnSave = await captureOnSave({
+          projectDir: sessionProjectDir,
+          vetoSessionId: result.session_id,
+          platform: savePlatform,
+        });
       }
     } catch { /* transcript capture is best-effort; never breaks save */ }
 
