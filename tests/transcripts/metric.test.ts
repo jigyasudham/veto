@@ -14,7 +14,7 @@ const { getDb } = await import('../../src/memory/local.js');
 const { getTranscriptsDb, resetTranscriptsDb } = await import('../../src/transcripts/store.js');
 const {
   recallMetric, renderRecallMetric,
-  MIN_ELIGIBLE_RESUMES, MIN_WINDOW_DAYS, ATTACH_TARGET, EXPANSION_TARGET, ATTRIBUTION_WINDOW_HOURS,
+  MIN_ELIGIBLE_RESUMES, MIN_WINDOW_DAYS, ATTACH_TARGET, REFORMULATION_CEILING, ATTRIBUTION_WINDOW_HOURS,
 } = await import('../../src/transcripts/metric.js');
 
 const PROJ = 'd:\\metric proj';
@@ -163,7 +163,7 @@ describe('attach rate — did an eligible resume reach for recall', () => {
   });
 });
 
-describe('expansion rate — did the query lead to opening an excerpt', () => {
+describe('query outcomes — expanded / reformulated / silent', () => {
   it('counts a query that led to an expansion', () => {
     archive(PROJ, '2026-01-01T00:00:00.000Z');
     query(t(5, 9));
@@ -171,16 +171,50 @@ describe('expansion rate — did the query lead to opening an excerpt', () => {
     const m = recallMetric();
     expect(m.queries.total).toBe(1);
     expect(m.queries.expanded).toBe(1);
-    expect(m.queries.rate).toBe(1);
+    expect(m.queries.expansionRate).toBe(1);
     expect(m.depth.expands).toBe(1);
   });
 
-  it('records a query with no expansion as a miss', () => {
+  // A query followed by nothing is NOT scored either way: satisfied and gave-up
+  // are indistinguishable from this data, and inventing a reading is how a
+  // metric starts lying.
+  it('files a query with no follow-up as silent, not as a failure', () => {
     archive(PROJ, '2026-01-01T00:00:00.000Z');
     query(t(5, 9));
     const m = recallMetric();
     expect(m.queries.expanded).toBe(0);
-    expect(m.queries.rate).toBe(0);
+    expect(m.queries.reformulated).toBe(0);
+    expect(m.queries.silent).toBe(1);
+    expect(m.queries.reformulationRate).toBe(0);
+  });
+
+  // The one unambiguous negative: the AI asked again, so phase 1 failed it.
+  it('counts a re-asked query as a reformulation', () => {
+    archive(PROJ, '2026-01-01T00:00:00.000Z');
+    query(t(5, 9));
+    query(t(5, 10));
+    const m = recallMetric();
+    expect(m.queries.total).toBe(2);
+    expect(m.queries.reformulated).toBe(1);   // the first
+    expect(m.queries.silent).toBe(1);         // the second had no follow-up
+    expect(m.queries.reformulationRate).toBe(0.5);
+  });
+
+  it('does not count a query days later as a reformulation', () => {
+    archive(PROJ, '2026-01-01T00:00:00.000Z');
+    query(t(5, 9));
+    query(t(9, 9));
+    expect(recallMetric().queries.reformulated).toBe(0);
+  });
+
+  // THE FLAW THIS MODEL EXISTS TO AVOID: a phase 1 good enough to answer the
+  // question outright drives expansion to zero. That must not read as failure.
+  it('does not penalise a phase 1 that answered without needing an expansion', () => {
+    seedEligible(MIN_ELIGIBLE_RESUMES + 2, 1);
+    const m = recallMetric();
+    expect(m.queries.expansionRate).toBe(0);
+    expect(m.queries.reformulationRate).toBe(0);
+    expect(m.verdict.code).toBe('healthy');
   });
 
   it('attributes each expansion to the query it followed', () => {
@@ -225,44 +259,46 @@ describe('verdict', () => {
     expand(t(5, 11));
     const m = recallMetric();
     expect(m.attach.rate).toBe(1);          // 100% — and still not evidence
-    expect(m.queries.rate).toBe(1);
+    expect(m.queries.expansionRate).toBe(1);
     expect(m.verdict.code).toBe('insufficient_data');
   });
 
-  it('surfaces a zero expansion rate even while withholding a verdict', () => {
+  it('notes a zero expansion rate as an observation, not a verdict', () => {
     archive(PROJ, '2026-01-01T00:00:00.000Z');
     query(t(5, 9));
     query(t(6, 9));
     const m = recallMetric();
     expect(m.verdict.code).toBe('insufficient_data');
-    expect(m.verdict.detail).toContain('NONE led to opening an excerpt');
+    expect(m.verdict.detail).toContain('Observation, not a verdict');
+    expect(m.verdict.detail).toContain('this data cannot tell you');
   });
 
-  it('reports demand_not_shown when recall is available but unused', () => {
+  it('reports not_reached_for when recall is available but unused', () => {
     seedEligible(MIN_ELIGIBLE_RESUMES + 2, null);   // no queries at all
     const m = recallMetric();
     expect(m.resumes.eligible).toBeGreaterThanOrEqual(MIN_ELIGIBLE_RESUMES);
     expect(m.window.days).toBeGreaterThanOrEqual(MIN_WINDOW_DAYS);
     expect(m.attach.rate).toBe(0);
-    expect(m.verdict.code).toBe('demand_not_shown');
+    expect(m.verdict.code).toBe('not_reached_for');
   });
 
-  it('reports retrieval_not_landing when recall is used but nothing is opened', () => {
-    seedEligible(MIN_ELIGIBLE_RESUMES + 2, 1);      // every resume queries, none expands
+  it('reports retrieval_not_landing when queries keep having to be re-asked', () => {
+    seedEligible(MIN_ELIGIBLE_RESUMES + 2, 1);
+    // A second query right after each one: phase 1 failed every time.
+    for (let i = 0; i < MIN_ELIGIBLE_RESUMES + 2; i++) query(t(2 + i, 11));
     const m = recallMetric();
     expect(m.attach.rate).toBeGreaterThanOrEqual(ATTACH_TARGET);
-    expect(m.queries.rate).toBe(0);
+    expect(m.queries.reformulationRate!).toBeGreaterThan(REFORMULATION_CEILING);
     expect(m.verdict.code).toBe('retrieval_not_landing');
   });
 
-  it('passes when both targets are met', () => {
+  it('is healthy when recall is reached for and queries are not re-asked', () => {
     seedEligible(MIN_ELIGIBLE_RESUMES + 2, 1);
-    // Expand after every query, inside its window.
     for (let i = 0; i < MIN_ELIGIBLE_RESUMES + 2; i++) expand(t(2 + i, 11));
     const m = recallMetric();
     expect(m.attach.rate).toBeGreaterThanOrEqual(ATTACH_TARGET);
-    expect(m.queries.rate).toBeGreaterThanOrEqual(EXPANSION_TARGET);
-    expect(m.verdict.code).toBe('pass');
+    expect(m.queries.reformulationRate!).toBeLessThanOrEqual(REFORMULATION_CEILING);
+    expect(m.verdict.code).toBe('healthy');
   });
 });
 
@@ -278,7 +314,9 @@ describe('reporting', () => {
     archive(PROJ, '2026-01-01T00:00:00.000Z');
     const out = renderRecallMetric(recallMetric());
     expect(out).toContain('THIS machine only');
-    expect(out).toContain('not evidence');
+    expect(out).toContain('NOT evidence of demand across users');
+    // Must say plainly that it cannot justify v3.2 on its own.
+    expect(out).toContain('must not be used on its own');
   });
 
   // The metric must not become a second store of what the user searched for.

@@ -1,9 +1,16 @@
 // The v3.0 success metric — "does deep recall actually get used?" (VERSION-3).
 //
 // v3.0 shipped without a confirmed success metric, so three releases later there
-// was no measure of whether transcript recall is reached for at all — and v3.2
-// (lesson mining) is gated on "once recall proves demand", a gate nobody could
-// evaluate. This computes that measure.
+// was no measure of whether transcript recall is reached for at all. This
+// computes that measure.
+//
+// IT IS A HEALTH CHECK, NOT THE v3.2 GATE. v3.2 (lesson mining) was written as
+// gated on "once recall proves demand", and it is tempting to point this number
+// at that gate. Do not: it reads ONE local database, and no threshold on a
+// single user — who is also the person who built the feature — can become market
+// evidence. Council 06b7b55c (YELLOW, 2026-08-22) was explicit that binding v3.2
+// to this number would leave v3.2 blocked on something that can never be
+// representative. Demand evidence lives outside the product.
 //
 // NOTHING NEW IS INSTRUMENTED. Every tool call is already traced into veto.db's
 // tool_call_trace_log, and archives.captured_at already says when recall became
@@ -35,8 +42,21 @@ export const MIN_ELIGIBLE_RESUMES = 30;
 export const MIN_WINDOW_DAYS = 30;
 /** Eligible resumes that reach for recall. */
 export const ATTACH_TARGET = 0.30;
-/** Recall queries that lead to opening at least one exact excerpt. */
-export const EXPANSION_TARGET = 0.50;
+/**
+ * Ceiling on queries the AI had to REFORMULATE.
+ *
+ * This deliberately replaced an "expansion rate >= 50%" target, which was
+ * self-defeating: it assumed opening an excerpt is the desired outcome, so
+ * improving phase 1 until its snippets answer the question outright would have
+ * DRIVEN THE NUMBER DOWN and scored the improvement as a failure. Expansion is
+ * still reported, but it is not a target.
+ *
+ * Reformulation is gated instead because it is the one unambiguous signal in the
+ * data: a query followed by another query means phase 1 did not serve the first
+ * one. A query followed by nothing cannot be read — satisfied and gave-up look
+ * identical from here — so it is reported as `silent` and never scored.
+ */
+export const REFORMULATION_CEILING = 0.40;
 /**
  * How long after a resume a recall query still counts as belonging to it (and
  * likewise a query → its expansion). Long enough for a real working session,
@@ -48,9 +68,9 @@ const RESUME_TOOLS = ['veto_continue', 'veto_session_restore'];
 
 export type MetricVerdict =
   | 'insufficient_data'      // too few eligible resumes / too short a window
-  | 'pass'                   // both targets met
-  | 'demand_not_shown'       // recall is available but not reached for
-  | 'retrieval_not_landing'; // recall IS reached for, but nothing is worth opening
+  | 'healthy'                // reached for, and phase 1 serves the query
+  | 'not_reached_for'        // recall is available but rarely used
+  | 'retrieval_not_landing'; // recall IS used, but queries keep being reformulated
 
 export type RecallMetric = {
   window: { from: string | null; to: string | null; days: number };
@@ -69,7 +89,19 @@ export type RecallMetric = {
     unscoped: number;        // project could not be resolved; excluded from both
   };
   attach: { attached: number; rate: number | null };
-  queries: { total: number; expanded: number; rate: number | null };
+  /**
+   * Every query lands in exactly one bucket. `silent` is deliberately NOT scored:
+   * a query followed by nothing is indistinguishable between "phase 1 answered
+   * it" and "the AI gave up", and pretending otherwise would invent a number.
+   */
+  queries: {
+    total: number;
+    expanded: number;
+    reformulated: number;
+    silent: number;
+    expansionRate: number | null;
+    reformulationRate: number | null;
+  };
   depth: { expands: number; perExpandingQuery: number | null; distinctSessionsExpanded: number };
   verdict: { code: MetricVerdict; headline: string; detail: string };
 };
@@ -186,17 +218,22 @@ export function recallMetric(): RecallMetric {
     if (hit) attached++;
   }
 
-  // ── Expansion: a query that led to opening at least one exact excerpt.
+  // ── What became of each query. Exactly one bucket each:
+  //   expanded     — led to opening an exact excerpt
+  //   reformulated — followed by ANOTHER query in the window: phase 1 failed it
+  //   silent       — neither; unreadable, so never scored (see REFORMULATION_CEILING)
   const queryTimes = queries.map(q => q.recorded_at);
-  let expandedQueries = 0;
+  let expandedQueries = 0, reformulated = 0;
   for (const t of queryTimes) {
     const nextQuery = queryTimes.find(x => x > t) ?? null;
-    const hit = expands.some(e =>
+    const expandedHere = expands.some(e =>
       e.recorded_at > t
       && (!nextQuery || e.recorded_at < nextQuery)
       && hoursBetween(t, e.recorded_at) <= ATTRIBUTION_WINDOW_HOURS);
-    if (hit) expandedQueries++;
+    if (expandedHere) { expandedQueries++; continue; }
+    if (nextQuery && hoursBetween(t, nextQuery) <= ATTRIBUTION_WINDOW_HOURS) reformulated++;
   }
+  const silent = queries.length - expandedQueries - reformulated;
 
   const distinctExpanded = new Set(expands.map(e => expandTarget(e.args_json)).filter(Boolean) as string[]).size;
 
@@ -208,6 +245,7 @@ export function recallMetric(): RecallMetric {
 
   const attachRate = eligible > 0 ? attached / eligible : null;
   const expansionRate = queries.length > 0 ? expandedQueries / queries.length : null;
+  const reformulationRate = queries.length > 0 ? reformulated / queries.length : null;
 
   // ── Verdict. Sample size is checked FIRST: a rate over three resumes is a
   // number, not evidence, and reporting it as a verdict is how a metric starts
@@ -220,23 +258,24 @@ export function recallMetric(): RecallMetric {
     headline = 'Not enough data to judge yet';
     detail = `Needs ${MIN_ELIGIBLE_RESUMES} eligible resumes over ${MIN_WINDOW_DAYS} days; have ${eligible} over ${days}.`
       + (expands.length === 0 && queries.length > 0
-        ? ` Worth noting regardless: ${queries.length} recall quer${queries.length === 1 ? 'y has' : 'ies have'} run and NONE led to opening an excerpt.`
+        ? ` Observation, not a verdict: ${queries.length} recall quer${queries.length === 1 ? 'y has' : 'ies have'} run and none opened an excerpt.`
+          + ` That is only a defect if phase 1 was not already enough — which this data cannot tell you.`
         : '');
   } else if ((attachRate ?? 0) < ATTACH_TARGET) {
-    code = 'demand_not_shown';
+    code = 'not_reached_for';
     headline = 'Recall is available but rarely reached for';
-    detail = `Attach rate ${(100 * (attachRate ?? 0)).toFixed(0)}% is below the ${(100 * ATTACH_TARGET).toFixed(0)}% target. `
-      + 'v3.2 lesson mining should not be justified on "recall proves demand" from this data.';
-  } else if ((expansionRate ?? 0) < EXPANSION_TARGET) {
+    detail = `Attach rate ${(100 * (attachRate ?? 0)).toFixed(0)}% is below the ${(100 * ATTACH_TARGET).toFixed(0)}% target.`;
+  } else if ((reformulationRate ?? 0) > REFORMULATION_CEILING) {
     code = 'retrieval_not_landing';
-    headline = 'Recall is wanted, but results are not worth opening';
-    detail = `Attach rate ${(100 * (attachRate ?? 0)).toFixed(0)}% meets the target, but only `
-      + `${(100 * (expansionRate ?? 0)).toFixed(0)}% of queries led to an expansion (target ${(100 * EXPANSION_TARGET).toFixed(0)}%). `
-      + 'Fix retrieval quality before building lesson mining on top of it.';
+    headline = 'Recall is used, but queries keep having to be re-asked';
+    detail = `Attach rate ${(100 * (attachRate ?? 0)).toFixed(0)}% meets the target, but `
+      + `${(100 * (reformulationRate ?? 0)).toFixed(0)}% of queries were reformulated `
+      + `(ceiling ${(100 * REFORMULATION_CEILING).toFixed(0)}%) — phase 1 is not serving them.`;
   } else {
-    code = 'pass';
-    headline = 'Deep recall is used and lands';
-    detail = `Attach ${(100 * (attachRate ?? 0)).toFixed(0)}% and expansion ${(100 * (expansionRate ?? 0)).toFixed(0)}% both meet target.`;
+    code = 'healthy';
+    headline = 'Deep recall is reached for, and phase 1 serves the query';
+    detail = `Attach ${(100 * (attachRate ?? 0)).toFixed(0)}% and reformulation `
+      + `${(100 * (reformulationRate ?? 0)).toFixed(0)}% are both within target.`;
   }
 
   return {
@@ -250,7 +289,10 @@ export function recallMetric(): RecallMetric {
     },
     resumes: { total: resumeRows.length, inWindow, eligible, ineligible, unscoped },
     attach: { attached, rate: attachRate },
-    queries: { total: queries.length, expanded: expandedQueries, rate: expansionRate },
+    queries: {
+      total: queries.length, expanded: expandedQueries, reformulated, silent,
+      expansionRate, reformulationRate,
+    },
     depth: {
       expands: expands.length,
       perExpandingQuery: expandedQueries > 0 ? expands.length / expandedQueries : null,
@@ -281,8 +323,10 @@ export function renderRecallMetric(m: RecallMetric): string {
     + `${m.resumes.ineligible} in projects with no archive, ${m.resumes.unscoped} unattributable)`);
   lines.push(`  Attach rate: ${pct(m.attach.rate)}  ${m.attach.attached}/${m.resumes.eligible} eligible resumes reached for recall`
     + `   ${c(m.attach.rate, ATTACH_TARGET)} target ${pct(ATTACH_TARGET)}`);
-  lines.push(`  Expansion:   ${pct(m.queries.rate)}  ${m.queries.expanded}/${m.queries.total} queries opened an exact excerpt`
-    + `   ${c(m.queries.rate, EXPANSION_TARGET)} target ${pct(EXPANSION_TARGET)}`);
+  lines.push(`  Re-asked:    ${pct(m.queries.reformulationRate)}  ${m.queries.reformulated}/${m.queries.total} queries had to be reformulated`
+    + `   ${c(m.queries.reformulationRate === null ? null : 1 - m.queries.reformulationRate, 1 - REFORMULATION_CEILING)} ceiling ${pct(REFORMULATION_CEILING)}`);
+  lines.push(`  Of ${m.queries.total} quer${m.queries.total === 1 ? 'y' : 'ies'}: `
+    + `${m.queries.expanded} opened an excerpt · ${m.queries.reformulated} re-asked · ${m.queries.silent} neither`);
   lines.push(`  Depth:       ${m.depth.expands} expansion(s), `
     + `${m.depth.perExpandingQuery === null ? '—' : m.depth.perExpandingQuery.toFixed(1)} per expanding query, `
     + `${m.depth.distinctSessionsExpanded} distinct session(s) opened`);
@@ -290,9 +334,10 @@ export function renderRecallMetric(m: RecallMetric): string {
   lines.push(`  Verdict:     ${m.verdict.headline}`);
   lines.push(`               ${m.verdict.detail}`);
   lines.push('');
-  lines.push('  Measures THIS machine only — nothing is uploaded. It shows whether recall');
-  lines.push('  is used here and whether the query→expand loop completes; it is not evidence');
-  lines.push('  of demand across users.');
+  lines.push('  Reads THIS machine only — nothing is uploaded. It is a health check on');
+  lines.push('  whether recall works for you. It is NOT evidence of demand across users,');
+  lines.push('  and must not be used on its own to justify building on top of recall.');
+  lines.push('  "Neither" is not scored: satisfied and gave-up look identical from here.');
   return lines.join('\n');
 }
 

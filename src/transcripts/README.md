@@ -97,10 +97,32 @@ veto transcripts disable         # stop capturing (archives kept until purged)
 
 Recall runs through `veto_session_replay` (two calls):
 
-1. `{ query: "npm E404 publish", project_dir }` → a compact table-of-contents +
-   top BM25 hits with snippets.
+1. `{ query: "npm E404 publish", project_dir }` → a table-of-contents + top hits
+   with sentence-sized snippets.
 2. `{ expand: { event_id } }` (or `{ source_session_id, from_seq, to_seq }` /
-   `{ segment_index }`) → the exact lines, masked, with a provenance citation.
+   `{ segment_index }`) → the exact conversation text, masked, with a provenance
+   citation. Add `raw: true` for the verbatim source-log bytes.
+
+### Calibrating the two phases
+
+The v3.0 metric found that the loop had never once completed — every query
+stopped at phase 1. Measuring why (council `06b7b55c`) turned up a calibration
+defect rather than a ranking one, and all three parts are now fixed:
+
+| | was | now |
+|---|---|---|
+| Snippet | 12 tokens (~97 chars) of keyword fragment | 60 tokens, capped at 500 (~409 chars measured) |
+| Expansion | raw JSONL envelope, **uncapped** — 139.6KB / ~35k tokens at worst | readable conversation text, capped at `MAX_EXPAND_CHARS` |
+| TOC | only when every hit shared one archive → empty for any multi-session project | every archive that produced a hit, bounded |
+
+The reasoning: an AI given 97 characters of fragment cannot tell whether a hit is
+worth opening, has no TOC to navigate by, and faces a second call that might cost
+a third of its context window in unreadable JSON. Doing neither is the rational
+response. Expansion now serves `events.text`, which ingest already normalized and
+masked, so nothing re-parses L0 and no per-source knowledge leaks into
+`expand.ts`; `raw: true` still returns byte-exact L0, so Rule 0 is intact.
+
+None of this touches ranking, so it did not require a fresh sealed eval set.
 
 ## Safety guarantees
 
@@ -164,9 +186,13 @@ the *shape* of a recall call is read, never the query text.
   an archive), how many reached for recall within 6h. Eligibility is the point:
   measured against all resumes, the number tracks capture coverage rather than
   demand.
-- **Expansion rate** — of recall queries, how many led to opening an exact
-  excerpt. This separates "nobody wants this" from "they want it and it isn't
-  working" — two findings with opposite consequences.
+- **Re-asked rate** — of recall queries, how many the AI had to reformulate. This
+  is gated rather than expansion, because expansion is a *self-defeating* target:
+  improve phase 1 until its snippets answer the question and expansion falls,
+  which would score the improvement as a failure. Reformulation is the one
+  unambiguous negative in the data — the AI asked again, so phase 1 failed it.
+  A query followed by nothing is reported as `silent` and never scored, because
+  satisfied and gave-up are indistinguishable from here.
 - **Citation depth** — expansions per expanding query, and distinct sessions
   opened.
 
@@ -174,4 +200,5 @@ Below 30 eligible resumes over 30 days it reports `insufficient_data` and
 withholds a verdict rather than turning a handful of events into a percentage.
 
 It reads your machine only; nothing is uploaded. That makes it a real measure of
-whether the feature works *for you*, and not a measure of demand across users.
+whether the feature works *for you*, and **not** a measure of demand across
+users — it must not be used on its own to justify building on top of recall.

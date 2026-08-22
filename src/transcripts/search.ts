@@ -41,7 +41,13 @@ const B = 0.75;
 // ranking). Dropped at the dictionary, before any postings are read — unless
 // every query term is that common, in which case they are all kept.
 const DF_CAP_RATIO = 0.5;
-const SNIPPET_TOKENS = 12;
+// Snippet width. This was 12 tokens, which produced ~97-character keyword
+// fragments like "…before [we] publish anything [why]…" — below the threshold at
+// which an AI can judge whether a hit is worth opening, and the measured reason
+// the query→expand loop never completed (council 06b7b55c). Widened to whole
+// sentences, with a hard character cap so a token-dense line cannot run away.
+const SNIPPET_TOKENS = 60;
+const SNIPPET_MAX_CHARS = 500;
 
 /** BM25, scored in JS because log() in SQL is a compile-time lottery. */
 function bm25(tf: number, df: number, n: number, len: number, avgdl: number): number {
@@ -62,17 +68,19 @@ export function buildSnippet(text: string, terms: Set<string>): string {
     const matched = tokenize(raw).some(t => terms.has(t));
     tokens.push({ start: m.index, end: m.index + raw.length, matched });
   }
-  if (tokens.length === 0) return text.slice(0, 120);
+  if (tokens.length === 0) return text.slice(0, SNIPPET_MAX_CHARS);
 
   // Best SNIPPET_TOKENS-token window = most matches, earliest wins ties.
+  // Sliding sum rather than a nested scan: at 60 tokens the naive O(n·W) pass
+  // costs ~5x what it did at 12, on every returned hit.
   let best = 0;
   let bestCount = -1;
+  let count = 0;
   for (let i = 0; i < tokens.length; i += 1) {
-    const windowEnd = Math.min(i + SNIPPET_TOKENS, tokens.length);
-    let count = 0;
-    for (let j = i; j < windowEnd; j += 1) if (tokens[j].matched) count += 1;
-    if (count > bestCount) { bestCount = count; best = i; }
-    if (windowEnd === tokens.length) break;
+    if (tokens[i].matched) count += 1;                       // token entering
+    if (i >= SNIPPET_TOKENS && tokens[i - SNIPPET_TOKENS].matched) count -= 1;  // leaving
+    const start = Math.max(0, i - SNIPPET_TOKENS + 1);
+    if (count > bestCount) { bestCount = count; best = start; }
   }
   const windowEnd = Math.min(best + SNIPPET_TOKENS, tokens.length);
 
@@ -86,7 +94,9 @@ export function buildSnippet(text: string, terms: Set<string>): string {
   }
   const prefix = tokens[best].start > 0 ? '…' : '';
   const suffix = windowEnd < tokens.length || tokens[windowEnd - 1].end < text.length ? '…' : '';
-  return (prefix + out.replace(/\s+/g, ' ').trim() + suffix);
+  const body = out.replace(/\s+/g, ' ').trim();
+  const clipped = body.length > SNIPPET_MAX_CHARS ? body.slice(0, SNIPPET_MAX_CHARS) + '…' : body + suffix;
+  return prefix + clipped;
 }
 
 export function searchEvents(query: string, opts: SearchOptions = {}): SearchHit[] {

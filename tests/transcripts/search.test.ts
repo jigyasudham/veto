@@ -31,11 +31,23 @@ afterAll(() => {
 
 describe('buildSnippet — JS excerpt with highlights', () => {
   it('wraps matched terms in brackets and clips with ellipses', () => {
-    const text = 'a very long preamble that goes on for quite a while before we hit an npm E404 error on publish and then keeps going afterwards too';
+    // Long enough to exceed the 60-token snippet window, so clipping still applies.
+    const filler = 'a very long preamble that goes on and on and keeps going for quite a while indeed '.repeat(12);
+    const text = `${filler} before we hit an npm E404 error on publish and then keeps going afterwards too`;
     const snip = buildSnippet(text, new Set(['e404', 'publish']));
     expect(snip).toContain('[E404]');
     expect(snip).toContain('[publish]');
     expect(snip.startsWith('…')).toBe(true);
+  });
+
+  // Snippets are the evidence an AI decides on, so they must be sentence-sized,
+  // not keyword-sized (the 97-char fragments were why nothing was ever expanded).
+  it('returns enough context to judge a hit on, and caps runaway lines', () => {
+    const text = `${'lorem ipsum dolor sit amet '.repeat(200)} the npm E404 happened here ${'trailing words '.repeat(200)}`;
+    const snip = buildSnippet(text, new Set(['e404']));
+    expect(snip.length).toBeGreaterThan(150);
+    expect(snip.length).toBeLessThanOrEqual(520);   // SNIPPET_MAX_CHARS + ellipses
+    expect(snip).toContain('[E404]');
   });
 
   it('matches through sub-tokens (camelCase and paths)', () => {

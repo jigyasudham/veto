@@ -317,6 +317,7 @@ export const sessionHandlers: HandlerMap = {
           segmentIndex: typeof e.segment_index === 'number' ? e.segment_index : undefined,
           fromSeq: typeof e.from_seq === 'number' ? e.from_seq : undefined,
           toSeq: typeof e.to_seq === 'number' ? e.to_seq : undefined,
+          raw: e.raw === true,
         });
         return { content: [{ type: 'text', text: JSON.stringify(res, null, 2) }], ...(res.ok ? {} : { isError: true }) };
       } catch (err) {
