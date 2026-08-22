@@ -1042,7 +1042,7 @@ async function transcriptsCommand() {
     if (s.consent_at) console.log(`  Consent:     ${c.dim(`v${s.consent_version} · accepted ${s.consent_at}`)}`);
     if (s.cloudSyncWarning) console.log(c.yellow(`  ⚠ Archive dir looks cloud-synced (${s.cloudSyncWarning}) — consider a local path.`));
     console.log('');
-    console.log(c.dim('  enable · disable · list · sources · show <id> · purge <id>|--project <dir>|--all'));
+    console.log(c.dim('  enable · disable · list · sources · metric · show <id> · purge <id>|--project <dir>|--all'));
     console.log('');
     return;
   }
@@ -1050,6 +1050,18 @@ async function transcriptsCommand() {
   // Codex and Gemini publish no session mapping of their own, so what capture
   // can see for them is whatever discovery finds on disk. Showing that is the
   // difference between "capture is on" and "capture will actually work here".
+  // The v3.0 success metric. Derived from data Veto already records; see
+  // transcripts/metric.ts for what it can and cannot answer.
+  if (sub === 'metric') {
+    const { recallMetric, renderRecallMetric } = await import('./transcripts/metric.js');
+    const m = recallMetric();
+    console.log('');
+    console.log(renderRecallMetric(m).replace(/^ {2}/gm, '  '));
+    console.log('');
+    if (args.includes('--json')) console.log(JSON.stringify(m, null, 2));
+    return;
+  }
+
   if (sub === 'sources') {
     const { discoverCodexSessions, discoverGeminiSessions, codexSessionsDir, geminiTmpDir } =
       await import('./transcripts/discover.js');

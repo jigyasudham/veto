@@ -80,6 +80,7 @@ just don't enter the search index. Nothing is ever dropped.
 veto transcripts enable          # opt in (off by default); prints what/where/retention
 veto transcripts status          # state, archive dir, retention, disk usage
 veto transcripts sources         # per-CLI: where sessions live + what discovery can see
+veto transcripts metric          # the v3.0 success metric: is deep recall actually used?
 veto transcripts list            # archived sessions
 veto transcripts show <id>       # a session's TOC + facts
 veto transcripts purge <id> | --project=<dir> | --all
@@ -143,3 +144,26 @@ expand path and that a pasted secret never leaks through any stage.
 | `recall.ts` | the two-call loop |
 | `manage.ts` | list/show/purge + disk usage |
 | `on-save.ts` | save-time capture + inline index + leak count / note |
+
+## Is it working? (the v3.0 success metric)
+
+`veto transcripts metric` answers the question v3.0 shipped without: **is deep
+recall actually reached for, and does it land?** It is derived from data Veto
+already records (`tool_call_trace_log`) — nothing new is instrumented, and only
+the *shape* of a recall call is read, never the query text.
+
+- **Attach rate** — of *eligible* resumes (a resume in a project that already had
+  an archive), how many reached for recall within 6h. Eligibility is the point:
+  measured against all resumes, the number tracks capture coverage rather than
+  demand.
+- **Expansion rate** — of recall queries, how many led to opening an exact
+  excerpt. This separates "nobody wants this" from "they want it and it isn't
+  working" — two findings with opposite consequences.
+- **Citation depth** — expansions per expanding query, and distinct sessions
+  opened.
+
+Below 30 eligible resumes over 30 days it reports `insufficient_data` and
+withholds a verdict rather than turning a handful of events into a percentage.
+
+It reads your machine only; nothing is uploaded. That makes it a real measure of
+whether the feature works *for you*, and not a measure of demand across users.
