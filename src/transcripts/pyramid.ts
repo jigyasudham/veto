@@ -9,11 +9,45 @@
 
 import { getTranscriptsDb } from './store.js';
 
-// Shared deterministic extractors (reused by the TOC in Step 9).
-export const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+// Shared deterministic extractors (reused by the TOC in Step 9). The tool names
+// span all three hosts, because facts are derived from the normalized events and
+// a Codex or Gemini session must yield the same file/command facts a Claude one
+// does: Claude edits with Edit/Write, Codex with apply_patch, Gemini with
+// replace/write_file — and each shells out under its own name.
+export const EDIT_TOOLS = new Set([
+  'Edit', 'Write', 'MultiEdit', 'NotebookEdit',   // claude
+  'apply_patch',                                   // codex
+  'replace', 'write_file',                         // gemini
+]);
+export const SHELL_TOOLS = new Set([
+  'Bash',                                          // claude
+  'shell_command', 'local_shell_call',             // codex
+  'run_shell_command',                             // gemini
+]);
 export const FILE_RE = /"(?:file_path|filePath|notebook_path|file|path)"\s*:\s*"([^"]+)"/;
 export const COMMAND_RE = /"command"\s*:\s*"([^"]+)"/;
+// Codex's apply_patch takes a patch body rather than JSON args, so its file names
+// only appear in the patch envelope.
+export const PATCH_FILE_RE = /\*\*\* (?:Add|Update|Delete) File: (.+)/g;
 export const ERROR_RE = /\b(error|errno|failed|failure|exception|traceback|not found|cannot|denied|refused|non-zero|exit code [1-9])\b/i;
+
+/**
+ * File paths a tool-call digest touched. Handles both shapes an edit tool can
+ * take: JSON args with a path key (Claude, Gemini) and a patch body whose
+ * envelope names the files (Codex apply_patch, which can touch several at once).
+ */
+export function extractFiles(text: string): string[] {
+  const out: string[] = [];
+  const m = text.match(FILE_RE);
+  if (m) out.push(m[1]);
+  PATCH_FILE_RE.lastIndex = 0;
+  let p: RegExpExecArray | null;
+  while ((p = PATCH_FILE_RE.exec(text)) !== null) {
+    const f = p[1].trim();
+    if (f) out.push(f);
+  }
+  return out;
+}
 
 export type SpineEntry = { seq: number; role: string; kind: string; ts: string | null; text: string };
 
@@ -79,9 +113,8 @@ export function buildFacts(archiveId: string): SessionFacts {
         toolCounts.set(name, (toolCounts.get(name) ?? 0) + 1);
         if (r.text) {
           if (EDIT_TOOLS.has(name)) {
-            const m = r.text.match(FILE_RE);
-            if (m) files.add(m[1]);
-          } else if (name === 'Bash') {
+            for (const f of extractFiles(r.text)) files.add(f);
+          } else if (SHELL_TOOLS.has(name)) {
             const m = r.text.match(COMMAND_RE);
             if (m) commands.push(m[1].slice(0, 200));
           }

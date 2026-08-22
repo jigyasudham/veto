@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseClaudeTranscript } from '../../src/transcripts/adapters/claude.js';
+import { parseCodexTranscript } from '../../src/transcripts/adapters/codex.js';
+import { parseGeminiTranscript } from '../../src/transcripts/adapters/gemini.js';
 
 // Pinned real-format Claude fixture (all 11 observed line types + one malformed
 // line). This is the drift canary: if a future adapter change stops recognizing a
@@ -10,6 +12,8 @@ import { parseClaudeTranscript } from '../../src/transcripts/adapters/claude.js'
 // below trips — turning silent format drift into a loud test failure.
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = readFileSync(join(__dirname, 'fixtures', 'claude-sample.jsonl'), 'utf8');
+const CODEX_FIXTURE = readFileSync(join(__dirname, 'fixtures', 'codex-sample.jsonl'));
+const GEMINI_FIXTURE = readFileSync(join(__dirname, 'fixtures', 'gemini-sample.jsonl'));
 
 describe('drift canary — pinned Claude fixture', () => {
   const { events, sessionIds } = parseClaudeTranscript(Buffer.from(FIXTURE, 'utf8'));
@@ -50,5 +54,63 @@ describe('drift canary — pinned Claude fixture', () => {
     const a1events = events.filter(e => e.eventUuid === 'a1');
     expect(a1events.length).toBe(3);
     expect(a1events.every(e => e.parentUuid === 'u1')).toBe(true);
+  });
+});
+
+// The same alarm for the two v3.2 sources. Both were validated against every real
+// transcript on the author's machine — 12 Codex rollouts spanning six CLI
+// versions (0.118 → 0.130) and 2,365 Gemini chat files — at a 0.00% unknown rate,
+// so any unknown beyond the deliberately malformed fixture line is drift.
+describe('drift canary — pinned Codex fixture', () => {
+  const { events, sessionIds } = parseCodexTranscript(CODEX_FIXTURE);
+
+  it('recognizes the session id and produces ordered events', () => {
+    expect(sessionIds.has('CODEXA')).toBe(true);
+    expect(events.map(e => e.seq)).toEqual(events.map((_, i) => i));
+  });
+
+  it('classifies every known envelope/payload pair', () => {
+    for (const t of [
+      'session_meta', 'turn_context',
+      'response_item/message', 'response_item/reasoning', 'response_item/function_call',
+      'response_item/function_call_output', 'response_item/custom_tool_call',
+      'response_item/custom_tool_call_output', 'response_item/web_search_call',
+      'event_msg/task_started', 'event_msg/user_message', 'event_msg/agent_message',
+      'event_msg/token_count', 'event_msg/exec_command_end', 'event_msg/patch_apply_end',
+      'event_msg/web_search_end', 'event_msg/turn_aborted', 'event_msg/task_complete',
+    ]) {
+      const rows = events.filter(e => e.sourceType === t);
+      expect(rows.length, `type ${t} should produce an event`).toBeGreaterThan(0);
+      expect(rows.every(e => e.kind !== 'unknown'), `type ${t} should not be unknown`).toBe(true);
+    }
+  });
+
+  it('DRIFT ALARM: only the malformed line is unknown-kind', () => {
+    // The future-envelope line is expected to be unknown — that IS the drift
+    // signal working — so the alarm is scoped to recognized shapes.
+    const unknown = events.filter(e => e.kind === 'unknown');
+    expect(unknown.map(e => e.sourceType).sort()).toEqual(['(unparsed)', 'brand_new_future_envelope/whatever']);
+  });
+});
+
+describe('drift canary — pinned Gemini fixture', () => {
+  const { events, sessionIds } = parseGeminiTranscript(GEMINI_FIXTURE);
+
+  it('recognizes the session id and produces ordered events', () => {
+    expect(sessionIds.has('5dc752e2-f64c-4f68-929e-d0cca523724b')).toBe(true);
+    expect(events.map(e => e.seq)).toEqual(events.map((_, i) => i));
+  });
+
+  it('classifies every known record type', () => {
+    for (const t of ['header', '$set', 'user', 'gemini', 'info', 'error']) {
+      const rows = events.filter(e => e.sourceType === t);
+      expect(rows.length, `type ${t} should produce an event`).toBeGreaterThan(0);
+      expect(rows.every(e => e.kind !== 'unknown'), `type ${t} should not be unknown`).toBe(true);
+    }
+  });
+
+  it('DRIFT ALARM: only the malformed and future-type lines are unknown-kind', () => {
+    const unknown = events.filter(e => e.kind === 'unknown');
+    expect(unknown.map(e => e.sourceType).sort()).toEqual(['(unparsed)', 'brand-new-future-type']);
   });
 });

@@ -15,6 +15,14 @@ export type RecordMappingInput = {
   sourceSessionId: string;
   transcriptPath: string;
   projectDir?: string | null;
+  /**
+   * When this session was last active, ISO-8601. Defaults to now, which is right
+   * for the statusline (it only ever reports a session that is live *right now*).
+   * Discovery must pass the transcript's mtime instead: it reconstructs several
+   * sessions at once, and stamping them all "now" would flatten the recency that
+   * `latestMappingForProject` uses to pick the active one.
+   */
+  lastSeenAt?: string;
 };
 
 /**
@@ -25,7 +33,7 @@ export type RecordMappingInput = {
  */
 export function recordSessionMapping(m: RecordMappingInput): void {
   const db = getTranscriptsDb();
-  const now = new Date().toISOString();
+  const now = m.lastSeenAt ?? new Date().toISOString();
   const proj = m.projectDir ? normalizeProjectDir(m.projectDir) : null;
   db.prepare(
     `INSERT INTO session_map (source, source_session_id, transcript_path, project_dir, last_seen_at)

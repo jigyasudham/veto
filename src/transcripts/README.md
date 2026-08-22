@@ -1,8 +1,8 @@
 # Transcript capture + vectorless recall (VERSION-3 item 6, v3.0)
 
 Opt-in, local-only capture of your host CLI's session transcripts, with
-identifier-first recall — "never lose a session again." Claude Code only in v3.0;
-Codex/Gemini adapters are v3.1, lesson mining is v3.2.
+identifier-first recall — "never lose a session again." Claude Code, Codex CLI
+and Gemini CLI; lesson mining is still ahead.
 
 ## What it does
 
@@ -29,11 +29,66 @@ returned rows only. One shared tokenizer (`tokenize.ts`) serves both indexing
 and queries — identifier-preserving, sub-token expansion instead of stemming,
 property-tested for index/query symmetry. Scores are positive-higher-is-better.
 
+## Sources
+
+One adapter per host CLI, all normalizing into the same event vocabulary, routed
+by `archives.source` so an archive is always re-derived by the parser that
+captured it (`adapters/index.ts`). Each was written against every real transcript
+on the author's machine and lands a **0.00% unknown-kind rate**; the pinned
+fixtures in `tests/transcripts/fixtures/` are the drift canaries.
+
+| Source | Where it lives | How Veto finds the session | Notable |
+|---|---|---|---|
+| `claude` | `~/.claude/projects/**/<id>.jsonl` | statusline hook writes `session_map` | one line per turn |
+| `codex` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | discovered on disk; project from `session_meta.cwd` | two interleaved streams |
+| `gemini` | `~/.gemini/tmp/<project>/chats/session-*.jsonl` | discovered on disk; project from `.project_root` | append-only *revisions* |
+
+**Discovery instead of a hook.** Only Claude Code exposes a statusline that hands
+Veto its session id and transcript path. Codex and Gemini don't, and Veto (an MCP
+server inside them) can't see the host's transcript path — so `discover.ts` finds
+their session files on disk and writes the same `session_map` rows the statusline
+would have. It is bounded (newest-first, capped, bounded head-reads) because it
+runs on the save path, and it stamps `last_seen_at` from the file's mtime so
+"newest session for this project" still means what it says.
+
+**Capture follows the host, not the self-report.** Every MCP client names itself
+in the `initialize` handshake, so Veto reads which CLI it is running inside
+(`src/host.ts`) rather than trusting the `platform` argument — a model in Codex
+that leaves `platform` at its default would otherwise send Veto looking for a
+Claude transcript and silently archive nothing. The declared platform is still
+the fallback when the host is a client Veto has no marker for, and if neither
+signal names a supported host, capture is **skipped rather than guessed**:
+archiving the wrong CLI's session is worse than archiving none. `veto_health`
+reports the detected host and the raw client string, so an unrecognized client is
+diagnosable instead of invisible.
+
+**Two format traps, both measured rather than guessed:**
+
+- *Codex writes each message twice.* `response_item` is the model-API transcript
+  and `event_msg` is the TUI stream. Neither is a superset on its own: assistant
+  text is complete only on `event_msg` (interim commentary never reached
+  `response_item` on older builds — 143 such messages across 12 rollouts), while
+  user text is complete only on `response_item` (which also carries the injected
+  `<environment_context>` / `<subagent_notification>` inputs). So the canonical
+  stream is chosen per role and the twin is demoted to `meta` — indexing both
+  would double-count every message in BM25.
+- *Gemini writes each message many times.* Its chat log is append-only over
+  **revisions**, not messages: a streaming turn re-appends the same `id` with the
+  text grown further (202 records for 79 ids in one real session; content never
+  shrank in 65/65 revised ids). Only the last revision of an id stays searchable;
+  earlier ones are demoted. Otherwise a half-streamed sentence could outrank the
+  finished one.
+
+Demoted rows are still stored, ordered and byte-addressable back into L0 — they
+just don't enter the search index. Nothing is ever dropped.
+
 ## Using it
 
 ```
 veto transcripts enable          # opt in (off by default); prints what/where/retention
 veto transcripts status          # state, archive dir, retention, disk usage
+veto transcripts sources         # per-CLI: where sessions live + what discovery can see
+veto transcripts metric          # the v3.0 success metric: is deep recall actually used?
 veto transcripts list            # archived sessions
 veto transcripts show <id>       # a session's TOC + facts
 veto transcripts purge <id> | --project=<dir> | --all
@@ -42,10 +97,32 @@ veto transcripts disable         # stop capturing (archives kept until purged)
 
 Recall runs through `veto_session_replay` (two calls):
 
-1. `{ query: "npm E404 publish", project_dir }` → a compact table-of-contents +
-   top BM25 hits with snippets.
+1. `{ query: "npm E404 publish", project_dir }` → a table-of-contents + top hits
+   with sentence-sized snippets.
 2. `{ expand: { event_id } }` (or `{ source_session_id, from_seq, to_seq }` /
-   `{ segment_index }`) → the exact lines, masked, with a provenance citation.
+   `{ segment_index }`) → the exact conversation text, masked, with a provenance
+   citation. Add `raw: true` for the verbatim source-log bytes.
+
+### Calibrating the two phases
+
+The v3.0 metric found that the loop had never once completed — every query
+stopped at phase 1. Measuring why (council `06b7b55c`) turned up a calibration
+defect rather than a ranking one, and all three parts are now fixed:
+
+| | was | now |
+|---|---|---|
+| Snippet | 12 tokens (~97 chars) of keyword fragment | 60 tokens, capped at 500 (~409 chars measured) |
+| Expansion | raw JSONL envelope, **uncapped** — 139.6KB / ~35k tokens at worst | readable conversation text, capped at `MAX_EXPAND_CHARS` |
+| TOC | only when every hit shared one archive → empty for any multi-session project | every archive that produced a hit, bounded |
+
+The reasoning: an AI given 97 characters of fragment cannot tell whether a hit is
+worth opening, has no TOC to navigate by, and faces a second call that might cost
+a third of its context window in unreadable JSON. Doing neither is the rational
+response. Expansion now serves `events.text`, which ingest already normalized and
+masked, so nothing re-parses L0 and no per-source knowledge leaks into
+`expand.ts`; `raw: true` still returns byte-exact L0, so Rule 0 is intact.
+
+None of this touches ranking, so it did not require a fresh sealed eval set.
 
 ## Safety guarantees
 
@@ -97,3 +174,31 @@ expand path and that a pasted secret never leaks through any stage.
 | `recall.ts` | the two-call loop |
 | `manage.ts` | list/show/purge + disk usage |
 | `on-save.ts` | save-time capture + inline index + leak count / note |
+
+## Is it working? (the v3.0 success metric)
+
+`veto transcripts metric` answers the question v3.0 shipped without: **is deep
+recall actually reached for, and does it land?** It is derived from data Veto
+already records (`tool_call_trace_log`) — nothing new is instrumented, and only
+the *shape* of a recall call is read, never the query text.
+
+- **Attach rate** — of *eligible* resumes (a resume in a project that already had
+  an archive), how many reached for recall within 6h. Eligibility is the point:
+  measured against all resumes, the number tracks capture coverage rather than
+  demand.
+- **Re-asked rate** — of recall queries, how many the AI had to reformulate. This
+  is gated rather than expansion, because expansion is a *self-defeating* target:
+  improve phase 1 until its snippets answer the question and expansion falls,
+  which would score the improvement as a failure. Reformulation is the one
+  unambiguous negative in the data — the AI asked again, so phase 1 failed it.
+  A query followed by nothing is reported as `silent` and never scored, because
+  satisfied and gave-up are indistinguishable from here.
+- **Citation depth** — expansions per expanding query, and distinct sessions
+  opened.
+
+Below 30 eligible resumes over 30 days it reports `insufficient_data` and
+withholds a verdict rather than turning a handful of events into a percentage.
+
+It reads your machine only; nothing is uploaded. That makes it a real measure of
+whether the feature works *for you*, and **not** a measure of demand across
+users — it must not be used on its own to justify building on top of recall.

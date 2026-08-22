@@ -14,13 +14,18 @@ import type { Platform } from '../../router/index.js';
 import { handoff, continueSession } from '../../adapters/index.js';
 import { autoSummarizeSession } from '../../council/session-summarizer.js';
 import { autoSave, getActiveProjectDir, setActiveProjectDir } from '../runtime.js';
+import { detectHostPlatform } from '../../host.js';
 import type { HandlerMap } from '../registry.js';
 
 export const sessionHandlers: HandlerMap = {
   veto_session_save: async ({ args, server }) => {
     const sessionProjectDir = args?.project_dir ? normalizeProjectDir(String(args.project_dir)) : undefined;
     if (sessionProjectDir) setActiveProjectDir(sessionProjectDir);
-    const savePlatform = args?.platform ? String(args.platform) : 'claude';
+    // The MCP handshake knows which CLI is hosting us; the arg is a self-report.
+    // An explicit arg still wins (it is what the model believes it is), but the
+    // default is now the real host rather than a hardcoded "claude".
+    const hostPlatform = detectHostPlatform(server);
+    const savePlatform = args?.platform ? String(args.platform) : (hostPlatform ?? 'claude');
     const shouldAutoSummarize = args?.auto_summarize === true;
 
     // Auto-summarize: try MCP Sampling first, fall back to agentic prompt for host AI
@@ -93,12 +98,19 @@ export const sessionHandlers: HandlerMap = {
     }
     // Best-effort transcript capture (VERSION-3 item 6): archive + index this session's
     // host transcript for later recall, and surface the leak count / first-capture note.
-    // Gated on opt-in + Claude; NEVER throws or blocks correctness.
+    // Gated on opt-in + a supported host CLI; NEVER throws or blocks correctness.
     let transcriptOnSave: import('../../transcripts/on-save.js').OnSaveTranscript | null = null;
     try {
-      if (savePlatform === 'claude') {
-        const { captureOnSave } = await import('../../transcripts/on-save.js');
-        transcriptOnSave = await captureOnSave({ projectDir: sessionProjectDir, vetoSessionId: result.session_id });
+      const { captureOnSave, captureSourceFor } = await import('../../transcripts/on-save.js');
+      // Capture is about WHICH HOST'S FILE to archive, so the handshake is
+      // authoritative here even when the model declared something else.
+      const captureSource = captureSourceFor(hostPlatform, savePlatform);
+      if (captureSource) {
+        transcriptOnSave = await captureOnSave({
+          projectDir: sessionProjectDir,
+          vetoSessionId: result.session_id,
+          platform: captureSource,
+        });
       }
     } catch { /* transcript capture is best-effort; never breaks save */ }
 
@@ -305,6 +317,7 @@ export const sessionHandlers: HandlerMap = {
           segmentIndex: typeof e.segment_index === 'number' ? e.segment_index : undefined,
           fromSeq: typeof e.from_seq === 'number' ? e.from_seq : undefined,
           toSeq: typeof e.to_seq === 'number' ? e.to_seq : undefined,
+          raw: e.raw === true,
         });
         return { content: [{ type: 'text', text: JSON.stringify(res, null, 2) }], ...(res.ok ? {} : { isError: true }) };
       } catch (err) {

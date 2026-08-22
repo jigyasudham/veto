@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { archiveDir, getTranscriptsDb, transcriptsAvailable } from './store.js';
 import { getSessionMapping, latestMappingForProject } from './mapping.js';
 import { normalizeProjectDir } from '../memory/local.js';
+import { formatHint as formatHintFor } from './adapters/index.js';
 import type { ArchiveRow } from './schema.js';
 
 // Above this raw size we skip capture with a warning rather than gzip a monster
@@ -107,7 +108,7 @@ export async function captureSession(opts: CaptureOptions = {}): Promise<Capture
     const db = getTranscriptsDb();
     const now = new Date().toISOString();
     const proj = opts.projectDir ? normalizeProjectDir(opts.projectDir) : mapping.project_dir;
-    const formatHint = source === 'claude' ? 'claude-jsonl' : source;
+    const formatHint = formatHintFor(source);
     const id = existing?.id ?? randomUUID();
     if (existing) {
       // Content changed (grew): overwrite the row, reset the index watermark AND

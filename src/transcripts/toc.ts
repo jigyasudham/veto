@@ -8,7 +8,7 @@
 // Computed on demand from the events table (no extra storage).
 
 import { getTranscriptsDb } from './store.js';
-import { EDIT_TOOLS, FILE_RE, ERROR_RE } from './pyramid.js';
+import { EDIT_TOOLS, ERROR_RE, extractFiles } from './pyramid.js';
 
 const TITLE_MAX = 80;
 
@@ -75,7 +75,7 @@ export function buildTOC(archiveId: string): Segment[] {
         c.toolCalls++;
         const name = r.tool_name ?? 'tool';
         c._tools.add(name);
-        if (r.text && EDIT_TOOLS.has(name)) { const m = r.text.match(FILE_RE); if (m) c._files.add(m[1]); }
+        if (r.text && EDIT_TOOLS.has(name)) { for (const f of extractFiles(r.text)) c._files.add(f); }
         break;
       }
       case 'tool_result': if (r.text && ERROR_RE.test(r.text)) c.hasError = true; break;
