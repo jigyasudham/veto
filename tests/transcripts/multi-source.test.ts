@@ -17,7 +17,7 @@ process.env.CODEX_HOME = join(ROOT, 'codex');
 process.env.GEMINI_DIR = join(ROOT, 'gemini');
 
 const { enableCapture } = await import('../../src/transcripts/config.js');
-const { captureOnSave, sourceForPlatform } = await import('../../src/transcripts/on-save.js');
+const { captureOnSave, sourceForPlatform, captureSourceFor } = await import('../../src/transcripts/on-save.js');
 const { recallQuery, recallExpand } = await import('../../src/transcripts/recall.js');
 const { getArchive } = await import('../../src/transcripts/archive.js');
 const { getEvents } = await import('../../src/transcripts/ingest.js');
@@ -79,6 +79,30 @@ describe('adapter registry', () => {
     expect(sourceForPlatform('GEMINI')).toBe('gemini');
     expect(sourceForPlatform(undefined)).toBe('claude');
     expect(sourceForPlatform('something-else')).toBe('claude');
+  });
+});
+
+describe('captureSourceFor — the MCP handshake outranks the self-report', () => {
+  // The bug this closes: a model in Codex that leaves `platform` at its default
+  // would send Veto looking for a CLAUDE transcript and silently archive nothing.
+  it('trusts the detected host over a wrong declared platform', () => {
+    expect(captureSourceFor('codex', 'claude')).toBe('codex');
+    expect(captureSourceFor('gemini', undefined)).toBe('gemini');
+    expect(captureSourceFor('claude', 'codex')).toBe('claude');
+  });
+
+  it('falls back to the declared platform when the host is unrecognized', () => {
+    expect(captureSourceFor(null, 'codex')).toBe('codex');
+    expect(captureSourceFor(null, 'GEMINI')).toBe('gemini');
+  });
+
+  // Skipping beats guessing: capturing the wrong CLI's transcript is worse than
+  // capturing nothing, and an unknown host with no usable declaration is exactly
+  // the case where a guess would be wrong.
+  it('skips capture entirely when neither signal identifies a supported host', () => {
+    expect(captureSourceFor(null, undefined)).toBeNull();
+    expect(captureSourceFor(null, 'cursor')).toBeNull();
+    expect(captureSourceFor(null, '')).toBeNull();
   });
 });
 

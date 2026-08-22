@@ -10,6 +10,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema, ListResourcesRequestSche
 import { TOOL_DEFINITIONS } from './tools/definitions.js';
 import { isCompactMode, getCompactToolList, findTools } from './tools/compact.js';
 import { log, errMsg } from './log.js';
+import { recordHostClient, detectHostPlatform } from './host.js';
 import type { HandlerMap } from './server/registry.js';
 import { workerHandlers } from './server/handlers/workers.js';
 import { memoryHandlers } from './server/handlers/memory.js';
@@ -65,6 +66,22 @@ const server = new Server(
   { name: 'veto', version: VERSION },
   { capabilities: { tools: {}, resources: {}, prompts: {} }, ...(instructions ? { instructions } : {}) },
 );
+
+// Record which CLI is hosting us the moment the handshake completes, so features
+// that need the real host (transcript capture picks WHICH host's file to
+// archive) do not have to trust the model's self-reported `platform`. Logged at
+// debug so an unrecognized client is diagnosable instead of silently unknown.
+server.oninitialized = () => {
+  try {
+    const impl = server.getClientVersion();
+    recordHostClient(impl);
+    log.debug('MCP client identified', {
+      client: impl?.name ?? '(none)',
+      version: impl?.version ?? '(none)',
+      resolved: detectHostPlatform() ?? '(unrecognized)',
+    });
+  } catch { /* identity is best-effort; never break a connection over it */ }
+};
 
 const TOOL_ANNOTATIONS: Record<string, { readOnlyHint?: boolean; destructiveHint?: boolean; openWorldHint?: boolean }> = {
   veto_status:           { readOnlyHint: true },

@@ -469,15 +469,18 @@ veto transcripts disable         # Stop capturing (existing archives are kept)
 ### Works in Claude Code, Codex CLI and Gemini CLI
 
 All three are captured and recalled through the same pipeline, each with its own
-format adapter. Claude Code reports its session through Veto's statusline; Codex
-and Gemini expose no such hook, so Veto locates their session files on disk
-instead — `veto transcripts sources` shows exactly what it can see for each.
-Pass the CLI you are running in as `platform` when you save, and recall works the
-same everywhere. Each adapter was written against real transcripts rather than
-docs, which is how two format traps got handled: Codex records every message on
-two parallel streams, and Gemini's chat log appends a fresh copy of a message
-each time it grows. Both would otherwise put several copies of the same message
-into the index.
+format adapter, and **Veto works out which one it is running in by itself** — the
+MCP handshake names the host, so nothing depends on the AI reporting it correctly.
+Claude Code reports its session through Veto's statusline; Codex and Gemini expose
+no such hook, so Veto locates their session files on disk instead.
+`veto transcripts sources` shows exactly what it can see for each, and
+`veto_health` reports the detected host if capture is not doing what you expect.
+
+Each adapter was written against real transcripts rather than docs, which is how
+two format traps got handled: Codex records every message on two parallel
+streams, and Gemini's chat log appends a fresh copy of a message each time it
+grows. Both would otherwise put several copies of the same message into the
+index.
 
 
 Recall runs through `veto_session_replay` as a two-call loop — search, then expand:

@@ -93,7 +93,7 @@ export const TOOL_DEFINITIONS = [
         },
         platform: {
           type: 'string',
-          description: 'The AI CLI you are running in right now — claude, gemini or codex. Always pass the one that is actually hosting you; it selects the context window AND, when transcript capture is enabled, which host transcript gets archived for later recall. Defaults to "claude".',
+          description: 'The AI CLI you are running in right now — claude, gemini or codex. Selects the correct context window for threshold calculation. Defaults to the CLI Veto detects from the MCP handshake, so pass it only if you know better.',
           enum: ['claude', 'gemini', 'codex'],
         },
         project_dir: {

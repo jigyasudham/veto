@@ -10,6 +10,7 @@ import {
 } from '../../memory/local.js';
 import { getRateStatus } from '../../router/index.js';
 import { getConfig, setConfig } from '../../memory/config.js';
+import { hostClient, detectHostPlatform } from '../../host.js';
 import { autoSave, serverHealth, VERSION } from '../runtime.js';
 import type { HandlerMap } from '../registry.js';
 
@@ -107,8 +108,21 @@ export const observabilityHandlers: HandlerMap = {
     return { content: [{ type: 'text', text: JSON.stringify({ success: true, count: events.length, events }, null, 2) }] };
   },
 
-  veto_health: () => {
+  veto_health: ({ server }) => {
     const stats = getHealthStats();
+    // Which CLI is hosting Veto, from the MCP handshake rather than a self-report.
+    // Surfaced here because "capture archived nothing" is usually "Veto is not in
+    // the CLI you think it is", and that is otherwise invisible.
+    // Resolve FIRST: this also populates the cached identity when oninitialized
+    // has not run, so reading the raw name before it would report null.
+    const resolved = detectHostPlatform(server);
+    const client = hostClient();
+    const host = {
+      client: client?.name ?? null,
+      client_version: client?.version ?? null,
+      resolved_platform: resolved,
+      transcript_capture_supported: resolved !== null,
+    };
     let db_size_bytes = 0;
     try { db_size_bytes = statSync(getDbPath()).size; } catch { /* db may not exist */ }
     const db_size_human = db_size_bytes < 1024 ? `${db_size_bytes}B`
@@ -129,6 +143,7 @@ export const observabilityHandlers: HandlerMap = {
           error_count_since_start: serverHealth.errorCount,
           last_error: serverHealth.lastError,
           context_windows: CONTEXT_WINDOWS,
+          host,
           ...stats,
         }, null, 2),
       }],

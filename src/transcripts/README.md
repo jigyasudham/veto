@@ -51,8 +51,16 @@ would have. It is bounded (newest-first, capped, bounded head-reads) because it
 runs on the save path, and it stamps `last_seen_at` from the file's mtime so
 "newest session for this project" still means what it says.
 
-Capture follows the `platform` you pass to `veto_session_save`, so pass the CLI
-you are actually running in.
+**Capture follows the host, not the self-report.** Every MCP client names itself
+in the `initialize` handshake, so Veto reads which CLI it is running inside
+(`src/host.ts`) rather than trusting the `platform` argument — a model in Codex
+that leaves `platform` at its default would otherwise send Veto looking for a
+Claude transcript and silently archive nothing. The declared platform is still
+the fallback when the host is a client Veto has no marker for, and if neither
+signal names a supported host, capture is **skipped rather than guessed**:
+archiving the wrong CLI's session is worse than archiving none. `veto_health`
+reports the detected host and the raw client string, so an unrecognized client is
+diagnosable instead of invisible.
 
 **Two format traps, both measured rather than guessed:**
 

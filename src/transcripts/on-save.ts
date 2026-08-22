@@ -34,6 +34,27 @@ export function sourceForPlatform(platform?: string | null): TranscriptSource {
   return isTranscriptSource(p) ? p : 'claude';
 }
 
+/**
+ * Which host's transcript to archive.
+ *
+ * The MCP handshake wins whenever it resolves, because capture is a question
+ * about WHICH PROCESS is hosting Veto — not about what the model believes it is.
+ * A model in Codex that leaves `platform` at its default would otherwise make
+ * Veto look for a Claude transcript and silently archive nothing.
+ *
+ * When the host is unrecognized (a client Veto has no marker for) the declared
+ * platform is the only signal left, so it is used; and if that is not a
+ * supported source either, capture is skipped rather than guessed.
+ */
+export function captureSourceFor(
+  host: TranscriptSource | null,
+  declaredPlatform?: string | null,
+): TranscriptSource | null {
+  if (host) return host;
+  const p = (declaredPlatform ?? '').trim().toLowerCase();
+  return isTranscriptSource(p) ? p : null;
+}
+
 export async function captureOnSave(opts: {
   projectDir?: string | null;
   vetoSessionId?: string | null;
