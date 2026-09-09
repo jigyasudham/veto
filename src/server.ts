@@ -34,7 +34,8 @@ import { loadPlugins } from './plugins/loader.js';
 import { statuslineSetupInstruction } from './cli/statusline.js';
 import { versionUpdateInstruction } from './server/update-check.js';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { realpathSync } from 'node:fs';
 
 // Always-present usage directive. Weaker models (e.g. Gemini Flash) tend to read a bare
 // `veto_*` command as a task to perform by hand — reverse-engineering the tool from Veto's
@@ -721,7 +722,7 @@ async function startHttp(port: number) {
   process.stderr.write(`Veto MCP server v${VERSION} running (streamable HTTP, http://${host}:${port}/mcp)\n`);
 }
 
-async function main() {
+export async function main() {
   const loadedPlugins = await loadPlugins();
   if (loadedPlugins.length > 0) {
     process.stderr.write(`[veto] Loaded ${loadedPlugins.length} plugin(s): ${loadedPlugins.join(', ')}\n`);
@@ -742,8 +743,30 @@ async function main() {
 
 // Only connect stdio when run as the entrypoint — importing this module (e.g. in
 // tests) registers handlers without starting the transport.
-const isEntrypoint = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (isEntrypoint) {
+//
+// Compare REAL paths, not URL strings. Node resolves symlinks when it computes a
+// module's import.meta.url, but process.argv[1] stays whatever path the caller
+// typed. Any launch through a link therefore compared a resolved path against an
+// unresolved one, never matched, and exited 0 without ever serving MCP — issue
+// #39, which is how `npx veto-server` behaved on macOS and Linux for ten releases
+// (npm's .bin entries are symlinks there; Windows gets .cmd shims invoking the
+// real path, which is why this never reproduced for the author).
+//
+// The packaged bin no longer relies on this at all — dist/bin/veto-server.js calls
+// main() unconditionally. This guard now only governs a direct `node dist/server.js`,
+// which is how mcpb.manifest.json launches the Smithery bundle.
+function isEntrypointModule(): boolean {
+  const argv1 = process.argv[1];
+  if (!argv1) return false;
+  const real = (p: string): string => { try { return realpathSync(p); } catch { return p; } };
+  try {
+    return real(fileURLToPath(import.meta.url)) === real(argv1);
+  } catch {
+    return import.meta.url === pathToFileURL(argv1).href;
+  }
+}
+
+if (isEntrypointModule()) {
   main().catch((err) => {
     log.error('fatal: server failed to start', { error: errMsg(err) });
     process.exit(1);

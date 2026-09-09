@@ -38,7 +38,7 @@
   },
   "bin": {
     "veto": "dist/cli.js",
-    "veto-server": "dist/server.js"
+    "veto-server": "dist/bin/veto-server.js"
   },
   "files": [
     "dist",
