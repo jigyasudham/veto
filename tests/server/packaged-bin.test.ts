@@ -74,7 +74,9 @@ describe('packaged bin (issue #39)', () => {
 
   // The actual #39 reproduction. Skipped only where the OS refuses to make a
   // symlink (unprivileged Windows without Developer Mode); it runs for real on the
-  // Linux and macOS CI legs, which is where the bug lived.
+  // ubuntu CI legs. Note the matrix has no macOS runner, and #39 was reported on
+  // macOS — POSIX symlink semantics are the same on both, so ubuntu covers the
+  // mechanism, but nothing here executes on macOS itself.
   it('serves MCP initialize when launched through an npm-style .bin symlink', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'veto-bin-'));
     const binDir = join(dir, 'node_modules', '.bin');
