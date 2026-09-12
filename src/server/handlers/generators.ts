@@ -11,6 +11,7 @@ import { execSync } from 'node:child_process';
 import { recordOutcome } from '../../router/index.js';
 import { runHandlerAgent, handlerAgentResponse } from '../scan-core.js';
 import { getAuditLog } from '../../memory/local.js';
+import { offerInvitation, invitationPayload } from '../../memory/decisions.js';
 import { buildContextString } from '../../context/reader.js';
 import type { WorkerAgentType } from '../../agents/types.js';
 import type { HandlerMap } from '../registry.js';
@@ -175,11 +176,19 @@ export const generatorHandlers: HandlerMap = {
       writeFileSync(adrFilePath, adrContent, 'utf8');
     }
 
+    // v3.3 step 1: recording a decision is the other moment to ask whether it
+    // should be enforced. Keyed on outcome_id, so an ADR written from a verdict
+    // the council already asked about stays silent. Deferred/unknown decided nothing.
+    const invitation = ['GREEN', 'YELLOW', 'RED'].includes(verdict)
+      ? offerInvitation({ source_kind: 'adr', source_id: outcomeId, project_dir: projectDir })
+      : null;
+
     return { content: [{ type: 'text', text: JSON.stringify({
       success:   true,
       adr:       adrContent,
       file_path: adrFilePath,
       status:    adrStatus,
+      ...(invitation ? { constraint_invitation: invitationPayload(invitation.id) } : {}),
     }, null, 2) }] };
   },
 

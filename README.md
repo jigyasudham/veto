@@ -146,6 +146,10 @@ veto_decisions {
 
 From then on, `veto_diff_review` and `veto_ci_gate` automatically fail any diff whose **added lines** match a forbidden pattern — when an AI quietly adds `mongoose` to the imports three sessions later, the review fails with the rule and the rationale attached. Patterns are case-insensitive regexes (with substring fallback), optionally scoped to a file glob (`src/**/*.ts`), per-project or global, severity `block` or `warn`. Manage with `action: list / check / disable / enable`.
 
+You don't have to remember to do this. When a council verdict (the LLM-backed one) or an ADR settles something, its result carries a one-time `constraint_invitation`: your AI asks you once whether it should become a rule, and passes your answer back as `add` or `decline` with the `invitation_id`. It never asks twice about the same verdict. `action: list` shows how many invitations were offered, accepted and declined; that count stays on your machine.
+
+A rule can't stall your reviews. `add` refuses a pattern that could hang the check: one over 200 characters, or a repeated group that itself repeats, like `(a+)+`. Every check is also time-boxed, so a slow rule turns into a warning instead of blocking `veto_ci_gate`.
+
 ## Compounding-Error Circuit Breaker
 
 Agents fail silently in loops — retrying the same broken call, re-hitting the same error, thrashing between two tools — and burn a whole session before anyone notices. `veto_drift_check` scans the recent tool-call trace for that pattern mid-flight and trips a breaker before the spiral compounds:

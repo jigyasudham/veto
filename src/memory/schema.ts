@@ -201,6 +201,21 @@ export const CREATE_TABLES = `
 
   CREATE INDEX IF NOT EXISTS idx_decision_constraints_proj ON decision_constraints(project_dir);
 
+  -- One row per "make this a constraint?" offer (v3.3 step 1). The unique
+  -- index is what makes it once per verdict; NULL source_ids never collide.
+  CREATE TABLE IF NOT EXISTS constraint_invitations (
+    id            TEXT PRIMARY KEY,
+    source_kind   TEXT NOT NULL,
+    source_id     TEXT,
+    project_dir   TEXT,
+    offered_at    TEXT NOT NULL,
+    answer        TEXT,
+    answered_at   TEXT,
+    constraint_id TEXT
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_constraint_invitations_source ON constraint_invitations(source_id);
+
   CREATE TABLE IF NOT EXISTS routing_feedback (
     id           TEXT PRIMARY KEY,
     task_hash    TEXT NOT NULL,

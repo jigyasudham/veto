@@ -3,7 +3,10 @@
 
 import { storeKnowledge, searchKnowledge, deleteKnowledge, updateProjectMap, getProjectMap, upsertPattern, getPatterns } from '../../memory/local.js';
 import { exportMemory, importMemory, exportMemoryMarkdown, importMemoryMarkdown } from '../../memory/sync.js';
-import { addConstraint, listConstraints, setConstraintActive, checkDiffAgainstConstraints } from '../../memory/decisions.js';
+import {
+  addConstraint, listConstraints, setConstraintActive, checkDiffAgainstConstraints,
+  validateForbiddenPatterns, answerInvitation, invitationStats,
+} from '../../memory/decisions.js';
 import { readGitDiff } from '../scan-core.js';
 import { buildRepoMap } from '../../repo-map/index.js';
 import type { KnowledgeType } from '../../memory/schema.js';
@@ -24,6 +27,10 @@ export const memoryHandlers: HandlerMap = {
       if (!rule || patterns.length === 0) {
         return jsonText({ success: false, message: 'add requires rule and a non-empty forbidden_patterns array.' }, true);
       }
+      const problems = validateForbiddenPatterns(patterns);
+      if (problems.length > 0) {
+        return jsonText({ success: false, message: 'Refused: these patterns are unsafe to run on every future diff. Nothing was saved.', problems }, true);
+      }
       const constraint = addConstraint({
         rule,
         forbidden_patterns: patterns,
@@ -32,12 +39,34 @@ export const memoryHandlers: HandlerMap = {
         severity: args?.severity === 'warn' ? 'warn' : 'block',
         project_dir: projectDir,
       });
-      return jsonText({ success: true, constraint, message: 'Decision recorded as an enforceable constraint. veto_diff_review and veto_ci_gate now flag diffs that violate it.' });
+      // The constraint stands whatever the invitation's state: the user's yes is
+      // what counts, and a stale or unknown id must not throw it away.
+      const invitationId = args?.invitation_id ? String(args.invitation_id).trim() : '';
+      const invitation = invitationId
+        ? { id: invitationId, result: answerInvitation(invitationId, 'accepted', constraint.id) }
+        : undefined;
+      return jsonText({
+        success: true,
+        constraint,
+        ...(invitation ? { invitation } : {}),
+        message: 'Decision recorded as an enforceable constraint. veto_diff_review and veto_ci_gate now flag diffs that violate it.',
+      });
+    }
+
+    if (action === 'decline') {
+      const id = String(args?.invitation_id ?? '').trim();
+      if (!id) return jsonText({ success: false, message: 'decline requires invitation_id.' }, true);
+      const result = answerInvitation(id, 'declined');
+      if (result === 'recorded') return jsonText({ success: true, message: 'Noted. Veto will not ask about this verdict again.' });
+      return jsonText({
+        success: false,
+        message: result === 'not_found' ? `No invitation with id ${id}.` : `Invitation ${id} was already answered.`,
+      }, true);
     }
 
     if (action === 'list') {
       const constraints = listConstraints(projectDir, args?.include_inactive === true);
-      return jsonText({ success: true, count: constraints.length, constraints });
+      return jsonText({ success: true, count: constraints.length, constraints, invitations: invitationStats() });
     }
 
     if (action === 'check') {
@@ -58,7 +87,7 @@ export const memoryHandlers: HandlerMap = {
         : jsonText({ success: false, message: `No constraint with id ${id}.` }, true);
     }
 
-    return jsonText({ success: false, message: "action must be one of: add, list, check, disable, enable." }, true);
+    return jsonText({ success: false, message: "action must be one of: add, list, check, disable, enable, decline." }, true);
   },
 
   veto_memory_store: ({ args }) => {
