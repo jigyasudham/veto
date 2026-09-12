@@ -138,8 +138,10 @@ function buildContinueResult(session: ReturnType<typeof listSessions>[0], now: s
     }
   } catch { task_state = session.task_state; }
 
+  // created_at, not started_at: an in-place save rewrites created_at, so it is
+  // when the session was last saved. started_at never moves after the first save.
   const message = [
-    `Session restored from ${session.platform} (saved ${session.started_at.slice(0, 16)}).`,
+    `Session restored from ${session.platform} (saved ${session.created_at.slice(0, 16)}).`,
     session.summary ? `\nSummary: ${session.summary}` : '',
     next_action ? `\nNext action: ${next_action}` : '',
     `\nContinue exactly where you left off. Nothing needs to be re-explained.`,

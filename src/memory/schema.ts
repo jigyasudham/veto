@@ -262,6 +262,7 @@ export type SessionRow = {
   task_state: string | null;
   token_count: number;
   save_type: 'manual' | 'auto';
+  /** Last-saved time, despite the name — updateSession rewrites it on every in-place save. */
   created_at: string;
 };
 
