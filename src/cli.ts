@@ -843,7 +843,7 @@ async function sessionsCommand() {
     console.log(c.dim('  No sessions saved yet. Use veto_session_save inside an AI session.'));
   } else {
     for (const s of sessions) {
-      const date = new Date(s.started_at).toLocaleString();
+      const date = new Date(s.created_at).toLocaleString();
       const badge = s.save_type === 'auto' ? c.dim(' [auto]') : '';
       console.log(`  ${c.cyan(s.id.slice(0, 8))}  ${c.dim(date)}  ${c.bold(s.platform ?? 'claude')}${badge}  ${s.summary?.slice(0, 60) ?? ''}`);
     }

@@ -119,6 +119,7 @@ export function getDb(): DatabaseSync {
   migrateRoutingFeedback(_db);
   migrateToolTraceLog(_db);
   migrateProjectDirCase(_db);
+  migrateSessionCreatedAtIso(_db);
   // Stamp the read-contract version so external readers (veto-vscode, statusline)
   // can detect drift via `PRAGMA user_version`. See VETO_DB_SCHEMA_VERSION.
   _db.exec(`PRAGMA user_version = ${VETO_DB_SCHEMA_VERSION}`);
@@ -142,6 +143,22 @@ function migrateProjectDirCase(db: DatabaseSync): void {
       // Table may not exist on an older DB shape — safe to skip.
     }
   }
+}
+
+// Rewrites sessions.created_at values still in SQLite's default form
+// ('YYYY-MM-DD HH:MM:SS', from before saveSession wrote it explicitly) into the
+// ISO form every write now uses. created_at is the last-saved time — updateSession
+// rewrites it — and it is what listSessions and the VS Code HUD order by, so a
+// mixed column let a session updated at 02:00 outrank one first saved at 23:00
+// the same day. Idempotent: the GLOB only matches the space-separated form, and
+// anything strftime cannot parse is left alone rather than violating NOT NULL.
+function migrateSessionCreatedAtIso(db: DatabaseSync): void {
+  db.exec(`
+    UPDATE sessions
+       SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at)
+     WHERE created_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9]*'
+       AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at) IS NOT NULL
+  `);
 }
 
 // Creates tool_call_trace_log table for auditing and session replay (v1.8.0 migration)
@@ -391,9 +408,12 @@ export function saveSession(input: SaveSessionInput): SessionSaveResult {
 
   const save_type = input.save_type ?? 'manual';
 
+  // created_at is written explicitly rather than left to its column default:
+  // datetime('now') yields 'YYYY-MM-DD HH:MM:SS', while updateSession writes ISO,
+  // and a mixed column sorts wrong within a day (' ' < 'T').
   db.prepare(`
-    INSERT INTO sessions (id, started_at, platform, connection_type, project_dir, summary, context, task_state, token_count, save_type, tags)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, started_at, platform, connection_type, project_dir, summary, context, task_state, token_count, save_type, tags, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id, now, platform, connection_type,
     normalizeProjectDir(input.project_dir) ?? null,
@@ -402,7 +422,8 @@ export function saveSession(input: SaveSessionInput): SessionSaveResult {
     input.task_state ? JSON.stringify(input.task_state) : null,
     token_count,
     save_type,
-    input.tags ? JSON.stringify(input.tags) : null
+    input.tags ? JSON.stringify(input.tags) : null,
+    now
   );
 
   // Record usage event

@@ -202,7 +202,7 @@ export const sessionHandlers: HandlerMap = {
               resume_instructions: resumeInstructions,
               session_id: s.id,
               created_by: s.platform,
-              saved_at: s.started_at,
+              saved_at: s.created_at,
               project_dir: s.project_dir,
               summary: s.summary,
               context: s.context ? (() => { try { return JSON.parse(s.context!); } catch { return s.context; } })() : null,
