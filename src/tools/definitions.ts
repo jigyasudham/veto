@@ -494,19 +494,20 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'veto_decisions',
     description:
-      'Decision-drift enforcement: records architectural decisions as machine-checkable constraints, then flags diffs that violate them. AI assistants forget decisions and re-litigate them sessions later — record "we use Postgres" with forbidden_patterns ["mongoose", "mongodb"] once, and veto_diff_review / veto_ci_gate automatically fail any future diff that adds them. Actions: add (rule + forbidden_patterns), list, check (a diff or the working tree), disable / enable (by id).',
+      'Decision-drift enforcement: records architectural decisions as machine-checkable constraints, then flags diffs that violate them. AI assistants forget decisions and re-litigate them sessions later — record "we use Postgres" with forbidden_patterns ["mongoose", "mongodb"] once, and veto_diff_review / veto_ci_gate automatically fail any future diff that adds them. Actions: add (rule + forbidden_patterns), list, check (a diff or the working tree), disable / enable (by id), decline (a constraint_invitation the user said no to). When a council verdict or ADR carries a constraint_invitation, pass its invitation_id to add or decline.',
     inputSchema: {
       type: 'object',
       properties: {
-        action:             { type: 'string', description: 'What to do.', enum: ['add', 'list', 'check', 'disable', 'enable'] },
+        action:             { type: 'string', description: 'What to do.', enum: ['add', 'list', 'check', 'disable', 'enable', 'decline'] },
         rule:               { type: 'string', description: 'add: the decision in human terms, e.g. "We use Postgres — no Mongo".' },
         why:                { type: 'string', description: 'add: rationale, shown alongside violations.' },
-        forbidden_patterns: { type: 'array', items: { type: 'string' }, description: 'add: case-insensitive regexes (fallback: substring) that violate the decision when they appear in added lines, e.g. ["mongoose", "mongodb"].' },
+        forbidden_patterns: { type: 'array', items: { type: 'string' }, description: 'add: case-insensitive regexes (fallback: substring) that violate the decision when they appear in added lines, e.g. ["mongoose", "mongodb"]. Refused if longer than 200 characters or if a repeated group itself repeats, e.g. "(a+)+" — those can hang diff review.' },
         file_scope:         { type: 'string', description: 'add: optional glob limiting which files the constraint applies to, e.g. "src/**/*.ts". Default: all files.' },
         severity:           { type: 'string', description: "add: 'block' (default — fails reviews/gates) or 'warn'.", enum: ['block', 'warn'] },
         project_dir:        { type: 'string', description: 'Scope the constraint / check to a project. Defaults to the active project; constraints saved without one apply everywhere.' },
         diff:               { type: 'string', description: 'check: a unified diff to check. Omit to read uncommitted git changes from project_dir.' },
         id:                 { type: 'string', description: 'disable/enable: the constraint id.' },
+        invitation_id:      { type: 'string', description: 'add / decline: the constraint_invitation.invitation_id from a council verdict or ADR, so Veto records the user\'s answer.' },
         include_inactive:   { type: 'boolean', description: 'list: include disabled constraints (default false).' },
       },
       required: ['action'],

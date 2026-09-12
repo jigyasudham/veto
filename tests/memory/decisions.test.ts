@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { addConstraint, listConstraints, setConstraintActive, checkDiffAgainstConstraints } from '../../src/memory/decisions.js';
-import { resetDb } from '../../src/memory/local.js';
+import {
+  addConstraint, listConstraints, setConstraintActive, checkDiffAgainstConstraints,
+  validateForbiddenPatterns, MAX_LINE_CHARS,
+} from '../../src/memory/decisions.js';
+import { resetDb, getDb } from '../../src/memory/local.js';
 import { callTool } from '../../src/server.js';
 
 beforeEach(() => resetDb());
@@ -95,6 +98,58 @@ describe('checkDiffAgainstConstraints', () => {
   });
 });
 
+// Security condition from council 27cf8bcb: constraints run inside diff review
+// and the CI gate, so no pattern may be able to hang them.
+describe('pattern safety', () => {
+  it('refuses a repeated group that itself repeats', () => {
+    for (const p of ['(a+)+', '(\\w+\\s?)*', '((ab)+c){2,}', '(?:x*)+y']) {
+      expect(validateForbiddenPatterns([p]), p).toHaveLength(1);
+    }
+  });
+
+  it('accepts ordinary patterns, including ones that only look nested', () => {
+    // \( \) are literal parens, [(a+)] is a character class, (foo|bar)+ repeats
+    // a group with no repeat inside it, and lodash(( is not a regex at all.
+    const ok = ['mongoose', '^\\s*var\\s', '(foo|bar)+', "from ['\"]lodash", '\\(a+\\)+', '[(a+)]+', 'lodash(('];
+    expect(validateForbiddenPatterns(ok)).toEqual([]);
+  });
+
+  it('refuses a pattern over the length limit', () => {
+    expect(validateForbiddenPatterns(['x'.repeat(201)])).toHaveLength(1);
+    expect(validateForbiddenPatterns(['x'.repeat(200)])).toEqual([]);
+  });
+
+  it('addConstraint refuses unsafe patterns itself, not only the handler', () => {
+    expect(() => addConstraint({ rule: 'r', forbidden_patterns: ['(a+)+'] })).toThrow(/Unsafe forbidden_patterns/);
+    expect(listConstraints()).toHaveLength(0);
+  });
+
+  it('an unsafe pattern stored before the checks existed is matched as plain text', () => {
+    // Bypass addConstraint, as a row written by an older version would.
+    getDb().prepare(
+      `INSERT INTO decision_constraints (id, rule, forbidden_patterns, severity, active, created_at) VALUES ('legacy', 'legacy rule', ?, 'block', 1, ?)`
+    ).run(JSON.stringify(['(a+)+$']), new Date().toISOString());
+    // As a regex, (a+)+$ matches "aaaa". As text, only the literal string does.
+    expect(checkDiffAgainstConstraints('diff --git a/a.ts b/a.ts\n+++ b/a.ts\n+aaaa')).toEqual([]);
+    expect(checkDiffAgainstConstraints('diff --git a/a.ts b/a.ts\n+++ b/a.ts\n+const s = "(a+)+$";')).toHaveLength(1);
+  });
+
+  it(`tests only the first ${MAX_LINE_CHARS} characters of an added line`, () => {
+    addConstraint({ rule: 'no eval', forbidden_patterns: ['eval\\('] });
+    const evalAt = (col: number) => `diff --git a/a.js b/a.js\n+++ b/a.js\n+${' '.repeat(col)}eval(x)`;
+    expect(checkDiffAgainstConstraints(evalAt(10))).toHaveLength(1);
+    expect(checkDiffAgainstConstraints(evalAt(MAX_LINE_CHARS))).toEqual([]);
+  });
+
+  it('a check that runs out of time stops with a warning instead of failing', () => {
+    addConstraint({ rule: 'We use Postgres', forbidden_patterns: ['mongoose'] });
+    const v = checkDiffAgainstConstraints(MONGO_DIFF, undefined, 0);
+    expect(v).toHaveLength(1);
+    expect(v[0].constraint_id).toBe('veto:check-budget');
+    expect(v[0].severity).toBe('warn');
+  });
+});
+
 describe('veto_decisions handler', () => {
   function call(args: Record<string, unknown>): Promise<any> {
     return callTool({ params: { name: 'veto_decisions', arguments: args } });
@@ -106,6 +161,13 @@ describe('veto_decisions handler', () => {
   it('add requires rule and patterns', async () => {
     const res = await call({ action: 'add', rule: 'no patterns given' });
     expect(res.isError).toBe(true);
+  });
+
+  it('add refuses unsafe patterns and saves nothing', async () => {
+    const res = await call({ action: 'add', rule: 'bad', forbidden_patterns: ['mongoose', '(a+)+'] });
+    expect(res.isError).toBe(true);
+    expect(body(res).problems).toHaveLength(1);
+    expect(listConstraints()).toHaveLength(0);
   });
 
   it('add → check round-trip fails a violating diff', async () => {

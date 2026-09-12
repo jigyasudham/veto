@@ -8,6 +8,7 @@ import { parseAgenticAgentResponses } from '../../agents/llm-runner.js';
 import { executeOne } from '../../agents/executor.js';
 import { recordOutcome } from '../../router/index.js';
 import { saveCouncilOutcome, storeKnowledge, logUsage } from '../../memory/local.js';
+import { offerInvitation, invitationPayload } from '../../memory/decisions.js';
 import { buildContextString } from '../../context/reader.js';
 import { parsePrdIntoTasks, getActiveProjectDir } from '../runtime.js';
 import type { HandlerMap } from '../registry.js';
@@ -55,7 +56,17 @@ export const councilHandlers: HandlerMap = {
           duration_ms: debateDuration,
           project_dir: debateInput.project_dir,
         });
-        const payload = { outcome_id: outcomeId, llm_backed: true, final_verdict: result.final_verdict, block_reasons: result.block_reasons, warnings: result.warnings, recommended: result.recommended, debated_at: result.debated_at, votes: result.votes };
+        // v3.3 step 1: this is the verdict the user acts on, so it is where Veto asks
+        // whether it should become a constraint. Phase 1 never asks — it always
+        // hands off to this phase, and one debate must not ask twice. A deadlock
+        // settled nothing, so there is nothing to enforce.
+        const invitation = result.final_verdict === 'DEADLOCK'
+          ? null
+          : offerInvitation({ source_kind: 'council', source_id: outcomeId, project_dir: debateInput.project_dir });
+        const payload = {
+          outcome_id: outcomeId, llm_backed: true, final_verdict: result.final_verdict, block_reasons: result.block_reasons, warnings: result.warnings, recommended: result.recommended, debated_at: result.debated_at, votes: result.votes,
+          ...(invitation ? { constraint_invitation: invitationPayload(invitation.id) } : {}),
+        };
         return { content: [{ type: 'text', text: result.formatted_output + '\n\n' + JSON.stringify(payload, null, 2) }] };
       }
     }
