@@ -412,9 +412,26 @@ function bareVetoOnPath(): boolean {
   }
 }
 
-function isOurStatusLine(v: unknown): boolean {
-  return Boolean(v) && typeof v === 'object'
-    && (v as { command?: string }).command === STATUSLINE_VALUE.command;
+function statusLineCommand(v: unknown): string | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const command = (v as { command?: unknown }).command;
+  return typeof command === 'string' ? command : undefined;
+}
+
+// Exactly what `install` writes — the only statusLine uninstall may delete without
+// a backup, so it never removes a command someone else wrote.
+function isCanonicalStatusLine(v: unknown): boolean {
+  return statusLineCommand(v) === STATUSLINE_VALUE.command;
+}
+
+// Any command that runs Veto's `statusline print`: the canonical one, or a hand-wired
+// form such as `node D:/Veto/dist/cli.js statusline print`, `veto.cmd statusline
+// print` or `npx -y @jigyasudham/veto statusline print`. Used to decide whether the
+// line is already there, where an exact match wrongly re-offered the install.
+const VETO_STATUSLINE_RE = /veto.*\bstatusline\s+print\b/i;
+function isVetoStatusLine(v: unknown): boolean {
+  const command = statusLineCommand(v);
+  return command !== undefined && VETO_STATUSLINE_RE.test(command);
 }
 
 export interface InstallResult {
@@ -444,8 +461,16 @@ export function installStatusline(client = 'claude', opts: { force?: boolean; dr
   }
 
   const current = settings.statusLine;
-  if (isOurStatusLine(current)) {
+  if (isCanonicalStatusLine(current)) {
     return { ok: true, changed: false, message: `Already installed for ${target.name} (${settingsPath}).` };
+  }
+  if (isVetoStatusLine(current) && !opts.force) {
+    return {
+      ok: true,
+      changed: false,
+      message: `Already installed for ${target.name} as \`${statusLineCommand(current)}\` (${settingsPath}). `
+        + `Re-run with --force to switch it to \`${STATUSLINE_VALUE.command}\`.`,
+    };
   }
   if (current !== undefined && !opts.force) {
     return {
@@ -525,24 +550,31 @@ export function uninstallStatusline(client = 'claude'): InstallResult {
   if (existsSync(settingsPath)) {
     try {
       const settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
-      if (isOurStatusLine(settings.statusLine)) {
+      if (isCanonicalStatusLine(settings.statusLine)) {
         delete settings.statusLine;
         writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
         return { ok: true, changed: true, message: `Removed Veto statusline from ${settingsPath}.` };
+      }
+      if (isVetoStatusLine(settings.statusLine)) {
+        return {
+          ok: false,
+          message: `Left \`${statusLineCommand(settings.statusLine)}\` in ${settingsPath}: it runs Veto, but `
+            + `\`veto statusline install\` did not write it. Remove the statusLine key by hand.`,
+        };
       }
     } catch { /* fall through */ }
   }
   return { ok: true, changed: false, message: `Veto statusline was not installed for ${target.name}.` };
 }
 
-// Cheap, DB-free "is our statusLine wired into settings.json?" check. Safe to call
-// at server startup — never throws, never opens the DB.
+// Cheap, DB-free "is a Veto statusLine wired into settings.json?" check, in any of
+// its forms. Safe to call at server startup — never throws, never opens the DB.
 export function isStatuslineInstalled(client = 'claude'): boolean {
   const target = resolveClient(client);
   if (!target || !existsSync(target.settingsPath)) return false;
   try {
     const settings = JSON.parse(readFileSync(target.settingsPath, 'utf8')) as Record<string, unknown>;
-    return isOurStatusLine(settings.statusLine);
+    return isVetoStatusLine(settings.statusLine);
   } catch {
     return false;
   }

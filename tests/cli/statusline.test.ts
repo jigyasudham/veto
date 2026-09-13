@@ -245,6 +245,32 @@ describe('install / uninstall settings.json patch', () => {
     expect(installStatusline('emacs').ok).toBe(false);
     expect(uninstallStatusline('emacs').ok).toBe(false);
   });
+
+  it('reports a hand-wired Veto statusLine as already installed, not as a custom one', () => {
+    const original = JSON.stringify({
+      statusLine: { type: 'command', command: 'node D:/Veto/dist/cli.js statusline print' },
+    }, null, 2) + '\n';
+    writeFileSync(settingsPath, original, 'utf8');
+
+    const r = installStatusline('claude');
+    expect(r.ok).toBe(true);
+    expect(r.changed).toBe(false);
+    expect(r.message).toMatch(/Already installed/);
+    expect(r.message).toMatch(/--force/);
+    expect(readFileSync(settingsPath, 'utf8')).toBe(original); // untouched
+  });
+
+  it('never deletes a hand-wired Veto statusLine it did not write', () => {
+    const original = JSON.stringify({
+      statusLine: { type: 'command', command: 'node D:/Veto/dist/cli.js statusline print' },
+    }, null, 2) + '\n';
+    writeFileSync(settingsPath, original, 'utf8');
+
+    const u = uninstallStatusline('claude');
+    expect(u.ok).toBe(false);
+    expect(u.message).toMatch(/by hand/);
+    expect(readFileSync(settingsPath, 'utf8')).toBe(original); // untouched
+  });
 });
 
 describe('first-run setup nudge (MCP instructions)', () => {
@@ -273,6 +299,27 @@ describe('first-run setup nudge (MCP instructions)', () => {
     installStatusline('claude');
     expect(isStatuslineInstalled('claude')).toBe(true);
     expect(statuslineSetupInstruction('claude')).toBeUndefined();
+  });
+
+  it.each([
+    'node D:/Veto/dist/cli.js statusline print',
+    'veto.cmd statusline print',
+    'npx -y @jigyasudham/veto statusline print',
+    'veto statusline print --capture C:/tmp/sl.json',
+  ])('drops the nudge when the statusLine runs Veto as `%s`', (command) => {
+    writeFileSync(settingsPath, JSON.stringify({ statusLine: { type: 'command', command } }), 'utf8');
+    expect(isStatuslineInstalled('claude')).toBe(true);
+    expect(statuslineSetupInstruction('claude')).toBeUndefined();
+  });
+
+  it.each([
+    'my-custom-line',
+    'npx -y ccstatusline@latest',
+    'other-tool statusline print',
+  ])('keeps the nudge when the statusLine is another tool: `%s`', (command) => {
+    writeFileSync(settingsPath, JSON.stringify({ statusLine: { type: 'command', command } }), 'utf8');
+    expect(isStatuslineInstalled('claude')).toBe(false);
+    expect(statuslineSetupInstruction('claude')).toBeDefined();
   });
 
   it('treats an unknown client as not installed (no nudge crash)', () => {
