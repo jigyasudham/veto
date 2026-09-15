@@ -16,6 +16,25 @@ export type TranscriptsConfig = {
   first_capture_at: string | null; // set on first real capture; drives the one-time note
 };
 
+// Harvest-and-Share is separate from transcript capture. It is OFF until the
+// user explicitly accepts the wider cross-project and cross-vendor disclosure.
+export type LessonsConfig = {
+  enabled: boolean;
+  consent_version: number;
+  consent_at: string | null;
+  cross_project: boolean;
+  cross_vendor: boolean;
+};
+
+export const LESSONS_CONSENT_VERSION = 2;
+export const DEFAULT_LESSONS: LessonsConfig = {
+  enabled: false,
+  consent_version: 0,
+  consent_at: null,
+  cross_project: false,
+  cross_vendor: false,
+};
+
 export type VetoConfig = {
   dailyTokenBudget: {
     claude: number;
@@ -32,6 +51,7 @@ export type VetoConfig = {
   // overrides. All tools remain directly callable in both modes.
   compact_tools: boolean;
   transcripts: TranscriptsConfig;
+  lessons: LessonsConfig;
 };
 
 // VETO_CONFIG_PATH overrides the config location (tests isolate here, mirroring
@@ -73,6 +93,16 @@ function normalizeTranscripts(raw: Partial<TranscriptsConfig> | undefined): Tran
   };
 }
 
+function normalizeLessons(raw: Partial<LessonsConfig> | undefined): LessonsConfig {
+  return {
+    enabled: raw?.enabled === true,
+    consent_version: typeof raw?.consent_version === 'number' ? raw.consent_version : 0,
+    consent_at: typeof raw?.consent_at === 'string' ? raw.consent_at : null,
+    cross_project: raw?.cross_project === true,
+    cross_vendor: raw?.cross_vendor === true,
+  };
+}
+
 export function getConfig(): VetoConfig {
   if (!existsSync(configPath())) {
     return {
@@ -81,6 +111,7 @@ export function getConfig(): VetoConfig {
       auto_apply_learning: true,
       compact_tools: false,
       transcripts: { ...DEFAULT_TRANSCRIPTS },
+      lessons: { ...DEFAULT_LESSONS },
     };
   }
   try {
@@ -96,6 +127,7 @@ export function getConfig(): VetoConfig {
       auto_apply_learning: raw.auto_apply_learning !== false, // default true
       compact_tools: raw.compact_tools === true, // default false
       transcripts: normalizeTranscripts(raw.transcripts),
+      lessons: normalizeLessons(raw.lessons),
     };
   } catch {
     return {
@@ -104,6 +136,7 @@ export function getConfig(): VetoConfig {
       auto_apply_learning: true,
       compact_tools: false,
       transcripts: { ...DEFAULT_TRANSCRIPTS },
+      lessons: { ...DEFAULT_LESSONS },
     };
   }
 }
@@ -118,7 +151,33 @@ export function setConfig(partial: Partial<VetoConfig>): void {
       ...(partial.dailyTokenBudget ?? {}),
     },
     transcripts: partial.transcripts ?? current.transcripts,
+    lessons: partial.lessons ?? current.lessons,
   };
   mkdirSync(dirname(configPath()), { recursive: true });
   writeFileSync(configPath(), JSON.stringify(next, null, 2), 'utf8');
+}
+
+/** Explicit v2 opt-in. No version upgrade can silently enable sharing. */
+export function enableLessonsSharing(): LessonsConfig {
+  const lessons: LessonsConfig = {
+    enabled: true,
+    consent_version: LESSONS_CONSENT_VERSION,
+    consent_at: new Date().toISOString(),
+    cross_project: true,
+    cross_vendor: true,
+  };
+  setConfig({ lessons });
+  return lessons;
+}
+
+export function disableLessonsSharing(): void {
+  const current = getConfig().lessons;
+  setConfig({ lessons: { ...current, enabled: false, cross_project: false, cross_vendor: false } });
+}
+
+export function isLessonsSharingEnabled(config: LessonsConfig = getConfig().lessons): boolean {
+  return config.enabled
+    && config.consent_version === LESSONS_CONSENT_VERSION
+    && config.cross_project
+    && config.cross_vendor;
 }

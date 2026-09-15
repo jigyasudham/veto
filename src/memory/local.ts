@@ -120,6 +120,7 @@ export function getDb(): DatabaseSync {
   migrateToolTraceLog(_db);
   migrateProjectDirCase(_db);
   migrateSessionCreatedAtIso(_db);
+  migrateLessonColumns(_db);
   // Stamp the read-contract version so external readers (veto-vscode, statusline)
   // can detect drift via `PRAGMA user_version`. See VETO_DB_SCHEMA_VERSION.
   _db.exec(`PRAGMA user_version = ${VETO_DB_SCHEMA_VERSION}`);
@@ -159,6 +160,15 @@ function migrateSessionCreatedAtIso(db: DatabaseSync): void {
      WHERE created_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9]*'
        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at) IS NOT NULL
   `);
+}
+
+// Adds the label and quarantine-reason columns to a lessons table created by
+// an earlier development build. Harvested rows are derived and re-harvested on
+// the next sync, so old rows need no backfill.
+function migrateLessonColumns(db: DatabaseSync): void {
+  const names = new Set((db.prepare('PRAGMA table_info(lessons)').all() as Array<{ name: string }>).map(c => c.name));
+  if (!names.has('project_label')) db.exec('ALTER TABLE lessons ADD COLUMN project_label TEXT');
+  if (!names.has('quarantine_reason')) db.exec('ALTER TABLE lessons ADD COLUMN quarantine_reason TEXT');
 }
 
 // Creates tool_call_trace_log table for auditing and session replay (v1.8.0 migration)
