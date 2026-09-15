@@ -3,21 +3,28 @@
 //
 // Hosts disagree on how they spell the same folder: Gemini records
 // `d:\veto`, a save from the same place stores `d:\Veto`, Claude's slug keeps
-// whatever case its cwd had, and a model may pass `D:/Veto/`. On Windows all of
-// these are one folder, so every comparison goes through this key: separators
-// unified, trailing separators dropped, and ASCII letters folded (SQLite's core
-// lower() folds ASCII only, and both sides must agree).
+// whatever case its cwd had, and a model may pass `D:/Veto/`. So every
+// comparison goes through this key:
+//   • everywhere: the drive letter folded (as normalizeProjectDir does for every
+//     stored value) and trailing separators dropped;
+//   • on Windows, where paths are case-insensitive: separators unified and
+//     ASCII letters folded (SQLite's core lower() folds ASCII only, and both
+//     sides of a comparison must agree).
+// `platform` is a parameter so both branches are tested on either OS; the
+// Linux branch was once broken by a change that only a Windows run had seen.
 
-const win32 = process.platform === 'win32';
+import { normalizeProjectDir } from '../memory/local.js';
 
-export function projectKey(dir: string): string {
-  let key = dir.trim();
-  if (win32) key = key.replace(/\//g, '\\').replace(/[A-Z]/g, ch => ch.toLowerCase());
+export function projectKey(dir: string, platform: NodeJS.Platform = process.platform): string {
+  let key = normalizeProjectDir(dir.trim());
+  if (platform === 'win32') key = key.replace(/\//g, '\\').replace(/[A-Z]/g, ch => ch.toLowerCase());
   const trimmed = key.replace(/[\\/]+$/, '');
   return trimmed || key;
 }
 
 /** The same key as a SQL expression over a column, using core SQLite functions only. */
-export function projectKeySql(column: string): string {
-  return win32 ? `rtrim(replace(lower(${column}), '/', '\\'), '\\')` : `rtrim(${column}, '/\\')`;
+export function projectKeySql(column: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32') return `rtrim(replace(lower(${column}), '/', '\\'), '\\')`;
+  const driveFolded = `CASE WHEN substr(${column}, 2, 1) = ':' THEN lower(substr(${column}, 1, 1)) || substr(${column}, 2) ELSE ${column} END`;
+  return `rtrim(${driveFolded}, '/\\')`;
 }
