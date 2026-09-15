@@ -140,6 +140,7 @@ function buildContinueResult(session: ReturnType<typeof listSessions>[0], now: s
 
   // created_at, not started_at: an in-place save rewrites created_at, so it is
   // when the session was last saved. started_at never moves after the first save.
+  // platform is the AI that saved last (updateSession), so this names who left off.
   const message = [
     `Session restored from ${session.platform} (saved ${session.created_at.slice(0, 16)}).`,
     session.summary ? `\nSummary: ${session.summary}` : '',

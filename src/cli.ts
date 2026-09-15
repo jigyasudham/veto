@@ -1097,7 +1097,7 @@ async function transcriptsCommand() {
     console.log('');
     console.log(c.bold('  Transcript sources'));
     console.log(c.dim('  ─────────────────────────────────────────────────────'));
-    console.log(`  ${c.cyan('claude')}  ${c.dim('mapped live by the statusline')} ${c.dim('(veto statusline install)')}`);
+    console.log(`  ${c.cyan('claude')}  ${c.dim('mapped live by the statusline, or found in ~/.claude/projects at save time')}`);
     for (const [name, find, dir] of [
       ['codex', discoverCodexSessions, codexSessionsDir()],
       ['gemini', discoverGeminiSessions, geminiTmpDir()],
@@ -1135,12 +1135,14 @@ async function transcriptsCommand() {
   }
 
   if (sub === 'show') {
-    const id = args[0];
-    if (!id) { console.error(c.red('  Usage: veto transcripts show <source_session_id>')); process.exit(1); }
+    // Any CLI's session by default; --source=<claude|codex|gemini> narrows it.
+    const id = args.find(a => !a.startsWith('--'));
+    const source = args.find(a => a.startsWith('--source='))?.split('=')[1];
+    if (!id) { console.error(c.red('  Usage: veto transcripts show <source_session_id> [--source=claude|codex|gemini]')); process.exit(1); }
     const { showArchive, fmtBytes } = await import('./transcripts/manage.js');
     const { renderTOC } = await import('./transcripts/toc.js');
     const { renderFacts } = await import('./transcripts/pyramid.js');
-    const d = showArchive(id);
+    const d = showArchive(id, source);
     if (!d) { console.error(c.red(`  No archive for session ${id}`)); process.exit(1); }
     console.log('');
     console.log(c.bold(`  Transcript ${id}`));
@@ -1158,15 +1160,21 @@ async function transcriptsCommand() {
   if (sub === 'purge') {
     const { purgeSession, purgeProject, purgeAll } = await import('./transcripts/manage.js');
     const projFlag = args.find(a => a.startsWith('--project='))?.split('=')[1];
+    const source = args.find(a => a.startsWith('--source='))?.split('=')[1];
     const all = args.includes('--all');
     const id = args.find(a => !a.startsWith('--'));
     let r;
     if (all) r = purgeAll();
     else if (projFlag) r = purgeProject(projFlag);
-    else if (id) r = purgeSession(id);
-    else { console.error(c.red('  Usage: veto transcripts purge <source_session_id> | --project=<dir> | --all')); process.exit(1); }
+    else if (id) r = purgeSession(id, source);
+    else { console.error(c.red('  Usage: veto transcripts purge <source_session_id> [--source=claude|codex|gemini] | --project=<dir> | --all')); process.exit(1); }
     console.log('');
-    console.log(c.green(`  ✓ Purged ${r.archives} archive(s): ${r.events} events, ${r.indexRows} index rows, ${r.files} file(s), ${r.mappings} mapping(s) removed.`));
+    // Nothing matched is not a success: say so instead of a green "✓ Purged 0".
+    if (r.archives === 0 && r.mappings === 0) {
+      console.log(c.yellow(`  ⚠ Nothing matched${id && !all && !projFlag ? ` session ${id}` : ''} — no archive was deleted. See ${c.cyan('veto transcripts list')}.`));
+    } else {
+      console.log(c.green(`  ✓ Purged ${r.archives} archive(s): ${r.events} events, ${r.indexRows} index rows, ${r.files} file(s), ${r.mappings} mapping(s) removed.`));
+    }
     console.log('');
     return;
   }

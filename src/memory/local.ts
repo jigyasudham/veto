@@ -460,6 +460,8 @@ export function updateSession(session_id: string, input: SaveSessionInput): Upda
   if (!existing) return null;
 
   const now = new Date().toISOString();
+  // platform is who saved LAST, like created_at is when: a session begun in
+  // Claude and saved from Codex used to keep saying "claude" forever.
   db.prepare(`
     UPDATE sessions SET
       summary     = ?,
@@ -468,6 +470,8 @@ export function updateSession(session_id: string, input: SaveSessionInput): Upda
       token_count = ?,
       save_type   = 'manual',
       tags        = COALESCE(?, tags),
+      platform    = COALESCE(?, platform),
+      project_dir = COALESCE(?, project_dir),
       created_at  = ?
     WHERE id = ?
   `).run(
@@ -478,6 +482,8 @@ export function updateSession(session_id: string, input: SaveSessionInput): Upda
     // Only overwrite tags when the caller supplies them; otherwise keep existing
     // (COALESCE(NULL, tags) = tags). saveSession serializes tags the same way.
     input.tags ? JSON.stringify(input.tags) : null,
+    input.platform ?? null,
+    normalizeProjectDir(input.project_dir) ?? null,
     now,
     session_id
   );

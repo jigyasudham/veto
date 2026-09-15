@@ -26,7 +26,25 @@ export type OnSaveTranscript = {
   secrets_redacted?: number;
   archive_dir?: string;
   note?: string;
+  /** Why nothing was archived, in words the user can act on. */
+  reason?: string;
 };
+
+const HOST_NAMES: Record<TranscriptSource, string> = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini' };
+
+/** Capture used to return nothing at all when it skipped; a save now says why. */
+function skipReason(reason: string | undefined, source: TranscriptSource, projectDir: string): string {
+  const host = HOST_NAMES[source];
+  switch (reason) {
+    case 'no_mapping':
+      return `no ${host} chat was found for ${projectDir}`
+        + (source === 'claude' ? ' (looked in Claude Code\'s projects folder for this folder\'s sessions)' : '');
+    case 'transcript_missing': return `the ${host} chat file no longer exists; the host may have cleaned it up`;
+    case 'too_large': return 'the chat is larger than 128 MB, so it was not archived';
+    case 'sqlite_unavailable': return 'the transcript store needs node:sqlite (Node 22.13+ or 23.4+)';
+    default: return `capture failed${reason ? `: ${reason}` : ''}`;
+  }
+}
 
 /** Map a declared save platform onto a capture source; unknown platforms → claude. */
 export function sourceForPlatform(platform?: string | null): TranscriptSource {
@@ -55,6 +73,13 @@ export function captureSourceFor(
   return isTranscriptSource(p) ? p : null;
 }
 
+/**
+ * Archive the host chat behind a save. Returns null only while capture is off;
+ * whenever capture is on, the result says what happened, including why nothing
+ * was archived (it used to stay silent, which hid every mapping failure).
+ *
+ * `platform: null` means the connected client is not a host Veto can capture.
+ */
 export async function captureOnSave(opts: {
   projectDir?: string | null;
   vetoSessionId?: string | null;
@@ -62,19 +87,25 @@ export async function captureOnSave(opts: {
 }): Promise<OnSaveTranscript | null> {
   if (!isCaptureEnabled()) return null;
 
+  if (opts.platform === null) {
+    return { status: 'skipped', reason: 'this AI client is not one Veto can capture from (Claude Code, Codex or Gemini)' };
+  }
   const source = sourceForPlatform(opts.platform);
-
-  // Codex/Gemini publish no session mapping of their own — find theirs on disk
-  // before capture looks one up. Bounded and best-effort.
-  if (source !== 'claude') {
-    try {
-      const { discoverSessions } = await import('./discover.js');
-      discoverSessions(source);
-    } catch { /* discovery is best-effort; capture will just find no mapping */ }
+  if (!opts.projectDir) {
+    return { status: 'skipped', source, reason: 'no project folder is known for this save, so Veto cannot tell which chat to archive' };
   }
 
+  // Find this project's sessions on disk before capture looks one up: Codex
+  // and Gemini publish no mapping of their own, and Claude only does through
+  // the statusline. Bounded and best-effort; recording a mapping the
+  // statusline already holds just refreshes it.
+  try {
+    const { discoverSessions } = await import('./discover.js');
+    discoverSessions(source, undefined, opts.projectDir);
+  } catch { /* discovery is best-effort; capture will just find no mapping */ }
+
   const cap = await captureSession({ source, projectDir: opts.projectDir, vetoSessionId: opts.vetoSessionId });
-  if (!cap.ok) return null; // skipped (no mapping / missing / too_large) or error — stay silent
+  if (!cap.ok) return { status: cap.status, source, reason: skipReason(cap.reason, source, opts.projectDir) };
 
   const out: OnSaveTranscript = { status: cap.status, source };
 
