@@ -979,6 +979,36 @@ async function statuslineCommand() {
 
   const sl = await import('./cli/statusline.js');
 
+  // Codex and Gemini cannot run a status-line command, so their line is drawn by
+  // Veto itself: `watch` in a split pane, or `print --client=…` for one line
+  // (tmux status-right, scripts). Nothing here reads stdin or writes a file.
+  const hostClient = clientArg === 'codex' || clientArg === 'gemini' ? clientArg : null;
+  const projectFlag = args.find(a => a.startsWith('--dir='))?.slice('--dir='.length);
+  const projectDir = resolve(projectFlag || process.cwd());
+
+  if (sub === 'watch') {
+    const hosts = await import('./cli/statusline-hosts.js');
+    const explicit = args.find(a => a.startsWith('--client='))?.split('=')[1];
+    const host = explicit === 'claude' || explicit === 'codex' || explicit === 'gemini' ? explicit : undefined;
+    const seconds = Number(args.find(a => a.startsWith('--interval='))?.split('=')[1] ?? 5);
+    await hosts.watchStatusline({ host, projectDir, intervalMs: (Number.isFinite(seconds) ? seconds : 5) * 1000 });
+    process.exit(0);
+  }
+
+  if (sub === 'print' && hostClient) {
+    const hosts = await import('./cli/statusline-hosts.js');
+    process.stdout.write(hosts.renderHostStatusline(hostClient, projectDir) + '\n', () => process.exit(0));
+    return;
+  }
+
+  if (sub === 'install' && hostClient) {
+    const hosts = await import('./cli/statusline-hosts.js');
+    console.log('');
+    console.log('  ' + hosts.watchSetupGuide(hostClient, projectDir).replace(/\n/g, '\n  '));
+    console.log('');
+    return;
+  }
+
   // Hot path: one line to stdout, nothing else. No banner, no colors-config noise.
   if (sub === 'print') {
     // --capture <file>: verification aid — log the raw Claude Code payload next to
@@ -1019,13 +1049,15 @@ async function statuslineCommand() {
     if (info.settingsPath) console.log(`  Settings:   ${c.dim(info.settingsPath)}`);
     console.log(`  Sample:     ${info.sample}`);
     console.log('');
-    console.log(c.dim('  Install: veto statusline install [--client=claude] [--force] [--dry-run]'));
+    console.log(c.dim('  Claude Code: veto statusline install [--force] [--dry-run]'));
+    console.log(c.dim('  Codex / Gemini (no custom status line): veto statusline watch — runs in a pane beside the AI;'));
+    console.log(c.dim('    setup for your terminal: veto statusline install --client=codex|gemini'));
     console.log('');
     return;
   }
 
   console.error(c.red(`  Unknown statusline subcommand: ${sub}`));
-  console.error(c.dim('  Usage: veto statusline <install|uninstall|print|status>'));
+  console.error(c.dim('  Usage: veto statusline <install|uninstall|print|status|watch> [--client=claude|codex|gemini] [--dir=<project>] [--interval=<seconds>]'));
   process.exit(1);
 }
 
@@ -1201,8 +1233,9 @@ function shortHelpCommand() {
   console.log(`  ${c.cyan('veto patterns')} ${c.dim('[prefix]')}      List learned agent/routing patterns`);
   console.log(`  ${c.cyan('veto routing')} ${c.dim('[status|enable|disable|reset|log]')}`);
   console.log(`                         Routing feedback loop (opt-in signal storage)`);
-  console.log(`  ${c.cyan('veto statusline')} ${c.dim('[install|uninstall|print|status]')}`);
-  console.log(`                         Compact Veto line under your AI CLI prompt`);
+  console.log(`  ${c.cyan('veto statusline')} ${c.dim('[install|uninstall|print|status|watch]')}`);
+  console.log(`                         Compact Veto line under your AI CLI prompt (Claude Code),`);
+  console.log(`                         or in a pane beside Codex/Gemini: veto statusline watch`);
   console.log(`  ${c.cyan('veto transcripts')} ${c.dim('[enable|disable|status]')}`);
   console.log(`                         Opt-in local session-transcript capture (off by default)`);
   console.log(`  ${c.cyan('veto version')}                 Show version (alias for status)`);
