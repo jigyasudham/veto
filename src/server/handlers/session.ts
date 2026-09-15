@@ -17,15 +17,40 @@ import { autoSave, getActiveProjectDir, setActiveProjectDir } from '../runtime.j
 import { detectHostPlatform } from '../../host.js';
 import type { HandlerMap } from '../registry.js';
 
+/**
+ * What a resuming AI should know about the chats behind a saved session: which
+ * AIs worked on it and what was asked last, plus archived excerpts relevant to
+ * where it was left. Null when capture is off or nothing is archived; it never
+ * fails a resume.
+ */
+async function resumeHistory(sessionId: string | undefined, projectDir: string | null | undefined, focus: unknown) {
+  try {
+    const { pastSessions } = await import('../../transcripts/context.js');
+    const query = typeof focus === 'string' ? focus : focus ? JSON.stringify(focus) : undefined;
+    return pastSessions({ query, projectDir: projectDir ?? undefined, vetoSessionId: sessionId, chats: true });
+  } catch {
+    return null;
+  }
+}
+
 export const sessionHandlers: HandlerMap = {
   veto_session_save: async ({ args, server }) => {
-    const sessionProjectDir = args?.project_dir ? normalizeProjectDir(String(args.project_dir)) : undefined;
+    // The folder this save belongs to: the one given, else the one this server
+    // already knows is active. A save that named neither used to skip capture
+    // without a word.
+    const sessionProjectDir = args?.project_dir
+      ? normalizeProjectDir(String(args.project_dir))
+      : (getActiveProjectDir() ?? undefined);
     if (sessionProjectDir) setActiveProjectDir(sessionProjectDir);
     // The MCP handshake knows which CLI is hosting us; the arg is a self-report.
-    // An explicit arg still wins (it is what the model believes it is), but the
-    // default is now the real host rather than a hardcoded "claude".
+    // The handshake wins: a model in Codex that declared "claude" labelled the
+    // session claude, and veto_continue then said "restored from claude".
     const hostPlatform = detectHostPlatform(server);
-    const savePlatform = args?.platform ? String(args.platform) : (hostPlatform ?? 'claude');
+    const declaredPlatform = args?.platform ? String(args.platform) : undefined;
+    const savePlatform = hostPlatform ?? declaredPlatform ?? 'claude';
+    const platformNote = hostPlatform && declaredPlatform && declaredPlatform.toLowerCase() !== hostPlatform
+      ? `platform: "${declaredPlatform}" was declared, but this save came through ${hostPlatform}; recorded ${hostPlatform}`
+      : undefined;
     const shouldAutoSummarize = args?.auto_summarize === true;
 
     // Auto-summarize: try MCP Sampling first, fall back to agentic prompt for host AI
@@ -103,15 +128,15 @@ export const sessionHandlers: HandlerMap = {
     try {
       const { captureOnSave, captureSourceFor } = await import('../../transcripts/on-save.js');
       // Capture is about WHICH HOST'S FILE to archive, so the handshake is
-      // authoritative here even when the model declared something else.
-      const captureSource = captureSourceFor(hostPlatform, savePlatform);
-      if (captureSource) {
-        transcriptOnSave = await captureOnSave({
-          projectDir: sessionProjectDir,
-          vetoSessionId: result.session_id,
-          platform: captureSource,
-        });
-      }
+      // authoritative here even when the model declared something else. The
+      // server's own working folder is the last resort for finding the chat
+      // (hosts start MCP servers in the project); it is never stored as the
+      // session's project.
+      transcriptOnSave = await captureOnSave({
+        projectDir: sessionProjectDir ?? process.cwd(),
+        vetoSessionId: result.session_id,
+        platform: captureSourceFor(hostPlatform, declaredPlatform),
+      });
     } catch { /* transcript capture is best-effort; never breaks save */ }
 
     // Cache for auto-save: future veto_status calls with high token_count will re-save this context
@@ -149,15 +174,16 @@ export const sessionHandlers: HandlerMap = {
       ...(wasUpdate ? {} : { usage_pct: result.usage_pct, context_warning: result.context_warning }),
       ...(truncationWarnings.length > 0 ? { truncation_warnings: truncationWarnings } : {}),
       ...(transcriptOnSave ? { transcript: transcriptOnSave } : {}),
+      ...(platformNote ? { platform_note: platformNote } : {}),
     };
     if (result.continuation_prompt) responseObj.continuation_prompt = result.continuation_prompt;
 
     return { content: [{ type: 'text', text: JSON.stringify(responseObj, null, 2) }] };
   },
 
-  veto_session_restore: ({ args }) => {
+  veto_session_restore: async ({ args, server }) => {
     const session_id = String(args?.session_id ?? '');
-    const resuming_as = args?.resuming_as ? String(args.resuming_as) : undefined;
+    const resuming_as = detectHostPlatform(server) ?? (args?.resuming_as ? String(args.resuming_as) : undefined);
     const result = restoreSession(session_id, resuming_as);
 
     if (!result.found) {
@@ -183,6 +209,7 @@ export const sessionHandlers: HandlerMap = {
     const nextAction = (typeof parsedTaskState === 'object' && parsedTaskState !== null)
       ? (parsedTaskState.nextAction ?? parsedTaskState.next_action ?? null)
       : null;
+    const history = await resumeHistory(s.id, s.project_dir, nextAction ?? parsedTaskState ?? s.summary);
 
     const resumeInstructions = [
       'Context restored from previous session. Trust the summary, context, and task_state above — they were written by the AI that last worked on this.',
@@ -201,13 +228,14 @@ export const sessionHandlers: HandlerMap = {
               success: true,
               resume_instructions: resumeInstructions,
               session_id: s.id,
-              created_by: s.platform,
+              saved_by: s.platform,
               saved_at: s.created_at,
               project_dir: s.project_dir,
               summary: s.summary,
               context: s.context ? (() => { try { return JSON.parse(s.context!); } catch { return s.context; } })() : null,
               task_state: parsedTaskState,
               token_count: s.token_count,
+              ...(history ? { past_sessions: history } : {}),
             },
             null,
             2
@@ -248,13 +276,13 @@ export const sessionHandlers: HandlerMap = {
     };
   },
 
-  veto_handoff: ({ args }) => {
+  veto_handoff: ({ args, server }) => {
     const summary = String(args?.summary ?? '').trim();
     const context = String(args?.context ?? '').trim();
     if (!summary || !context) {
       return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'summary and context are required.' }) }], isError: true };
     }
-    const handoffPlatform = args?.from_platform ? String(args.from_platform) : 'claude';
+    const handoffPlatform = detectHostPlatform(server) ?? (args?.from_platform ? String(args.from_platform) : 'claude');
     const handoffTaskState = args?.task_state ? String(args.task_state) : undefined;
     const handoffProjectDir = args?.project_dir ? String(args.project_dir) : undefined;
     const result = handoff({
@@ -278,19 +306,20 @@ export const sessionHandlers: HandlerMap = {
     return { content: [{ type: 'text', text: result.instructions + '\n\n' + JSON.stringify({ session_id: result.session_id, to_platform: result.to_platform, saved_at: result.saved_at, reason: result.reason }, null, 2) }] };
   },
 
-  veto_continue: ({ args }) => {
-    const resuming_as = args?.resuming_as ? String(args.resuming_as) : undefined;
+  veto_continue: async ({ args, server }) => {
+    const resuming_as = detectHostPlatform(server) ?? (args?.resuming_as ? String(args.resuming_as) : undefined);
     const result = continueSession(args?.session_id ? String(args.session_id) : undefined, resuming_as);
     if (!result.found) {
       return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: result.message }, null, 2) }], isError: true };
     }
     if (result.project_dir) setActiveProjectDir(result.project_dir);
+    const history = await resumeHistory(result.session_id, result.project_dir, result.next_action ?? result.task_state ?? result.summary);
     return {
       content: [{
         type: 'text',
         text: result.message + '\n\n' + JSON.stringify({
           session_id: result.session_id,
-          created_by: result.platform,
+          saved_by: result.platform,
           active_client: result.active_client ?? result.platform,
           summary: result.summary,
           context: result.context,
@@ -299,6 +328,7 @@ export const sessionHandlers: HandlerMap = {
           project_dir: result.project_dir,
           token_count: result.token_count,
           restored_at: result.restored_at,
+          ...(history ? { past_sessions: history } : {}),
         }, null, 2),
       }],
     };

@@ -8,6 +8,7 @@
 
 import { getTranscriptsDb } from './store.js';
 import { normalizeProjectDir } from '../memory/local.js';
+import { projectKey, projectKeySql } from './project-key.js';
 import type { SessionMapRow } from './schema.js';
 
 export type RecordMappingInput = {
@@ -60,8 +61,9 @@ export function getSessionMapping(sourceSessionId: string, source = 'claude'): S
  */
 export function latestMappingForProject(projectDir: string, source = 'claude'): SessionMapRow | null {
   const db = getTranscriptsDb();
-  const proj = normalizeProjectDir(projectDir);
+  // Matched on the folder key: Gemini records `d:\veto` for the folder a save
+  // calls `d:\Veto`, and an exact match silently found nothing (2026-09-15).
   return (db.prepare(
-    `SELECT * FROM session_map WHERE source = ? AND project_dir = ? ORDER BY last_seen_at DESC LIMIT 1`
-  ).get(source, proj) as SessionMapRow | undefined) ?? null;
+    `SELECT * FROM session_map WHERE source = ? AND ${projectKeySql('project_dir')} = ? ORDER BY last_seen_at DESC LIMIT 1`
+  ).get(source, projectKey(projectDir)) as SessionMapRow | undefined) ?? null;
 }

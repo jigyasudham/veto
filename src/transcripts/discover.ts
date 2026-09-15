@@ -1,4 +1,5 @@
-// Session discovery for the CLIs that have no statusline hook (v3.2).
+// Session discovery for CLIs without a statusline mapping (v3.2; Claude added
+// as a fallback in 3.3.x, for installs that never enabled the Veto statusline).
 //
 // Claude Code renders a statusline on every turn and hands Veto both its session
 // id and transcript path, so `mapping.ts` just UPSERTs what it is given. Codex
@@ -17,9 +18,10 @@
 
 import { readdirSync, statSync, existsSync, openSync, readSync, closeSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { recordSessionMapping } from './mapping.js';
-import { normalizeProjectDir } from '../memory/local.js';
+import { claudeProjectsDir, claudeProjectSlug, sameClaudeSlug } from './claude-paths.js';
+import { projectKey } from './project-key.js';
 
 // Newest-first cap on how many session files one discovery pass will inspect.
 const MAX_CANDIDATES = 40;
@@ -28,7 +30,7 @@ const MAX_CANDIDATES = 40;
 const HEAD_BYTES = 256 * 1024;
 
 export type DiscoveredSession = {
-  source: 'codex' | 'gemini';
+  source: 'claude' | 'codex' | 'gemini';
   sourceSessionId: string;
   transcriptPath: string;
   projectDir: string | null;
@@ -178,17 +180,50 @@ export function discoverGeminiSessions(limit = MAX_CANDIDATES): DiscoveredSessio
   return out;
 }
 
+const CLAUDE_SESSION_FILE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i;
+
+/**
+ * Claude Code: ~/.claude/projects/<slug>/<session-uuid>.jsonl. The statusline
+ * maps the live session exactly, but only where it is installed; without it
+ * nothing mapped Claude sessions at all and capture archived nothing, silently.
+ * This finds the project's own folder(s) by slug (D--Veto and d--Veto are one
+ * folder on Windows) and lists their top-level session files, newest first.
+ * Subagent side chains live in nested folders and are not sessions.
+ */
+export function discoverClaudeSessions(projectDir: string, limit = MAX_CANDIDATES): DiscoveredSession[] {
+  const root = claudeProjectsDir();
+  const slug = claudeProjectSlug(projectDir);
+  let folders;
+  try { folders = readdirSync(root, { withFileTypes: true }); } catch { return []; }
+  const files: string[] = [];
+  for (const folder of folders) {
+    if (!folder.isDirectory() || !sameClaudeSlug(folder.name, slug)) continue;
+    let names;
+    try { names = readdirSync(join(root, folder.name)); } catch { continue; }
+    for (const name of names) if (CLAUDE_SESSION_FILE_RE.test(name)) files.push(join(root, folder.name, name));
+  }
+  return newestFirst(files, limit).map(({ path, mtimeMs }) => ({
+    source: 'claude' as const,
+    sourceSessionId: basename(path, '.jsonl'),
+    transcriptPath: path,
+    projectDir,
+    mtimeMs,
+  }));
+}
+
 /**
  * Discover and record mappings for one source. Best-effort: never throws.
+ * Claude's discovery is per project, so it needs the project's folder.
  *
  * When two files claim the same session id — Gemini's Antigravity stub sessions
  * all report the literal id "a2a-server" — the newest file wins, so the mapping
  * is deterministic instead of depending on directory order.
  */
-export function discoverSessions(source: 'codex' | 'gemini', limit = MAX_CANDIDATES): DiscoverResult {
+export function discoverSessions(source: 'claude' | 'codex' | 'gemini', limit = MAX_CANDIDATES, projectDir?: string | null): DiscoverResult {
   let sessions: DiscoveredSession[] = [];
   try {
-    sessions = source === 'codex' ? discoverCodexSessions(limit) : discoverGeminiSessions(limit);
+    if (source === 'claude') sessions = projectDir ? discoverClaudeSessions(projectDir, limit) : [];
+    else sessions = source === 'codex' ? discoverCodexSessions(limit) : discoverGeminiSessions(limit);
   } catch {
     return { scanned: 0, recorded: 0, sessions: [] };
   }
@@ -222,6 +257,6 @@ export function discoverSessions(source: 'codex' | 'gemini', limit = MAX_CANDIDA
  * skip a capture attempt that could only bind the wrong project's session.
  */
 export function hasSessionForProject(sessions: DiscoveredSession[], projectDir: string): boolean {
-  const want = normalizeProjectDir(projectDir);
-  return sessions.some(s => s.projectDir && normalizeProjectDir(s.projectDir) === want);
+  const want = projectKey(projectDir);
+  return sessions.some(s => s.projectDir && projectKey(s.projectDir) === want);
 }

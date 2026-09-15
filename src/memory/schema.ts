@@ -242,6 +242,56 @@ export const CREATE_TABLES = `
     recorded_at   TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- Harvest-and-Share: exactly one row per current source document section.
+  -- Native source files remain read-only; only masked derived text lives here.
+  -- scope: project | user | machine. quarantined rows never leave their own
+  -- project, whatever their scope; quarantine_reason says why.
+  CREATE TABLE IF NOT EXISTS lessons (
+    id                TEXT PRIMARY KEY,
+    source_cli        TEXT NOT NULL,
+    source_path       TEXT NOT NULL,
+    section_anchor    TEXT NOT NULL,
+    project_identity  TEXT NOT NULL,
+    project_label     TEXT,
+    scope             TEXT NOT NULL DEFAULT 'project',
+    kind              TEXT NOT NULL DEFAULT 'note',
+    text_masked       TEXT NOT NULL,
+    source_hash       TEXT NOT NULL,
+    source_mtime      TEXT NOT NULL,
+    quarantined       INTEGER NOT NULL DEFAULT 0,
+    quarantine_reason TEXT,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    UNIQUE(source_cli, source_path, section_anchor)
+  );
+
+  -- A host is fail-closed when its native-memory format no longer matches its
+  -- adapter. Re-enabling will be an explicit future CLI action.
+  CREATE TABLE IF NOT EXISTS lesson_source_state (
+    source_cli       TEXT PRIMARY KEY,
+    enabled          INTEGER NOT NULL DEFAULT 1,
+    disabled_reason  TEXT,
+    checked_at       TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS project_identity_aliases (
+    alias_path       TEXT PRIMARY KEY,
+    project_identity TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+  );
+
+  -- Prospective-evaluation evidence only. No row means no delivery occurred.
+  CREATE TABLE IF NOT EXISTS lesson_shadow_log (
+    id                      TEXT PRIMARY KEY,
+    query                   TEXT NOT NULL,
+    target_project_identity TEXT NOT NULL,
+    target_host             TEXT NOT NULL,
+    lesson_ids              TEXT NOT NULL,
+    estimated_tokens        INTEGER NOT NULL,
+    reason                  TEXT NOT NULL,
+    created_at              TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_tool_trace_session ON tool_call_trace_log(session_id);
   CREATE INDEX IF NOT EXISTS idx_tool_trace_name    ON tool_call_trace_log(tool_name);
 
@@ -261,6 +311,10 @@ export const CREATE_TABLES = `
   CREATE INDEX IF NOT EXISTS idx_docs_cache_pkg       ON docs_cache(package_name, ecosystem);
   CREATE INDEX IF NOT EXISTS idx_usage_events_session ON usage_events(session_id);
   CREATE INDEX IF NOT EXISTS idx_usage_events_date    ON usage_events(recorded_at);
+  CREATE INDEX IF NOT EXISTS idx_lessons_project       ON lessons(project_identity);
+  CREATE INDEX IF NOT EXISTS idx_lessons_source        ON lessons(source_cli, source_path);
+  CREATE INDEX IF NOT EXISTS idx_lesson_alias_identity ON project_identity_aliases(project_identity);
+  CREATE INDEX IF NOT EXISTS idx_shadow_log_created    ON lesson_shadow_log(created_at);
 `;
 
 export type SessionRow = {

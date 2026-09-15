@@ -10,6 +10,7 @@ import { recordOutcome } from '../../router/index.js';
 import { saveCouncilOutcome, storeKnowledge, logUsage } from '../../memory/local.js';
 import { offerInvitation, invitationPayload } from '../../memory/decisions.js';
 import { buildContextString } from '../../context/reader.js';
+import { withPastSessions } from '../../transcripts/context.js';
 import { parsePrdIntoTasks, getActiveProjectDir } from '../runtime.js';
 import type { HandlerMap } from '../registry.js';
 
@@ -127,7 +128,9 @@ export const councilHandlers: HandlerMap = {
     }
 
     // Build agentic upgrade prompt so host AI can provide real LLM reasoning on any platform
-    const enrichedCtx = buildContextString(debateInput.project_dir, debateInput.context);
+    // This prompt is for the host AI to reason over, so it carries relevant
+    // excerpts from past chats; the deterministic verdict above never sees them.
+    const enrichedCtx = withPastSessions(buildContextString(debateInput.project_dir, debateInput.context), task, debateInput.project_dir) ?? '';
     const { optionA, optionB, isDecisionTask } = (await import('../../council/decision-extractor.js')).extractDecision(task);
     const decisionCtx = isDecisionTask ? `Option A: "${optionA}" vs Option B: "${optionB}"` : undefined;
     const agenticPrompt = buildAgenticDebatePrompt(task, enrichedCtx, decisionCtx);

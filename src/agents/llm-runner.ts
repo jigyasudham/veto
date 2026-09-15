@@ -7,6 +7,7 @@ import { getManifestEntry } from './manifest.js';
 import type { AgentTask, AgentResult, AgentPlan, AgentAnalysis, WorkerAgentType, AgentOutput } from './types.js';
 import { validateAgentPlan, validateAgentAnalysis } from './validate.js';
 import { log, errMsg } from '../log.js';
+import { withPastSessions } from '../transcripts/context.js';
 
 // ─── System prompt builders ───────────────────────────────────────────────────
 
@@ -151,7 +152,8 @@ export async function runAgentLlm(
   } else {
     userParts.push(`Task: ${task.task}`);
   }
-  if (task.context) userParts.push(`\nContext:\n${task.context}`);
+  const context = contextWithHistory(task);
+  if (context) userParts.push(`\nContext:\n${context}`);
   const userText = userParts.join('\n');
 
   try {
@@ -191,15 +193,27 @@ export function buildAgenticAgentPrompt(task: AgentTask): import('./types.js').A
     ? buildAnalysisPrompt(task.agent, entry.role)
     : buildPlanPrompt(task.agent, entry.role);
 
+  const context = contextWithHistory(task);
   return {
     mode: 'agentic',
     agent: task.agent,
     instruction: `MCP Sampling is unavailable. Reason as the ${task.agent} specialist and produce the output yourself, then return it in the result.`,
     output_prompt: isAnalysis
-      ? `Analyze the following code as the ${task.agent} specialist:\n\n${task.code ?? ''}\n\n${task.context ? `Context: ${task.context}` : ''}`
-      : `Plan the following task as the ${task.agent} specialist:\n\n${task.task}\n\n${task.context ? `Context: ${task.context}` : ''}`,
+      ? `Analyze the following code as the ${task.agent} specialist:\n\n${task.code ?? ''}\n\n${context ? `Context: ${context}` : ''}`
+      : `Plan the following task as the ${task.agent} specialist:\n\n${task.task}\n\n${context ? `Context: ${context}` : ''}`,
     schema,
   };
+}
+
+/**
+ * The task's context plus relevant excerpts from this project's past chats.
+ * Both prompt builders a model reads go through here; the deterministic
+ * analyzers never do. The query is the material itself (the code, the error)
+ * when there is some, since a generic instruction like "perform a root-cause
+ * analysis" would match every chat.
+ */
+function contextWithHistory(task: AgentTask): string | undefined {
+  return withPastSessions(task.context, task.code?.trim() ? task.code : task.task, task.project_dir);
 }
 
 export function parseAgenticAgentResponses(

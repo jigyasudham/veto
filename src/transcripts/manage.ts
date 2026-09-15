@@ -9,7 +9,7 @@
 import { statSync, existsSync, rmSync } from 'node:fs';
 import { getTranscriptsDb, transcriptsDbPath } from './store.js';
 import { resetCaches } from './cache.js';
-import { normalizeProjectDir } from '../memory/local.js';
+import { projectKey, projectKeySql } from './project-key.js';
 import { buildTOC, type Segment } from './toc.js';
 import { buildFacts, type SessionFacts } from './pyramid.js';
 import type { ArchiveRow } from './schema.js';
@@ -38,16 +38,28 @@ export function listArchives(opts: { projectDir?: string; limit?: number } = {})
   const db = getTranscriptsDb();
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 500);
   const rows = opts.projectDir
-    ? db.prepare(`SELECT * FROM archives WHERE project_dir = ? ORDER BY updated_at DESC LIMIT ?`).all(normalizeProjectDir(opts.projectDir), limit)
+    ? db.prepare(`SELECT * FROM archives WHERE ${projectKeySql('project_dir')} = ? ORDER BY updated_at DESC LIMIT ?`).all(projectKey(opts.projectDir), limit)
     : db.prepare(`SELECT * FROM archives ORDER BY updated_at DESC LIMIT ?`).all(limit);
   return (rows as ArchiveRow[]).map(toSummary);
 }
 
+/**
+ * Archives for a host session id, from whichever CLI recorded it. A session id
+ * is the host's own (a UUID for all three), so a bare id no longer means
+ * "a Claude session": `show`/`purge` used to default to Claude and quietly
+ * found nothing for a Codex or Gemini id.
+ */
+export function archivesById(sourceSessionId: string, source?: string): ArchiveRow[] {
+  const db = getTranscriptsDb();
+  return (source
+    ? db.prepare(`SELECT * FROM archives WHERE source = ? AND source_session_id = ?`).all(source, sourceSessionId)
+    : db.prepare(`SELECT * FROM archives WHERE source_session_id = ? ORDER BY updated_at DESC`).all(sourceSessionId)) as ArchiveRow[];
+}
+
 export type ArchiveDetail = { summary: ArchiveSummary; toc: Segment[]; facts: SessionFacts } | null;
 
-export function showArchive(sourceSessionId: string, source = 'claude'): ArchiveDetail {
-  const db = getTranscriptsDb();
-  const r = db.prepare(`SELECT * FROM archives WHERE source = ? AND source_session_id = ?`).get(source, sourceSessionId) as ArchiveRow | undefined;
+export function showArchive(sourceSessionId: string, source?: string): ArchiveDetail {
+  const [r] = archivesById(sourceSessionId, source);
   if (!r) return null;
   return { summary: toSummary(r), toc: buildTOC(r.id), facts: buildFacts(r.id) };
 }
@@ -102,22 +114,26 @@ function purgeArchiveRows(archives: ArchiveRow[]): PurgeResult {
   return res;
 }
 
-export function purgeSession(sourceSessionId: string, source = 'claude'): PurgeResult {
+export function purgeSession(sourceSessionId: string, source?: string): PurgeResult {
   const db = getTranscriptsDb();
-  const arch = db.prepare(`SELECT * FROM archives WHERE source = ? AND source_session_id = ?`).get(source, sourceSessionId) as ArchiveRow | undefined;
-  const result = purgeArchiveRows(arch ? [arch] : []);
+  const result = purgeArchiveRows(archivesById(sourceSessionId, source));
   // Purge the mapping even if there was no archive yet (capture never ran).
-  if (!arch) {
-    const m = db.prepare(`DELETE FROM session_map WHERE source = ? AND source_session_id = ?`).run(source, sourceSessionId);
-    result.mappings += Number(m.changes ?? 0);
-  }
+  const m = source
+    ? db.prepare(`DELETE FROM session_map WHERE source = ? AND source_session_id = ?`).run(source, sourceSessionId)
+    : db.prepare(`DELETE FROM session_map WHERE source_session_id = ?`).run(sourceSessionId);
+  result.mappings += Number(m.changes ?? 0);
   return result;
 }
 
 export function purgeProject(projectDir: string): PurgeResult {
   const db = getTranscriptsDb();
-  const archives = db.prepare(`SELECT * FROM archives WHERE project_dir = ?`).all(normalizeProjectDir(projectDir)) as ArchiveRow[];
-  return purgeArchiveRows(archives);
+  const key = projectKey(projectDir);
+  const archives = db.prepare(`SELECT * FROM archives WHERE ${projectKeySql('project_dir')} = ?`).all(key) as ArchiveRow[];
+  const result = purgeArchiveRows(archives);
+  // Mappings for sessions that were never archived still name transcript files.
+  const m = db.prepare(`DELETE FROM session_map WHERE ${projectKeySql('project_dir')} = ?`).run(key);
+  result.mappings += Number(m.changes ?? 0);
+  return result;
 }
 
 export function purgeAll(): PurgeResult {

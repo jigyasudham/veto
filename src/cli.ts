@@ -5,11 +5,12 @@
 process.removeAllListeners('warning');
 
 import { mkdirSync, existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, basename } from 'node:path';
 import { execSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { repairBrokenClaudeEntry } from './cli/claude-repair.js';
+import { writeContextGuidance } from './cli/context-guidance.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { version: VERSION } = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
@@ -349,36 +350,40 @@ Recommended start sequence:
 
   let ctxWritten = 0;
 
-  // Gemini & Antigravity CLI: ~/.gemini/GEMINI.md
+  // Native AI memory files are deliberately never written by Veto. Their
+  // respective CLIs own those files; replacing them would hide user knowledge.
   const geminiDir = join(HOME, '.gemini');
-  if (existsSync(geminiDir)) {
-    try {
-      writeFileSync(join(geminiDir, 'GEMINI.md'), VETO_GUIDE, 'utf8');
-      console.log(c.green('  ✓ ') + 'Gemini/Antigravity CLI — wrote ~/.gemini/GEMINI.md');
-      ctxWritten++;
-    } catch { console.log(c.yellow('  ⚠ ') + 'Gemini/Antigravity CLI — could not write GEMINI.md'); }
-  }
-
-  // Codex CLI: project AGENTS.md + global ~/.codex/AGENTS.override.md
+  // Codex gets an optional project guide only when no user guide exists.
   const codexDir2 = join(HOME, '.codex');
-  if (existsSync(codexDir2)) {
-    // Project-level: only write if not already present (user may have customized it)
-    const projectAgents = join(cwd, 'AGENTS.md');
-    if (!existsSync(projectAgents)) {
-      try {
-        writeFileSync(projectAgents, VETO_GUIDE, 'utf8');
-        console.log(c.green('  ✓ ') + `Codex CLI — wrote AGENTS.md in ${cwd}`);
-        ctxWritten++;
-      } catch { console.log(c.yellow('  ⚠ ') + 'Codex CLI — could not write AGENTS.md'); }
-    } else {
+  try {
+    const guidance = writeContextGuidance({ cwd, geminiDir, codexDir: codexDir2, guide: VETO_GUIDE });
+    if (guidance.geminiMemorySkipped) {
+      console.log(c.dim('  · ') + c.dim("Gemini/Antigravity CLI — Veto does not write GEMINI.md (it is Gemini's own memory file)"));
+    }
+    if (guidance.projectAgents === 'created') {
+      console.log(c.green('  ✓ ') + `Codex CLI — wrote AGENTS.md in ${cwd}`);
+      ctxWritten++;
+    } else if (guidance.projectAgents === 'existing') {
       console.log(c.dim('  · ') + c.dim('Codex CLI — AGENTS.md already exists, skipping'));
     }
-    // Global override
-    try {
-      writeFileSync(join(codexDir2, 'AGENTS.override.md'), VETO_GUIDE, 'utf8');
-      console.log(c.green('  ✓ ') + 'Codex CLI — wrote ~/.codex/AGENTS.override.md');
-      ctxWritten++;
-    } catch { console.log(c.yellow('  ⚠ ') + 'Codex CLI — could not write AGENTS.override.md'); }
+    if (guidance.codexOverrideSkipped) {
+      console.log(c.dim('  · ') + c.dim("Codex CLI — Veto does not write ~/.codex/AGENTS.override.md (it would hide your AGENTS.md)"));
+    }
+  } catch {
+    console.log(c.yellow('  ⚠ ') + 'Codex CLI — could not write project AGENTS.md');
+  }
+
+  // Older inits wrote Veto's guide INTO those native files. Copies that are
+  // nothing but a guide Veto wrote are renamed aside; anything else is left alone.
+  const { moveAsideLeftoverGuides, describeLeftover } = await import('./cli/leftover-guides.js');
+  const leftovers = moveAsideLeftoverGuides(HOME);
+  for (const moved of leftovers.moved) {
+    console.log(c.green('  ✓ ') + `${describeLeftover(moved, HOME)} — renamed to ${basename(moved.backupPath)}`);
+  }
+  for (const kept of leftovers.kept) {
+    console.log(c.yellow('  ⚠ ') + describeLeftover(kept, HOME) + (kept.kind === 'exact'
+      ? ' — could not be renamed; move it aside by hand'
+      : ' — left as is; delete the "# Veto MCP Server" block by hand if you like'));
   }
 
   // Windsurf: ~/.codeium/windsurf/rules/veto.md
@@ -558,7 +563,7 @@ Recommended start sequence:
 
 // ─── Doctor Command ─────────────────────────────────────────────────────────────
 
-async function doctorCommand() {
+async function doctorCommand(fix = false) {
   console.log('');
   console.log(c.bold('  Veto Doctor') + c.dim(' — system health check'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
@@ -664,6 +669,27 @@ async function doctorCommand() {
     // that fails because an optional dependency is absent.
     console.log(`  ${c.dim('·')} Semantic search unavailable ${c.dim('— recall would run keyword-only')}`);
   }
+
+  // Leftovers from older inits, which wrote Veto's guide into Codex's and
+  // Gemini's own files. --fix renames copies that are nothing but that guide.
+  try {
+    const { findLeftoverGuides, moveAsideLeftoverGuides, describeLeftover } = await import('./cli/leftover-guides.js');
+    const moved = fix ? moveAsideLeftoverGuides(HOME).moved : [];
+    for (const m of moved) {
+      console.log(`  ${c.green('✓')} ${describeLeftover(m, HOME)} — renamed to ${basename(m.backupPath)}`);
+    }
+    const remaining = findLeftoverGuides(HOME);
+    for (const guide of remaining) {
+      console.log(`  ${c.yellow('⚠')} ${describeLeftover(guide, HOME)}`);
+      console.log(`  ${c.dim(guide.kind === 'exact'
+        ? `    fix: ${c.cyan('veto doctor --fix')} (renames only this Veto-written copy to ${basename(guide.path)}.veto-backup)`
+        : '    Veto will not edit a file with your own content in it; delete the "# Veto MCP Server" block by hand')}`);
+      issues++;
+    }
+    if (!remaining.length && !moved.length && (existsSync(join(HOME, '.codex')) || existsSync(join(HOME, '.gemini')))) {
+      console.log(`  ${c.green('✓')} No old Veto guide in Codex or Gemini files`);
+    }
+  } catch { /* a health check never fails on its own checks */ }
 
   console.log('');
   console.log('  ' + c.bold('MCP Registrations'));
@@ -953,6 +979,36 @@ async function statuslineCommand() {
 
   const sl = await import('./cli/statusline.js');
 
+  // Codex and Gemini cannot run a status-line command, so their line is drawn by
+  // Veto itself: `watch` in a split pane, or `print --client=…` for one line
+  // (tmux status-right, scripts). Nothing here reads stdin or writes a file.
+  const hostClient = clientArg === 'codex' || clientArg === 'gemini' ? clientArg : null;
+  const projectFlag = args.find(a => a.startsWith('--dir='))?.slice('--dir='.length);
+  const projectDir = resolve(projectFlag || process.cwd());
+
+  if (sub === 'watch') {
+    const hosts = await import('./cli/statusline-hosts.js');
+    const explicit = args.find(a => a.startsWith('--client='))?.split('=')[1];
+    const host = explicit === 'claude' || explicit === 'codex' || explicit === 'gemini' ? explicit : undefined;
+    const seconds = Number(args.find(a => a.startsWith('--interval='))?.split('=')[1] ?? 5);
+    await hosts.watchStatusline({ host, projectDir, intervalMs: (Number.isFinite(seconds) ? seconds : 5) * 1000 });
+    process.exit(0);
+  }
+
+  if (sub === 'print' && hostClient) {
+    const hosts = await import('./cli/statusline-hosts.js');
+    process.stdout.write(hosts.renderHostStatusline(hostClient, projectDir) + '\n', () => process.exit(0));
+    return;
+  }
+
+  if (sub === 'install' && hostClient) {
+    const hosts = await import('./cli/statusline-hosts.js');
+    console.log('');
+    console.log('  ' + hosts.watchSetupGuide(hostClient, projectDir).replace(/\n/g, '\n  '));
+    console.log('');
+    return;
+  }
+
   // Hot path: one line to stdout, nothing else. No banner, no colors-config noise.
   if (sub === 'print') {
     // --capture <file>: verification aid — log the raw Claude Code payload next to
@@ -993,13 +1049,15 @@ async function statuslineCommand() {
     if (info.settingsPath) console.log(`  Settings:   ${c.dim(info.settingsPath)}`);
     console.log(`  Sample:     ${info.sample}`);
     console.log('');
-    console.log(c.dim('  Install: veto statusline install [--client=claude] [--force] [--dry-run]'));
+    console.log(c.dim('  Claude Code: veto statusline install [--force] [--dry-run]'));
+    console.log(c.dim('  Codex / Gemini (no custom status line): veto statusline watch — runs in a pane beside the AI;'));
+    console.log(c.dim('    setup for your terminal: veto statusline install --client=codex|gemini'));
     console.log('');
     return;
   }
 
   console.error(c.red(`  Unknown statusline subcommand: ${sub}`));
-  console.error(c.dim('  Usage: veto statusline <install|uninstall|print|status>'));
+  console.error(c.dim('  Usage: veto statusline <install|uninstall|print|status|watch> [--client=claude|codex|gemini] [--dir=<project>] [--interval=<seconds>]'));
   process.exit(1);
 }
 
@@ -1071,7 +1129,7 @@ async function transcriptsCommand() {
     console.log('');
     console.log(c.bold('  Transcript sources'));
     console.log(c.dim('  ─────────────────────────────────────────────────────'));
-    console.log(`  ${c.cyan('claude')}  ${c.dim('mapped live by the statusline')} ${c.dim('(veto statusline install)')}`);
+    console.log(`  ${c.cyan('claude')}  ${c.dim('mapped live by the statusline, or found in ~/.claude/projects at save time')}`);
     for (const [name, find, dir] of [
       ['codex', discoverCodexSessions, codexSessionsDir()],
       ['gemini', discoverGeminiSessions, geminiTmpDir()],
@@ -1109,12 +1167,14 @@ async function transcriptsCommand() {
   }
 
   if (sub === 'show') {
-    const id = args[0];
-    if (!id) { console.error(c.red('  Usage: veto transcripts show <source_session_id>')); process.exit(1); }
+    // Any CLI's session by default; --source=<claude|codex|gemini> narrows it.
+    const id = args.find(a => !a.startsWith('--'));
+    const source = args.find(a => a.startsWith('--source='))?.split('=')[1];
+    if (!id) { console.error(c.red('  Usage: veto transcripts show <source_session_id> [--source=claude|codex|gemini]')); process.exit(1); }
     const { showArchive, fmtBytes } = await import('./transcripts/manage.js');
     const { renderTOC } = await import('./transcripts/toc.js');
     const { renderFacts } = await import('./transcripts/pyramid.js');
-    const d = showArchive(id);
+    const d = showArchive(id, source);
     if (!d) { console.error(c.red(`  No archive for session ${id}`)); process.exit(1); }
     console.log('');
     console.log(c.bold(`  Transcript ${id}`));
@@ -1132,15 +1192,21 @@ async function transcriptsCommand() {
   if (sub === 'purge') {
     const { purgeSession, purgeProject, purgeAll } = await import('./transcripts/manage.js');
     const projFlag = args.find(a => a.startsWith('--project='))?.split('=')[1];
+    const source = args.find(a => a.startsWith('--source='))?.split('=')[1];
     const all = args.includes('--all');
     const id = args.find(a => !a.startsWith('--'));
     let r;
     if (all) r = purgeAll();
     else if (projFlag) r = purgeProject(projFlag);
-    else if (id) r = purgeSession(id);
-    else { console.error(c.red('  Usage: veto transcripts purge <source_session_id> | --project=<dir> | --all')); process.exit(1); }
+    else if (id) r = purgeSession(id, source);
+    else { console.error(c.red('  Usage: veto transcripts purge <source_session_id> [--source=claude|codex|gemini] | --project=<dir> | --all')); process.exit(1); }
     console.log('');
-    console.log(c.green(`  ✓ Purged ${r.archives} archive(s): ${r.events} events, ${r.indexRows} index rows, ${r.files} file(s), ${r.mappings} mapping(s) removed.`));
+    // Nothing matched is not a success: say so instead of a green "✓ Purged 0".
+    if (r.archives === 0 && r.mappings === 0) {
+      console.log(c.yellow(`  ⚠ Nothing matched${id && !all && !projFlag ? ` session ${id}` : ''} — no archive was deleted. See ${c.cyan('veto transcripts list')}.`));
+    } else {
+      console.log(c.green(`  ✓ Purged ${r.archives} archive(s): ${r.events} events, ${r.indexRows} index rows, ${r.files} file(s), ${r.mappings} mapping(s) removed.`));
+    }
     console.log('');
     return;
   }
@@ -1158,6 +1224,7 @@ function shortHelpCommand() {
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
   console.log(`  ${c.cyan('veto init')}                    Configure all AI tools + scan project`);
   console.log(`  ${c.cyan('veto doctor')}                  Check MCP registrations + system health`);
+  console.log(`  ${c.cyan('veto doctor --fix')}            Also rename old Veto guides left in Codex/Gemini files`);
   console.log(`  ${c.cyan('veto status')}                  Version, DB path, memory/session counts`);
   console.log(`  ${c.cyan('veto sessions')}                List last 20 saved sessions`);
   console.log(`  ${c.cyan('veto tools')} ${c.dim('[filter]')}         List all MCP tools (--json supported)`);
@@ -1166,8 +1233,9 @@ function shortHelpCommand() {
   console.log(`  ${c.cyan('veto patterns')} ${c.dim('[prefix]')}      List learned agent/routing patterns`);
   console.log(`  ${c.cyan('veto routing')} ${c.dim('[status|enable|disable|reset|log]')}`);
   console.log(`                         Routing feedback loop (opt-in signal storage)`);
-  console.log(`  ${c.cyan('veto statusline')} ${c.dim('[install|uninstall|print|status]')}`);
-  console.log(`                         Compact Veto line under your AI CLI prompt`);
+  console.log(`  ${c.cyan('veto statusline')} ${c.dim('[install|uninstall|print|status|watch]')}`);
+  console.log(`                         Compact Veto line under your AI CLI prompt (Claude Code),`);
+  console.log(`                         or in a pane beside Codex/Gemini: veto statusline watch`);
   console.log(`  ${c.cyan('veto transcripts')} ${c.dim('[enable|disable|status]')}`);
   console.log(`                         Opt-in local session-transcript capture (off by default)`);
   console.log(`  ${c.cyan('veto version')}                 Show version (alias for status)`);
@@ -1657,7 +1725,7 @@ switch (command) {
     break;
 
   case 'doctor':
-    doctorCommand().catch((err) => {
+    doctorCommand(process.argv.includes('--fix')).catch((err) => {
       console.error(c.red(`Error: ${err.message}`));
       process.exit(1);
     });

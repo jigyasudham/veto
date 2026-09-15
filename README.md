@@ -233,6 +233,7 @@ These work standalone in any terminal — no AI client needed. The bare `veto` c
 ```bash
 veto init                        # Configure all AI tools + scan project
 veto doctor                      # Check MCP registrations + system health
+veto doctor --fix                # Also move aside old Veto guides left in Codex/Gemini files
 veto status                      # Version, DB path, session/memory/outcome counts
 veto version                     # Alias for veto status
 veto sessions                    # List last 20 saved sessions ([auto] badge on auto-saves)
@@ -244,6 +245,8 @@ veto agents [filter]             # List all 49 specialists — workers + council
 veto routing [status|log|reset]  # Inspect the opt-in routing feedback loop
 veto transcripts <sub>           # Opt-in transcript capture (off by default) —
                                  #   enable|status|sources|list|show|purge|disable
+veto statusline <sub>            # Veto line under the Claude Code prompt, or beside
+                                 #   Codex/Gemini — install|status|print|watch|uninstall
 veto hook install                # Install pre-commit secrets scan hook
 veto hook remove                 # Remove the veto pre-commit hook
 veto check                       # Scan staged changes for secrets (used by hook)
@@ -273,6 +276,22 @@ veto doctor
 
   ✓ All checks passed — Veto is healthy!
 ```
+
+Versions of `veto init` before this release wrote Veto's guide over `~/.gemini/GEMINI.md` (Gemini's own memory file) and into `~/.codex/AGENTS.override.md`, which Codex reads *instead of* your `~/.codex/AGENTS.md`. Current versions never write either file. `veto doctor` reports any copy left behind, and `veto doctor --fix` (or `veto init`) renames a copy to `*.veto-backup` — only when the file is exactly a guide Veto shipped. A file with anything else in it, such as memories Gemini saved below the guide, is reported and never touched. What an old init overwrote cannot be recovered.
+
+### `veto statusline`
+
+In Claude Code, `veto statusline install` adds a Veto line under the prompt: the latest council verdict, router confidence, live context and rate-limit use, and memory size.
+
+Codex and Gemini cannot run a custom status line — each only shows its own built-in items (Codex: [openai/codex#20244](https://github.com/openai/codex/issues/20244)). So there, the same line runs in a small split pane beside the AI and follows its session in the current folder:
+
+```bash
+veto statusline watch                    # follows whichever AI is working in this folder
+veto statusline watch --client=codex     # or pin one: claude | codex | gemini
+veto statusline install --client=codex   # prints the split-pane setup for your terminal; writes nothing
+```
+
+For Codex it reads context and rate-limit use from Codex's own session file; Gemini records no usage figures, so its line shows the live session without gauges. `veto statusline print --client=codex` prints one line, for a tmux status bar or a script.
 
 ---
 
@@ -465,8 +484,8 @@ veto transcripts enable          # Opt in — prints what/where/retention, recor
 veto transcripts status          # State, archive dir, retention, disk usage
 veto transcripts sources         # Per-CLI: where sessions live + what Veto can see
 veto transcripts list            # Archived sessions
-veto transcripts show <id>       # One session's table-of-contents + facts
-veto transcripts purge <id>      # Delete an archive (also --project=<dir> | --all)
+veto transcripts show <id>       # One session's table-of-contents + facts (any AI's session id)
+veto transcripts purge <id>      # Delete an archive (also --project=<dir> | --all; --source=codex to narrow)
 veto transcripts disable         # Stop capturing (existing archives are kept)
 ```
 
@@ -475,10 +494,11 @@ veto transcripts disable         # Stop capturing (existing archives are kept)
 All three are captured and recalled through the same pipeline, each with its own
 format adapter, and **Veto works out which one it is running in by itself** — the
 MCP handshake names the host, so nothing depends on the AI reporting it correctly.
-Claude Code reports its session through Veto's statusline; Codex and Gemini expose
-no such hook, so Veto locates their session files on disk instead.
-`veto transcripts sources` shows exactly what it can see for each, and
-`veto_health` reports the detected host if capture is not doing what you expect.
+Veto finds each host's session files on disk at save time (Claude Code's statusline,
+when installed, also reports its session live). A project folder matches however a
+host spells it — Gemini records `d:\veto` for the folder a save calls `D:\Veto`.
+`veto transcripts sources` shows exactly what it can see for each, and when a save
+archives nothing, its response says why.
 
 Each adapter was written against real transcripts rather than docs, which is how
 two format traps got handled: Codex records every message on two parallel
@@ -494,7 +514,24 @@ Recall runs through `veto_session_replay` as a two-call loop — search, then ex
 { expand: { event_id: 412 } }   →  the exact lines, masked, with a turn + timestamp citation
 ```
 
-Claude Code is the only adapter in 3.1.0; Codex and Gemini follow.
+### Past sessions, used without asking
+
+Recall only helps if an AI thinks to reach for it, and mostly it did not. So the
+tools where history changes the answer bring it along themselves, from every
+archived chat — whichever AI it happened in:
+
+- **`veto_continue` / `veto_session_restore`** list the chats behind the saved
+  session (for example a Codex chat and two Claude Code chats) and what was asked
+  last in each.
+- **`veto_memory_search`** returns matching excerpts from past chats beside stored
+  memory.
+- **Every prompt Veto hands a model** — agent tools and the council — carries up to
+  three relevant excerpts.
+
+An excerpt is attached only when it is conversation (not a tool payload) and shares
+at least two words with the question; nothing is attached while capture is off.
+Excerpts are labelled as historical data, not instructions, and the deterministic
+analyzers never receive them, so an old excerpt cannot become a finding.
 
 ### Semantic recall — finding what you can't quite remember
 

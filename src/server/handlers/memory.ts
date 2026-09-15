@@ -108,13 +108,19 @@ export const memoryHandlers: HandlerMap = {
     return { content: [{ type: 'text', text: JSON.stringify({ success: true, id, message: 'Knowledge stored.' }, null, 2) }] };
   },
 
-  veto_memory_search: ({ args }) => {
+  veto_memory_search: async ({ args }) => {
+    const query = args?.query ? String(args.query) : undefined;
+    const projectDir = args?.project_dir ? String(args.project_dir) : (getActiveProjectDir() ?? undefined);
     const results = searchKnowledge({
-      query: args?.query ? String(args.query) : undefined,
+      query,
       type: args?.type ? String(args.type) as KnowledgeType : undefined,
-      project_dir: args?.project_dir ? String(args.project_dir) : (getActiveProjectDir() ?? undefined),
+      project_dir: projectDir,
       limit: typeof args?.limit === 'number' ? args.limit : 10,
     });
+    // Stored memory is what someone chose to keep; the archived chats hold
+    // everything else. Searched together so a lookup here also reaches them.
+    let history = null;
+    try { history = (await import('../../transcripts/context.js')).pastSessions({ query, projectDir }); } catch { /* optional */ }
     return {
       content: [{
         type: 'text',
@@ -131,6 +137,7 @@ export const memoryHandlers: HandlerMap = {
             accessed_count: r.accessed_count,
             created_at: r.created_at,
           })),
+          ...(history ? { past_sessions: history } : {}),
         }, null, 2),
       }],
     };

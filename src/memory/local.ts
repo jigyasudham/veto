@@ -120,6 +120,7 @@ export function getDb(): DatabaseSync {
   migrateToolTraceLog(_db);
   migrateProjectDirCase(_db);
   migrateSessionCreatedAtIso(_db);
+  migrateLessonColumns(_db);
   // Stamp the read-contract version so external readers (veto-vscode, statusline)
   // can detect drift via `PRAGMA user_version`. See VETO_DB_SCHEMA_VERSION.
   _db.exec(`PRAGMA user_version = ${VETO_DB_SCHEMA_VERSION}`);
@@ -159,6 +160,15 @@ function migrateSessionCreatedAtIso(db: DatabaseSync): void {
      WHERE created_at GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9]*'
        AND strftime('%Y-%m-%dT%H:%M:%fZ', created_at) IS NOT NULL
   `);
+}
+
+// Adds the label and quarantine-reason columns to a lessons table created by
+// an earlier development build. Harvested rows are derived and re-harvested on
+// the next sync, so old rows need no backfill.
+function migrateLessonColumns(db: DatabaseSync): void {
+  const names = new Set((db.prepare('PRAGMA table_info(lessons)').all() as Array<{ name: string }>).map(c => c.name));
+  if (!names.has('project_label')) db.exec('ALTER TABLE lessons ADD COLUMN project_label TEXT');
+  if (!names.has('quarantine_reason')) db.exec('ALTER TABLE lessons ADD COLUMN quarantine_reason TEXT');
 }
 
 // Creates tool_call_trace_log table for auditing and session replay (v1.8.0 migration)
@@ -460,6 +470,8 @@ export function updateSession(session_id: string, input: SaveSessionInput): Upda
   if (!existing) return null;
 
   const now = new Date().toISOString();
+  // platform is who saved LAST, like created_at is when: a session begun in
+  // Claude and saved from Codex used to keep saying "claude" forever.
   db.prepare(`
     UPDATE sessions SET
       summary     = ?,
@@ -468,6 +480,8 @@ export function updateSession(session_id: string, input: SaveSessionInput): Upda
       token_count = ?,
       save_type   = 'manual',
       tags        = COALESCE(?, tags),
+      platform    = COALESCE(?, platform),
+      project_dir = COALESCE(?, project_dir),
       created_at  = ?
     WHERE id = ?
   `).run(
@@ -478,6 +492,8 @@ export function updateSession(session_id: string, input: SaveSessionInput): Upda
     // Only overwrite tags when the caller supplies them; otherwise keep existing
     // (COALESCE(NULL, tags) = tags). saveSession serializes tags the same way.
     input.tags ? JSON.stringify(input.tags) : null,
+    input.platform ?? null,
+    normalizeProjectDir(input.project_dir) ?? null,
     now,
     session_id
   );

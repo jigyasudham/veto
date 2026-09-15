@@ -32,6 +32,9 @@ export interface StatuslineData {
   rate5hPct: number | null;                   // LIVE 5-hour rate-limit % used — from Claude Code stdin
   rate7dPct: number | null;                   // LIVE 7-day (weekly) rate-limit % used — from Claude Code stdin
   memCount: number | null;                    // knowledge_base entries (Veto DB)
+  // Watch mode only (Codex/Gemini, which cannot run a status-line command):
+  host?: { name: string; session: string | null; age: string | null } | null; // the AI's live session in this folder
+  chats?: number | null;                      // this folder's archived chats, every AI
 }
 
 const EMPTY: StatuslineData = {
@@ -178,6 +181,14 @@ export function composeStatusline(data: StatuslineData, opts: ComposeOptions = {
 
   if (data.memCount !== null) {
     segments.push(`mem ${data.memCount}`);
+  }
+
+  if (data.host) {
+    const parts = [data.host.name, data.host.session?.slice(0, 8), data.host.age].filter(Boolean);
+    segments.push(paint(parts.join(' '), ANSI.dim));
+  }
+  if (typeof data.chats === 'number' && data.chats > 0) {
+    segments.push(`chats ${data.chats}`);
   }
 
   if (segments.length === 0) return head; // neutral fallback
@@ -601,7 +612,10 @@ export function statuslineSetupInstruction(client = 'claude'): string | undefine
     '(latest council verdict · top router-pattern confidence · daily token-budget % · memory',
     'entry count). It is NOT yet enabled in this install. If the user would like it, offer to',
     'run `veto statusline install` for them — it backs up settings.json and is reversible with',
-    '`veto statusline uninstall`, and the line appears after the next CLI restart. Do not',
-    'install it unless the user agrees.',
+    '`veto statusline uninstall`, and the line appears after the next CLI restart. Codex and',
+    'Gemini cannot run a custom status line, so there the same line runs in a split terminal',
+    'pane beside the AI: offer `veto statusline install --client=codex` (or gemini), which only',
+    'prints the one-line setup for their terminal and changes nothing. Do not install anything',
+    'unless the user agrees.',
   ].join(' ');
 }
