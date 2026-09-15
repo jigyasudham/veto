@@ -8,6 +8,7 @@ import type { AgentVote, DebateInput, DebateResult } from './types.js';
 import { decide, formatDebate } from './decision-engine.js';
 import { buildContextString } from '../context/reader.js';
 import { searchKnowledge } from '../memory/local.js';
+import { withPastSessions } from '../transcripts/context.js';
 import { extractDecision } from './decision-extractor.js';
 
 // Deterministic fallbacks — one per agent
@@ -122,10 +123,13 @@ async function callAgentLlm(
   memoryContext: string,
   decisionContext?: string,
   model?: string,
+  history?: string,
 ): Promise<AgentVote> {
   const parts: string[] = [`Task to evaluate:\n${task}`];
   if (decisionContext) parts.push(`\nARCHITECTURAL CHOICE DETECTED:\n${decisionContext}\nYour response MUST address this specific choice — name the option you prefer in your recommendation.`);
   if (memoryContext) parts.push(`\nRelevant past council decisions:\n${memoryContext}`);
+  // Only the model sees past chats: the fallback below votes on `task` alone.
+  if (history) parts.push(`\n${history}`);
   const userText = parts.join('\n');
 
   try {
@@ -239,6 +243,7 @@ export async function runLlmDebate(server: Server, input: DebateInput): Promise<
   const enrichedContext = buildContextString(input.project_dir, input.context);
   const fullText = enrichedContext ? `${input.task}\n\n${enrichedContext}` : input.task;
   const memoryContext = buildMemoryContext(input.task, input.project_dir);
+  const history = withPastSessions(undefined, input.task, input.project_dir);
 
   // Extract architectural choice if present — inject into every LLM call
   const decision = extractDecision(input.task);
@@ -249,13 +254,13 @@ export async function runLlmDebate(server: Server, input: DebateInput): Promise<
   // All 7 agents run in parallel — each falls back individually on sampling failure
   const model = input.architect_model;
   const [lead_dev, pm, architect, ux, devil, legal, security] = await Promise.all([
-    callAgentLlm(server, 'lead_dev',  fullText, memoryContext, decisionContext, model),
-    callAgentLlm(server, 'pm',        fullText, memoryContext, decisionContext, model),
-    callAgentLlm(server, 'architect', fullText, memoryContext, decisionContext, model),
-    callAgentLlm(server, 'ux',        fullText, memoryContext, decisionContext, model),
-    callAgentLlm(server, 'devil',     fullText, memoryContext, decisionContext, model),
-    callAgentLlm(server, 'legal',     fullText, memoryContext, decisionContext, model),
-    callAgentLlm(server, 'security',  fullText, memoryContext, decisionContext, model),
+    callAgentLlm(server, 'lead_dev',  fullText, memoryContext, decisionContext, model, history),
+    callAgentLlm(server, 'pm',        fullText, memoryContext, decisionContext, model, history),
+    callAgentLlm(server, 'architect', fullText, memoryContext, decisionContext, model, history),
+    callAgentLlm(server, 'ux',        fullText, memoryContext, decisionContext, model, history),
+    callAgentLlm(server, 'devil',     fullText, memoryContext, decisionContext, model, history),
+    callAgentLlm(server, 'legal',     fullText, memoryContext, decisionContext, model, history),
+    callAgentLlm(server, 'security',  fullText, memoryContext, decisionContext, model, history),
   ]);
 
   const votes = { lead_dev, pm, architect, ux, devil, legal, security };

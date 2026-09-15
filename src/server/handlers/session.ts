@@ -17,6 +17,22 @@ import { autoSave, getActiveProjectDir, setActiveProjectDir } from '../runtime.j
 import { detectHostPlatform } from '../../host.js';
 import type { HandlerMap } from '../registry.js';
 
+/**
+ * What a resuming AI should know about the chats behind a saved session: which
+ * AIs worked on it and what was asked last, plus archived excerpts relevant to
+ * where it was left. Null when capture is off or nothing is archived; it never
+ * fails a resume.
+ */
+async function resumeHistory(sessionId: string | undefined, projectDir: string | null | undefined, focus: unknown) {
+  try {
+    const { pastSessions } = await import('../../transcripts/context.js');
+    const query = typeof focus === 'string' ? focus : focus ? JSON.stringify(focus) : undefined;
+    return pastSessions({ query, projectDir: projectDir ?? undefined, vetoSessionId: sessionId, chats: true });
+  } catch {
+    return null;
+  }
+}
+
 export const sessionHandlers: HandlerMap = {
   veto_session_save: async ({ args, server }) => {
     // The folder this save belongs to: the one given, else the one this server
@@ -193,6 +209,7 @@ export const sessionHandlers: HandlerMap = {
     const nextAction = (typeof parsedTaskState === 'object' && parsedTaskState !== null)
       ? (parsedTaskState.nextAction ?? parsedTaskState.next_action ?? null)
       : null;
+    const history = await resumeHistory(s.id, s.project_dir, nextAction ?? parsedTaskState ?? s.summary);
 
     const resumeInstructions = [
       'Context restored from previous session. Trust the summary, context, and task_state above — they were written by the AI that last worked on this.',
@@ -218,6 +235,7 @@ export const sessionHandlers: HandlerMap = {
               context: s.context ? (() => { try { return JSON.parse(s.context!); } catch { return s.context; } })() : null,
               task_state: parsedTaskState,
               token_count: s.token_count,
+              ...(history ? { past_sessions: history } : {}),
             },
             null,
             2
@@ -295,6 +313,7 @@ export const sessionHandlers: HandlerMap = {
       return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: result.message }, null, 2) }], isError: true };
     }
     if (result.project_dir) setActiveProjectDir(result.project_dir);
+    const history = await resumeHistory(result.session_id, result.project_dir, result.next_action ?? result.task_state ?? result.summary);
     return {
       content: [{
         type: 'text',
@@ -309,6 +328,7 @@ export const sessionHandlers: HandlerMap = {
           project_dir: result.project_dir,
           token_count: result.token_count,
           restored_at: result.restored_at,
+          ...(history ? { past_sessions: history } : {}),
         }, null, 2),
       }],
     };
