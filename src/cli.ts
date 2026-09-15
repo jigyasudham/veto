@@ -5,11 +5,12 @@
 process.removeAllListeners('warning');
 
 import { mkdirSync, existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, basename } from 'node:path';
 import { execSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { repairBrokenClaudeEntry } from './cli/claude-repair.js';
+import { writeContextGuidance } from './cli/context-guidance.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const { version: VERSION } = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf8')) as { version: string };
@@ -349,36 +350,40 @@ Recommended start sequence:
 
   let ctxWritten = 0;
 
-  // Gemini & Antigravity CLI: ~/.gemini/GEMINI.md
+  // Native AI memory files are deliberately never written by Veto. Their
+  // respective CLIs own those files; replacing them would hide user knowledge.
   const geminiDir = join(HOME, '.gemini');
-  if (existsSync(geminiDir)) {
-    try {
-      writeFileSync(join(geminiDir, 'GEMINI.md'), VETO_GUIDE, 'utf8');
-      console.log(c.green('  ✓ ') + 'Gemini/Antigravity CLI — wrote ~/.gemini/GEMINI.md');
-      ctxWritten++;
-    } catch { console.log(c.yellow('  ⚠ ') + 'Gemini/Antigravity CLI — could not write GEMINI.md'); }
-  }
-
-  // Codex CLI: project AGENTS.md + global ~/.codex/AGENTS.override.md
+  // Codex gets an optional project guide only when no user guide exists.
   const codexDir2 = join(HOME, '.codex');
-  if (existsSync(codexDir2)) {
-    // Project-level: only write if not already present (user may have customized it)
-    const projectAgents = join(cwd, 'AGENTS.md');
-    if (!existsSync(projectAgents)) {
-      try {
-        writeFileSync(projectAgents, VETO_GUIDE, 'utf8');
-        console.log(c.green('  ✓ ') + `Codex CLI — wrote AGENTS.md in ${cwd}`);
-        ctxWritten++;
-      } catch { console.log(c.yellow('  ⚠ ') + 'Codex CLI — could not write AGENTS.md'); }
-    } else {
+  try {
+    const guidance = writeContextGuidance({ cwd, geminiDir, codexDir: codexDir2, guide: VETO_GUIDE });
+    if (guidance.geminiMemorySkipped) {
+      console.log(c.dim('  · ') + c.dim("Gemini/Antigravity CLI — Veto does not write GEMINI.md (it is Gemini's own memory file)"));
+    }
+    if (guidance.projectAgents === 'created') {
+      console.log(c.green('  ✓ ') + `Codex CLI — wrote AGENTS.md in ${cwd}`);
+      ctxWritten++;
+    } else if (guidance.projectAgents === 'existing') {
       console.log(c.dim('  · ') + c.dim('Codex CLI — AGENTS.md already exists, skipping'));
     }
-    // Global override
-    try {
-      writeFileSync(join(codexDir2, 'AGENTS.override.md'), VETO_GUIDE, 'utf8');
-      console.log(c.green('  ✓ ') + 'Codex CLI — wrote ~/.codex/AGENTS.override.md');
-      ctxWritten++;
-    } catch { console.log(c.yellow('  ⚠ ') + 'Codex CLI — could not write AGENTS.override.md'); }
+    if (guidance.codexOverrideSkipped) {
+      console.log(c.dim('  · ') + c.dim("Codex CLI — Veto does not write ~/.codex/AGENTS.override.md (it would hide your AGENTS.md)"));
+    }
+  } catch {
+    console.log(c.yellow('  ⚠ ') + 'Codex CLI — could not write project AGENTS.md');
+  }
+
+  // Older inits wrote Veto's guide INTO those native files. Copies that are
+  // nothing but a guide Veto wrote are renamed aside; anything else is left alone.
+  const { moveAsideLeftoverGuides, describeLeftover } = await import('./cli/leftover-guides.js');
+  const leftovers = moveAsideLeftoverGuides(HOME);
+  for (const moved of leftovers.moved) {
+    console.log(c.green('  ✓ ') + `${describeLeftover(moved, HOME)} — renamed to ${basename(moved.backupPath)}`);
+  }
+  for (const kept of leftovers.kept) {
+    console.log(c.yellow('  ⚠ ') + describeLeftover(kept, HOME) + (kept.kind === 'exact'
+      ? ' — could not be renamed; move it aside by hand'
+      : ' — left as is; delete the "# Veto MCP Server" block by hand if you like'));
   }
 
   // Windsurf: ~/.codeium/windsurf/rules/veto.md
@@ -558,7 +563,7 @@ Recommended start sequence:
 
 // ─── Doctor Command ─────────────────────────────────────────────────────────────
 
-async function doctorCommand() {
+async function doctorCommand(fix = false) {
   console.log('');
   console.log(c.bold('  Veto Doctor') + c.dim(' — system health check'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
@@ -664,6 +669,27 @@ async function doctorCommand() {
     // that fails because an optional dependency is absent.
     console.log(`  ${c.dim('·')} Semantic search unavailable ${c.dim('— recall would run keyword-only')}`);
   }
+
+  // Leftovers from older inits, which wrote Veto's guide into Codex's and
+  // Gemini's own files. --fix renames copies that are nothing but that guide.
+  try {
+    const { findLeftoverGuides, moveAsideLeftoverGuides, describeLeftover } = await import('./cli/leftover-guides.js');
+    const moved = fix ? moveAsideLeftoverGuides(HOME).moved : [];
+    for (const m of moved) {
+      console.log(`  ${c.green('✓')} ${describeLeftover(m, HOME)} — renamed to ${basename(m.backupPath)}`);
+    }
+    const remaining = findLeftoverGuides(HOME);
+    for (const guide of remaining) {
+      console.log(`  ${c.yellow('⚠')} ${describeLeftover(guide, HOME)}`);
+      console.log(`  ${c.dim(guide.kind === 'exact'
+        ? `    fix: ${c.cyan('veto doctor --fix')} (renames only this Veto-written copy to ${basename(guide.path)}.veto-backup)`
+        : '    Veto will not edit a file with your own content in it; delete the "# Veto MCP Server" block by hand')}`);
+      issues++;
+    }
+    if (!remaining.length && !moved.length && (existsSync(join(HOME, '.codex')) || existsSync(join(HOME, '.gemini')))) {
+      console.log(`  ${c.green('✓')} No old Veto guide in Codex or Gemini files`);
+    }
+  } catch { /* a health check never fails on its own checks */ }
 
   console.log('');
   console.log('  ' + c.bold('MCP Registrations'));
@@ -1158,6 +1184,7 @@ function shortHelpCommand() {
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
   console.log(`  ${c.cyan('veto init')}                    Configure all AI tools + scan project`);
   console.log(`  ${c.cyan('veto doctor')}                  Check MCP registrations + system health`);
+  console.log(`  ${c.cyan('veto doctor --fix')}            Also rename old Veto guides left in Codex/Gemini files`);
   console.log(`  ${c.cyan('veto status')}                  Version, DB path, memory/session counts`);
   console.log(`  ${c.cyan('veto sessions')}                List last 20 saved sessions`);
   console.log(`  ${c.cyan('veto tools')} ${c.dim('[filter]')}         List all MCP tools (--json supported)`);
@@ -1657,7 +1684,7 @@ switch (command) {
     break;
 
   case 'doctor':
-    doctorCommand().catch((err) => {
+    doctorCommand(process.argv.includes('--fix')).catch((err) => {
       console.error(c.red(`Error: ${err.message}`));
       process.exit(1);
     });

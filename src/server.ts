@@ -32,6 +32,7 @@ import { buildRepoMap } from './repo-map/index.js';
 import { initLlmRunner } from './agents/executor.js';
 import { loadPlugins } from './plugins/loader.js';
 import { statuslineSetupInstruction } from './cli/statusline.js';
+import { leftoverGuideInstruction } from './cli/leftover-guides.js';
 import { versionUpdateInstruction } from './server/update-check.js';
 import { join } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -57,9 +58,10 @@ const TOOL_USAGE_DIRECTIVE =
 // independent, self-resolving tips:
 //   • versionUpdateInstruction() — a newer Veto is on npm; restart to pick it up.
 //   • statuslineSetupInstruction() — until the user enables the Veto status line.
-// Neither can be an interactive stdio prompt (the stdio channel is JSON-RPC), so we
+//   • leftoverGuideInstruction() — while an old init's guide sits in a Codex/Gemini file.
+// None can be an interactive stdio prompt (the stdio channel is JSON-RPC), so we
 // hand the offer to the agent, which relays it to the user.
-const instructions = [TOOL_USAGE_DIRECTIVE, versionUpdateInstruction(), statuslineSetupInstruction()]
+const instructions = [TOOL_USAGE_DIRECTIVE, versionUpdateInstruction(), statuslineSetupInstruction(), leftoverGuideInstruction()]
   .filter(Boolean)
   .join('\n\n') || undefined;
 
