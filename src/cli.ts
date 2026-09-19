@@ -1238,7 +1238,7 @@ function shortHelpCommand() {
   console.log(`                         or in a pane beside Codex/Gemini: veto statusline watch`);
   console.log(`  ${c.cyan('veto transcripts')} ${c.dim('[enable|disable|status]')}`);
   console.log(`                         Opt-in local session-transcript capture (off by default)`);
-  console.log(`  ${c.cyan('veto lessons')} ${c.dim('[list|why|forget|flows|off|exclude|include|alias|recheck]')}`);
+  console.log(`  ${c.cyan('veto lessons')} ${c.dim('[on|list|why|forget|flows|off|exclude|include|alias|recheck]')}`);
   console.log(`                         Notes your AIs wrote in their own memory: see them, where they may go, stop them`);
   console.log(`  ${c.cyan('veto version')}                 Show version (alias for status)`);
   console.log(`  ${c.cyan('veto hook install')}            Install pre-commit secrets scan hook`);
@@ -1756,7 +1756,7 @@ switch (command) {
 
   case 'lessons':
     import('./cli/lessons.js')
-      .then(({ runLessonsCommand }) => { process.exitCode = runLessonsCommand(process.argv.slice(3)); })
+      .then(async ({ runLessonsCommand }) => { process.exitCode = await runLessonsCommand(process.argv.slice(3)); })
       .catch((err) => {
         console.error(c.red(`Error: ${err.message}`));
         process.exit(1);

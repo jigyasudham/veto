@@ -2,8 +2,10 @@
 // (Harvest-and-Share, council 320c40dc). Nothing here delivers a note to any
 // AI; it only shows the user their notes and where the rules would let them go.
 
+import { createInterface } from 'node:readline';
 import { LESSON_SOURCES, type LessonSource } from '../lessons/adapters/index.js';
 import type { LessonScope } from '../lessons/classify.js';
+import { acceptLessonsConsent, detectAiSession, lessonsDisclosure } from '../lessons/consent.js';
 import {
   aliasGroups, explainLesson, excludeProjectDir, findLesson, forgetLesson, HOST_NAMES, includeProjectDir, lessonFlows,
   lessonReach, lessonsStatus, lessonTitle, listLessons, projectName, recheckSource, refreshLessons,
@@ -22,6 +24,7 @@ const RULE = '──────────────────────
 const SHADOW = 'shadow mode: nothing is delivered to any AI yet';
 const USAGE = [
   'veto lessons [status]',
+  'veto lessons on             (in your own terminal: you type yes to accept)',
   'veto lessons list [--scope=user|machine|project] [--source=claude|codex|gemini] [--shared] [--held] [--project=<dir>] [--json]',
   'veto lessons why <id>',
   'veto lessons forget <id>',
@@ -73,7 +76,7 @@ function lookup(found: FindLesson, id: string, out: Out, c: Colors): LessonRow |
 function sharingLine(c: Colors): string {
   const s = lessonsStatus();
   if (s.sharing) return `${c.green('on')}${s.consentAt ? c.dim(` · accepted ${s.consentAt.slice(0, 10)}`) : ''} · ${c.dim(SHADOW)}`;
-  if (s.needsReconsent) return c.yellow('paused: the disclosure changed since you accepted it');
+  if (s.needsReconsent) return c.yellow('paused: what sharing does has changed since you accepted it') + c.dim(' → veto lessons on');
   return `${c.dim('off')}${s.notes ? '' : c.dim(": Veto has not read any AI's memory")}`;
 }
 
@@ -96,8 +99,9 @@ function status(out: Out, c: Colors, home: string | undefined): number {
   if (s.forgotten) out(`  Forgotten:    ${s.forgotten} ${c.dim('(permanent)')}`);
   if (s.shadowLog) out(`  Shadow log:   ${plural(s.shadowLog, 'record')} of what would have been shared`);
   if (s.notes && !s.sharing) out(c.yellow('  Sharing is off, but notes harvested earlier are still stored.') + c.dim(' Delete them with: veto lessons off'));
+  if (!s.sharing && !s.needsReconsent) out(c.dim('  Turn it on, in a terminal of your own: veto lessons on'));
   out('');
-  out(c.dim('  list · why <id> · forget <id> · flows · off · exclude|include [dir] · alias · recheck <host>'));
+  out(c.dim('  on · list · why <id> · forget <id> · flows · off · exclude|include [dir] · alias · recheck <host>'));
   out('');
   return 0;
 }
@@ -293,8 +297,86 @@ function recheck(host: string | undefined, out: Out, c: Colors, home: string | u
   return r.stillDisabled ? 1 : 0;
 }
 
-/** Runs one `veto lessons` subcommand and returns its exit code. */
-export function runLessonsCommand(args: string[], options: { out?: Out; color?: boolean; cwd?: string; home?: string } = {}): number {
+export type ConsentIo = {
+  env: NodeJS.ProcessEnv;
+  /** A person can answer: stdin and stdout are a terminal. */
+  interactive: boolean;
+  ask: (question: string) => Promise<string>;
+};
+
+function terminalIo(): ConsentIo {
+  return {
+    env: process.env,
+    interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    ask: question => new Promise(resolve => {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      let answered = false;
+      rl.on('close', () => { if (!answered) resolve(''); });
+      rl.question(question, answer => { answered = true; rl.close(); resolve(answer); });
+    }),
+  };
+}
+
+/**
+ * Consent v2. The disclosure is shown to anyone, but only a person typing
+ * "yes" in their own terminal can accept it. A command an AI runs is refused
+ * before any question is asked, so no AI can turn sharing on for the user.
+ */
+async function on(out: Out, c: Colors, home: string | undefined, io: ConsentIo): Promise<number> {
+  const s = lessonsStatus();
+  if (s.sharing) {
+    out('');
+    out(c.green(`  Sharing is already on${s.consentAt ? ` (accepted ${s.consentAt.slice(0, 10)})` : ''}.`) + c.dim(' Turn it off with: veto lessons off'));
+    out('');
+    return 0;
+  }
+  out('');
+  for (const line of lessonsDisclosure().split('\n')) out(line ? `  ${line}` : '');
+  out('');
+  const marker = detectAiSession(io.env);
+  if (marker) {
+    out(c.yellow(`  An AI is running this command (${marker} is set), so it cannot accept for you. Nothing changed.`));
+    out('  To turn sharing on, open a terminal window yourself and run: veto lessons on');
+    out('');
+    return 1;
+  }
+  if (!io.interactive) {
+    out(c.yellow('  Accepting needs you to type yes in a terminal window. Nothing changed.'));
+    out('  Open one and run: veto lessons on');
+    out('');
+    return 1;
+  }
+  let answer = '';
+  try { answer = await io.ask('  Type yes to turn sharing on: '); } catch { answer = ''; }
+  if (answer.trim().toLowerCase() !== 'yes') {
+    out(c.dim('  Nothing changed. Sharing is still off.'));
+    out('');
+    return 0;
+  }
+
+  const r = acceptLessonsConsent(home);
+  out('');
+  out(c.green('  ✓ Sharing is on.'));
+  out('');
+  const hosts = LESSON_SOURCES.map(host => `${HOST_NAMES[host]} ${r.byHost[host]}`).join(' · ');
+  out(`  Veto read ${plural(r.report.sources, 'memory file')} and found ${plural(r.notes, 'note')} ${c.dim(`(${hosts})`)}${r.projects ? ` across ${plural(r.projects, 'project')}` : ''}.`);
+  if (r.notes) {
+    out(`    ${String(r.anyProject).padStart(4)}  may be shared into any project: they are about you or this computer`);
+    out(`    ${String(r.ownProject).padStart(4)}  stay in their own project: they are about it, or hold a command, web address or credential`);
+  }
+  if (r.unlinked) out(`    ${String(r.unlinked).padStart(4)}  ${r.unlinked === 1 ? 'memory folder is' : 'memory folders are'} on a drive Veto cannot see; link ${r.unlinked === 1 ? 'it' : 'them'} with: veto lessons alias`);
+  for (const host of r.disabledHosts) out(c.yellow(`  ${HOST_NAMES[host as LessonSource]}'s memory is in a format Veto does not recognise, so it was skipped.`));
+  out('');
+  out(c.dim('  This is the trial: nothing has been given to any AI. See every note with: veto lessons list'));
+  out('');
+  return 0;
+}
+
+/** Runs one `veto lessons` subcommand and returns its exit code (a promise only for `on`, which may ask a question). */
+export function runLessonsCommand(
+  args: string[],
+  options: { out?: Out; color?: boolean; cwd?: string; home?: string; io?: ConsentIo } = {},
+): number | Promise<number> {
   const out = options.out ?? ((line = '') => console.log(line));
   const c = options.color === false ? PLAIN : COLORS;
   const [sub = 'status', ...rest] = args;
@@ -302,6 +384,7 @@ export function runLessonsCommand(args: string[], options: { out?: Out; color?: 
   const cwd = options.cwd ?? process.cwd();
   const home = options.home;
   switch (sub) {
+    case 'on': return on(out, c, home, options.io ?? terminalIo());
     case 'status': return status(out, c, home);
     case 'list': return list(flags, out, c, home);
     case 'why': return why(positional[0], out, c, home);

@@ -3,8 +3,9 @@ import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpa
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runLessonsCommand } from '../../src/cli/lessons.js';
-import { enableLessonsSharing } from '../../src/memory/config.js';
+import { runLessonsCommand, type ConsentIo } from '../../src/cli/lessons.js';
+import { detectAiSession } from '../../src/lessons/consent.js';
+import { enableLessonsSharing, getConfig, isLessonsSharingEnabled } from '../../src/memory/config.js';
 import { getDb, resetDb } from '../../src/memory/local.js';
 import { claudeProjectSlug } from '../../src/lessons/source-project.js';
 import type { LessonRow } from '../../src/lessons/store.js';
@@ -18,8 +19,23 @@ let projectA: string;
 
 function run(...args: string[]): { code: number; text: string } {
   const lines: string[] = [];
-  const code = runLessonsCommand(args, { out: (line = '') => lines.push(line), color: false, home, cwd: projectA });
+  const code = runLessonsCommand(args, { out: (line = '') => lines.push(line), color: false, home, cwd: projectA }) as number;
   return { code, text: lines.join('\n') };
+}
+
+/** `veto lessons on` as a person (or an AI) would run it; `asked` records every question put. */
+async function on(io: Partial<ConsentIo> & { answer?: string } = {}): Promise<{ code: number; text: string; asked: string[] }> {
+  const lines: string[] = [];
+  const asked: string[] = [];
+  const code = await runLessonsCommand(['on'], {
+    out: (line = '') => lines.push(line), color: false, home, cwd: projectA,
+    io: {
+      env: io.env ?? {},
+      interactive: io.interactive ?? true,
+      ask: io.ask ?? (async question => { asked.push(question); return io.answer ?? ''; }),
+    },
+  });
+  return { code, text: lines.join('\n'), asked };
 }
 
 const rows = () => getDb().prepare('SELECT * FROM lessons').all() as LessonRow[];
@@ -66,6 +82,88 @@ describe('veto lessons without consent', () => {
     expect(status.text).toContain("Sharing:      off: Veto has not read any AI's memory");
     expect(run('list').text).toContain('(none)');
     expect(rows()).toEqual([]);
+  });
+});
+
+describe('veto lessons on (consent v2)', () => {
+  it('shows a disclosure that names both flows, the trial, and the controls', async () => {
+    const { text } = await on();
+    expect(text).toContain('ACROSS YOUR PROJECTS');
+    expect(text).toContain('BETWEEN AIs');
+    expect(text).toContain("goes to that AI's company as part of your");
+    expect(text).toContain('gives none of them to any AI yet');
+    for (const command of ['veto lessons list', 'veto lessons forget <id>', 'veto lessons exclude', 'veto lessons off']) expect(text).toContain(command);
+  });
+
+  it('refuses when an AI runs it, without asking anything or reading any memory', async () => {
+    const r = await on({ env: { CLAUDECODE: '1' }, answer: 'yes' });
+    expect(r.code).toBe(1);
+    expect(r.asked).toEqual([]);
+    expect(r.text).toContain('An AI is running this command (CLAUDECODE is set), so it cannot accept for you. Nothing changed.');
+    expect(isLessonsSharingEnabled()).toBe(false);
+    expect(rows()).toEqual([]);
+  });
+
+  it('refuses without a terminal a person can type in', async () => {
+    const r = await on({ interactive: false, answer: 'yes' });
+    expect(r).toMatchObject({ code: 1, asked: [] });
+    expect(r.text).toContain('Accepting needs you to type yes in a terminal window. Nothing changed.');
+    expect(isLessonsSharingEnabled()).toBe(false);
+  });
+
+  it.each(['no', '', 'y', 'yes please'])('changes nothing unless the answer is yes (%j)', async (answer) => {
+    const r = await on({ answer });
+    expect(r).toMatchObject({ code: 0, asked: ['  Type yes to turn sharing on: '] });
+    expect(r.text).toContain('Nothing changed. Sharing is still off.');
+    expect(isLessonsSharingEnabled()).toBe(false);
+    expect(getConfig().lessons.consent_at).toBeNull();
+    expect(rows()).toEqual([]);
+  });
+
+  it('treats a closed or failing prompt as no', async () => {
+    const r = await on({ ask: async () => { throw new Error('stdin closed'); } });
+    expect(r.code).toBe(0);
+    expect(isLessonsSharingEnabled()).toBe(false);
+  });
+
+  it('on yes: records consent v2, reads every AI\'s memory once, and summarises it in plain words', async () => {
+    const r = await on({ answer: ' YES ' });
+    expect(r.code).toBe(0);
+    expect(getConfig().lessons).toMatchObject({ enabled: true, consent_version: 2, cross_project: true, cross_vendor: true });
+    expect(r.text).toContain('✓ Sharing is on.');
+    expect(r.text).toContain('Veto read 3 memory files and found 7 notes (Claude 7 · Codex 0 · Gemini 0) across 1 project.');
+    expect(r.text).toContain('   2  may be shared into any project');
+    expect(r.text).toContain('   5  stay in their own project');
+    expect(r.text).toContain('nothing has been given to any AI');
+    expect(rows()).toHaveLength(7);
+  });
+
+  it('says so when sharing is already on, and asks nothing', async () => {
+    enableLessonsSharing();
+    const r = await on({ answer: 'yes' });
+    expect(r).toMatchObject({ code: 0, asked: [] });
+    expect(r.text).toMatch(/Sharing is already on \(accepted \d{4}-\d{2}-\d{2}\)/);
+  });
+
+  it('no upgrade turns sharing on: an older config stays off, and an older consent asks again', async () => {
+    writeFileSync(process.env.VETO_CONFIG_PATH!, JSON.stringify({ transcripts: { enabled: true } }));
+    expect(isLessonsSharingEnabled()).toBe(false);
+    expect(run('status').text).toContain('Turn it on, in a terminal of your own: veto lessons on');
+
+    writeFileSync(process.env.VETO_CONFIG_PATH!, JSON.stringify({ lessons: { enabled: true, consent_version: 1, cross_project: true, cross_vendor: true } }));
+    expect(isLessonsSharingEnabled()).toBe(false);
+    expect(run('status').text).toContain('paused: what sharing does has changed since you accepted it → veto lessons on');
+    expect(rows()).toEqual([]);
+    expect((await on({ answer: 'yes' })).asked).toHaveLength(1);
+    expect(isLessonsSharingEnabled()).toBe(true);
+  });
+
+  it('recognises the marks AI CLIs leave on the commands they run', () => {
+    expect(detectAiSession({})).toBeNull();
+    expect(detectAiSession({ CLAUDECODE: '' })).toBeNull();
+    for (const marker of ['CLAUDECODE', 'AI_AGENT', 'GEMINI_CLI', 'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'CODEX_MANAGED_BY_NPM']) {
+      expect(detectAiSession({ PATH: '/bin', [marker]: '1' })).toBe(marker);
+    }
   });
 });
 
