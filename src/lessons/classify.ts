@@ -9,8 +9,12 @@ import type { LessonSource, MemoryFrontmatter, MemorySection } from './adapters/
 
 export type LessonScope = 'project' | 'user' | 'machine';
 
+/** Which rule set the scope; `veto lessons why` explains it from this. */
+export type ScopeReason = 'global-file' | 'names-project' | 'user-entry' | 'feedback-entry' | 'environment-heading' | 'project-default';
+
 export type LessonClassification = {
   scope: LessonScope;
+  scopeReason: ScopeReason;
   kind: string;
   /** Non-null keeps the note inside its own project, whatever its scope. */
   quarantineReason: string | null;
@@ -109,10 +113,11 @@ export function classifyLesson(input: {
   const type = input.frontmatter.type;
   const kind = type ?? (input.global ? 'instructions' : 'note');
   let scope: LessonScope = 'project';
-  if (input.global) scope = 'user';
-  else if (namesProject(input.maskedText, input.projectNames ?? [])) scope = 'project';
-  else if (type === 'user' || type === 'feedback') scope = 'user';
-  else if (ENVIRONMENT_TITLE_RE.test(input.section.title)) scope = 'machine';
+  let scopeReason: ScopeReason = 'project-default';
+  if (input.global) { scope = 'user'; scopeReason = 'global-file'; }
+  else if (namesProject(input.maskedText, input.projectNames ?? [])) scopeReason = 'names-project';
+  else if (type === 'user' || type === 'feedback') { scope = 'user'; scopeReason = `${type}-entry`; }
+  else if (ENVIRONMENT_TITLE_RE.test(input.section.title)) { scope = 'machine'; scopeReason = 'environment-heading'; }
   const sensitive = isSensitiveNote(input.fileName, input.frontmatter, input.section.title);
-  return { scope, kind, quarantineReason: quarantineReason(input.maskedText, input.secrets, sensitive) };
+  return { scope, scopeReason, kind, quarantineReason: quarantineReason(input.maskedText, input.secrets, sensitive) };
 }

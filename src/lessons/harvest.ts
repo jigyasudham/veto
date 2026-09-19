@@ -7,7 +7,9 @@ import { discoverNativeMemorySources, type NativeMemorySource } from './discover
 import { projectNames, resolveProjectIdentity } from './identity.js';
 import { maskLessonText } from './mask.js';
 import { resolveClaudeProjectFolder } from './source-project.js';
-import { disableLessonSource, isLessonSourceEnabled, purgeVanishedLessonSources, syncLessons, type HarvestedSection } from './store.js';
+import {
+  deleteLessonSource, disableLessonSource, isLessonSourceEnabled, isProjectExcluded, purgeVanishedLessonSources, syncLessons, type HarvestedSection,
+} from './store.js';
 
 export type HarvestOutcome =
   | { status: 'harvested'; inserted: number; updated: number; removed: number }
@@ -66,6 +68,8 @@ export type LessonSyncReport = {
   skipped: number;
   disabled: number;
   unavailable: number;
+  /** Sources belonging to a project kept out of sharing; nothing of theirs is stored. */
+  excluded: number;
   inserted: number;
   updated: number;
   removed: number;
@@ -89,11 +93,12 @@ function sourceProject(source: NativeMemorySource, folders: Map<string, SourcePr
 /**
  * One full pass: discover every known native-memory file, harvest it under its
  * project's identity, and delete rows whose file has gone. Nothing is read
- * until the user has accepted consent v2.
+ * until the user has accepted consent v2, and an excluded project's files are
+ * never read at all.
  */
 export function syncLessonSources(home?: string): LessonSyncReport {
   const report: LessonSyncReport = {
-    consent: isLessonsSharingEnabled(), sources: 0, harvested: 0, skipped: 0, disabled: 0, unavailable: 0,
+    consent: isLessonsSharingEnabled(), sources: 0, harvested: 0, skipped: 0, disabled: 0, unavailable: 0, excluded: 0,
     inserted: 0, updated: 0, removed: 0, unresolvedProjects: 0,
   };
   if (!report.consent) return report;
@@ -102,6 +107,12 @@ export function syncLessonSources(home?: string): LessonSyncReport {
   const folders = new Map<string, SourceProject>();
   for (const source of sources) {
     const project = sourceProject(source, folders);
+    if (isProjectExcluded(project.identity)) {
+      // Not even read: an excluded project's notes never reach the store.
+      report.excluded++;
+      report.removed += deleteLessonSource(source.source, source.sourcePath);
+      continue;
+    }
     const outcome = harvestNativeMemory({
       source: source.source, sourcePath: source.sourcePath, projectIdentity: project.identity,
       projectLabel: project.label, projectNames: project.names, global: source.global,

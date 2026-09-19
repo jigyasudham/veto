@@ -150,6 +150,20 @@ describe('shadow selection', () => {
     expect(texts(select('inline script backslashes', projectB).lessonIds)).toEqual([expect.stringContaining('lose every backslash')]);
   });
 
+  it('serves same-named notes of two different projects as two notes', () => {
+    // Both projects have feedback_quoting_rule.md#body; they are not copies of one entry.
+    const memory = claudeFolder(projectB, {});
+    writeFileSync(join(memory, 'feedback_quoting_rule.md'), '---\nname: q\ndescription: Inline scripts in another tool\ntype: feedback\n---\nInline script backslashes also vanish when another launcher passes them on.\n');
+    syncLessonSources(home);
+    const projectC = join(home, 'code', 'gamma');
+    mkdirSync(projectC, { recursive: true });
+
+    expect(texts(select('inline script backslashes', projectC).lessonIds)).toEqual(expect.arrayContaining([
+      expect.stringContaining('lose every backslash'),
+      expect.stringContaining('another launcher'),
+    ]));
+  });
+
   it('logs shadow evidence as IDs, without delivering anything', () => {
     const selection = select('inline script backslashes', projectB);
     logShadowSelection({ query: 'inline script backslashes', targetHost: 'claude', selection });
