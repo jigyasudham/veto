@@ -245,6 +245,8 @@ veto agents [filter]             # List all 49 specialists — workers + council
 veto routing [status|log|reset]  # Inspect the opt-in routing feedback loop
 veto transcripts <sub>           # Opt-in transcript capture (off by default) —
                                  #   enable|status|sources|list|show|purge|disable
+veto lessons <sub>               # Opt-in note sharing between your AIs (off by default) —
+                                 #   on|status|list|why|forget|flows|off|exclude|include|alias|recheck
 veto statusline <sub>            # Veto line under the Claude Code prompt, or beside
                                  #   Codex/Gemini — install|status|print|watch|uninstall
 veto hook install                # Install pre-commit secrets scan hook
@@ -563,6 +565,32 @@ by [Minish Lab](https://github.com/MinishLab/model2vec) (MIT), distilled from
 `baai/bge-base-en-v1.5` and repacked to int8. It is a static lookup table, not a
 neural network: there is no model running at query time, which is why a search
 costs milliseconds. The inference code is Veto's own.
+
+## Notes Shared Between Your AIs (opt-in, trial)
+
+Claude, Codex and Gemini each keep notes in their own memory: Claude's per-project memory folders, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`. Each AI learns something, and the others never hear of it; the same lesson gets learned twice in two projects. Veto reads those notes and can share them where they help: **across your projects**, and **between your AIs**.
+
+> ### ⚠️ What turning it on means
+>
+> - **Across your projects:** a note about you or this computer, written while you worked on one project, can be shared into your others.
+> - **Between AIs:** a note Claude wrote can reach Codex and Gemini, and the other way round. A note given to an AI goes to that AI's company as part of your conversation, like anything else you send it.
+> - **Read-only.** Veto never changes or deletes an AI's memory files. It keeps a copy of each note in its own local database, with email addresses, your home folder and anything that looks like a password or key removed first. Veto itself uploads nothing.
+> - **Off until you say so, and only you can say so.** `veto lessons on` shows this disclosure and asks you to type `yes` in a terminal of your own. When an AI runs the command, it is refused, so no AI can switch sharing on for you. No upgrade ever turns it on, and if what sharing does materially changes, you are asked again.
+> - **A trial for now.** Veto reads the notes and records which ones it *would* have shared, but gives none of them to any AI yet. Before it starts giving notes to your AIs, Veto will ask you again.
+
+Most notes never leave their project. A note stays home if it is about that project, or if it contains a command, a web address, a credential or an instruction to fetch, send or run something; notes about secrets or personal details never leave their project at all. Only a note about *you* (Claude's `user` and `feedback` notes, a CLI's global instructions) or about *this computer* (its shell, console or network) may travel. A shared note arrives marked as information from another AI session, never as an instruction.
+
+```bash
+veto lessons on                  # Read the disclosure; type yes to accept (your own terminal only)
+veto lessons                     # Status: notes found, how many may travel, anything switched off
+veto lessons list                # Every note Veto has read, by project (--shared, --held, --scope=, --source=, --json)
+veto lessons why <id>            # One note: who wrote it, when, why it stays or travels, where it may go
+veto lessons flows               # Where each AI's notes may go, per project
+veto lessons forget <id>         # Stop one note for good, with its copies in your other checkouts
+veto lessons exclude [dir]       # Keep a project out entirely: nothing leaves it, nothing enters it (include undoes)
+veto lessons alias               # Memory on a drive that isn't plugged in: suggests the command that links it
+veto lessons off                 # Turn sharing off and delete everything Veto copied
+```
 
 ---
 

@@ -162,13 +162,15 @@ function migrateSessionCreatedAtIso(db: DatabaseSync): void {
   `);
 }
 
-// Adds the label and quarantine-reason columns to a lessons table created by
-// an earlier development build. Harvested rows are derived and re-harvested on
-// the next sync, so old rows need no backfill.
+// Adds the label, quarantine-reason and scope-reason columns to a lessons table
+// created by an earlier build (3.4.0 shipped the table without scope_reason).
+// Harvested rows are derived and re-harvested on the next sync, so old rows
+// need no backfill.
 function migrateLessonColumns(db: DatabaseSync): void {
   const names = new Set((db.prepare('PRAGMA table_info(lessons)').all() as Array<{ name: string }>).map(c => c.name));
   if (!names.has('project_label')) db.exec('ALTER TABLE lessons ADD COLUMN project_label TEXT');
   if (!names.has('quarantine_reason')) db.exec('ALTER TABLE lessons ADD COLUMN quarantine_reason TEXT');
+  if (!names.has('scope_reason')) db.exec('ALTER TABLE lessons ADD COLUMN scope_reason TEXT');
 }
 
 // Creates tool_call_trace_log table for auditing and session replay (v1.8.0 migration)
