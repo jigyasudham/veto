@@ -22,7 +22,11 @@ export function detectAiSession(env: NodeJS.ProcessEnv = process.env): string | 
   return AI_SESSION_MARKERS.find(name => (env[name] ?? '') !== '') ?? null;
 }
 
-/** The disclosure shown before the user accepts. Changing what it promises means bumping LESSONS_CONSENT_VERSION. */
+/**
+ * The disclosure shown before the user accepts. Changing what it promises
+ * means bumping LESSONS_CONSENT_VERSION, and so does starting delivery: this
+ * text promises to ask again first.
+ */
 export function lessonsDisclosure(): string {
   return [
     'What you are turning on: sharing between your AIs\' notes',
@@ -51,7 +55,8 @@ export function lessonsDisclosure(): string {
     '    as an instruction to follow.',
     '',
     'For now this is a trial: Veto reads the notes and records which ones it',
-    'would have shared, but gives none of them to any AI yet.',
+    'would have shared, but gives none of them to any AI yet. Before it starts',
+    'giving notes to your AIs, Veto will ask you again.',
     '',
     'You stay in control:',
     '  veto lessons list          every note Veto has read',

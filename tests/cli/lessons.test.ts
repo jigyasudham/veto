@@ -92,6 +92,7 @@ describe('veto lessons on (consent v2)', () => {
     expect(text).toContain('BETWEEN AIs');
     expect(text).toContain("goes to that AI's company as part of your");
     expect(text).toContain('gives none of them to any AI yet');
+    expect(text).toContain('Before it starts\n  giving notes to your AIs, Veto will ask you again.');
     for (const command of ['veto lessons list', 'veto lessons forget <id>', 'veto lessons exclude', 'veto lessons off']) expect(text).toContain(command);
   });
 

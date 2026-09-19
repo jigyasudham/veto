@@ -26,6 +26,10 @@ export type LessonsConfig = {
   cross_vendor: boolean;
 };
 
+// Consent v2 covers the trial only: reading notes and logging what would have
+// been shared. Its disclosure PROMISES to ask again before any note is given to
+// an AI (owner, 2026-09-20), so the release that starts delivery must bump this
+// to 3, which pauses sharing until each user accepts the new disclosure.
 export const LESSONS_CONSENT_VERSION = 2;
 export const DEFAULT_LESSONS: LessonsConfig = {
   enabled: false,
