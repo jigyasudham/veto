@@ -92,7 +92,11 @@ describe('veto lessons on (consent v2)', () => {
     expect(text).toContain('BETWEEN AIs');
     expect(text).toContain("goes to that AI's company as part of your");
     expect(text).toContain('gives none of them to any AI yet');
-    expect(text).toContain('Before it starts\n  giving notes to your AIs, Veto will ask you again.');
+    // The trial must claim only what it does. Recording which notes WOULD be
+    // shared is not wired to anything, so the disclosure must not promise it.
+    expect(text).toContain('works out nothing about which ones it would give');
+    expect(text).not.toContain('records which ones');
+    expect(text).toContain('Before it starts giving\n  notes to your AIs, Veto will ask you again.');
     for (const command of ['veto lessons list', 'veto lessons forget <id>', 'veto lessons exclude', 'veto lessons off']) expect(text).toContain(command);
   });
 
