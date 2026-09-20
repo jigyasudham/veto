@@ -17,6 +17,7 @@ import { execSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { getDbPath, getDb, normalizeProjectDir } from '../memory/local.js';
+import { isLessonsSharingEnabled } from '../memory/config.js';
 
 // node:sqlite is unflagged from Node 22.13+/23.4+ — use createRequire so bundlers skip it.
 // Required lazily inside openReadOnly so importing this module (server.ts pulls in
@@ -32,13 +33,14 @@ export interface StatuslineData {
   rate5hPct: number | null;                   // LIVE 5-hour rate-limit % used — from Claude Code stdin
   rate7dPct: number | null;                   // LIVE 7-day (weekly) rate-limit % used — from Claude Code stdin
   memCount: number | null;                    // knowledge_base entries (Veto DB)
+  noteCount: number | null;                   // notes harvested from your AIs' own memory (Veto DB); null when sharing is off
   // Watch mode only (Codex/Gemini, which cannot run a status-line command):
   host?: { name: string; session: string | null; age: string | null } | null; // the AI's live session in this folder
   chats?: number | null;                      // this folder's archived chats, every AI
 }
 
 const EMPTY: StatuslineData = {
-  verdict: null, routerPct: null, contextPct: null, rate5hPct: null, rate7dPct: null, memCount: null,
+  verdict: null, routerPct: null, contextPct: null, rate5hPct: null, rate7dPct: null, memCount: null, noteCount: null,
 };
 
 // Open the veto DB read-only. Returns null if it can't (missing/locked/corrupt).
@@ -131,6 +133,18 @@ function queryStatusline(db: DatabaseSync, projectDir?: string): StatuslineData 
     if (typeof row?.n === 'number') data.memCount = row.n;
   } catch { /* segment off */ }
 
+  // How many notes Veto is holding from your AIs' own memory. Shown only while
+  // sharing is on, so the line never implies notes are being kept when they are
+  // not (council 320c40dc, UX condition). Reading the table is not enough:
+  // `veto lessons off` empties it, and a stale count of 0 would still be a
+  // claim about something switched off.
+  try {
+    if (isLessonsSharingEnabled()) {
+      const row = db.prepare('SELECT COUNT(*) AS n FROM lessons').get() as { n?: number } | undefined;
+      if (typeof row?.n === 'number') data.noteCount = row.n;
+    }
+  } catch { /* segment off: an older DB has no lessons table */ }
+
   return data;
 }
 
@@ -181,6 +195,10 @@ export function composeStatusline(data: StatuslineData, opts: ComposeOptions = {
 
   if (data.memCount !== null) {
     segments.push(`mem ${data.memCount}`);
+  }
+
+  if (data.noteCount !== null) {
+    segments.push(`notes ${data.noteCount}`);
   }
 
   if (data.host) {

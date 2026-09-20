@@ -181,7 +181,7 @@ export async function watchStatusline(opts: { host?: WatchHost; projectDir: stri
     const host = opts.host ?? detectWatchHost(opts.projectDir);
     let line: string;
     try { line = fit(hostStatuslineData(host, opts.projectDir), opts.compose ?? {}, tty ? process.stdout.columns : undefined); }
-    catch { line = composeStatusline({ verdict: null, routerPct: null, contextPct: null, rate5hPct: null, rate7dPct: null, memCount: null }); }
+    catch { line = composeStatusline({ verdict: null, routerPct: null, contextPct: null, rate5hPct: null, rate7dPct: null, memCount: null, noteCount: null }); }
     process.stdout.write(tty ? `\r\x1b[2K${line}` : `${line}\n`);
   };
   draw();

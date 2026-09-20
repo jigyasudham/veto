@@ -10,15 +10,22 @@ export type NativeMemorySource = {
   mtimeMs: number;
   /** A host-wide file every session of that host loads, not tied to a project. */
   global: boolean;
+  /**
+   * The host's own directory this file was found under. A memory file is only
+   * followed while it resolves inside it, so a link dropped into a memory
+   * folder cannot make the harvester read somewhere else. Not the user's home:
+   * CODEX_HOME and a relocated Claude directory both live wherever they like.
+   */
+  root: string;
   /** Claude only: the ~/.claude/projects/<slug> folder the entry lives in. */
   claudeFolder?: string;
   claudeSlug?: string;
 };
 
-function candidate(source: LessonSource, sourcePath: string, extra: Partial<NativeMemorySource> = {}): NativeMemorySource | null {
+function candidate(source: LessonSource, sourcePath: string, root: string, extra: Partial<NativeMemorySource> = {}): NativeMemorySource | null {
   try {
     const stat = statSync(sourcePath);
-    return stat.isFile() ? { source, sourcePath, fileName: basename(sourcePath), mtimeMs: stat.mtimeMs, global: false, ...extra } : null;
+    return stat.isFile() ? { source, sourcePath, fileName: basename(sourcePath), mtimeMs: stat.mtimeMs, global: false, root, ...extra } : null;
   } catch { return null; }
 }
 
@@ -36,7 +43,7 @@ function claudeMemoryFiles(claudeHome: string): NativeMemorySource[] {
     try { files = readdirSync(memory, { withFileTypes: true }); } catch { continue; }
     for (const file of files) {
       if (!file.isFile() || !file.name.toLowerCase().endsWith('.md')) continue;
-      const found = candidate('claude', join(memory, file.name), { claudeFolder, claudeSlug: folder.name });
+      const found = candidate('claude', join(memory, file.name), claudeHome, { claudeFolder, claudeSlug: folder.name });
       if (found) out.push(found);
     }
   }
@@ -52,10 +59,10 @@ export function discoverNativeMemorySources(home = homedir()): NativeMemorySourc
   const codexHome = home === homedir() && process.env.CODEX_HOME ? process.env.CODEX_HOME : join(home, '.codex');
   const out = claudeMemoryFiles(join(home, '.claude'));
   for (const path of [join(codexHome, 'AGENTS.md'), join(codexHome, 'AGENTS.override.md')]) {
-    const found = candidate('codex', path, { global: true });
+    const found = candidate('codex', path, codexHome, { global: true });
     if (found) out.push(found);
   }
-  const gemini = candidate('gemini', join(home, '.gemini', 'GEMINI.md'), { global: true });
+  const gemini = candidate('gemini', join(home, '.gemini', 'GEMINI.md'), join(home, '.gemini'), { global: true });
   if (gemini) out.push(gemini);
   return out.sort((a, b) => b.mtimeMs - a.mtimeMs);
 }

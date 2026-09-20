@@ -139,6 +139,15 @@ export const sessionHandlers: HandlerMap = {
       });
     } catch { /* transcript capture is best-effort; never breaks save */ }
 
+    // Re-read each AI's own memory so notes written during this session are
+    // recorded without the user having to run anything. Time-boxed, consent-
+    // gated, and never a reason a save fails. Delivers nothing to any AI.
+    let lessonsOnSave: import('../../lessons/on-save.js').OnSaveLessons | null = null;
+    try {
+      const { harvestOnSave } = await import('../../lessons/on-save.js');
+      lessonsOnSave = harvestOnSave();
+    } catch { /* harvesting is best-effort; never breaks save */ }
+
     // Cache for auto-save: future veto_status calls with high token_count will re-save this context
     const resolvedWindow = resolveContextWindow(savePlatform, saveModel);
     autoSave.cached = { summary: saveSummary, context: saveContext, task_state: saveTaskState, platform: savePlatform, project_dir: sessionProjectDir, context_window: resolvedWindow };
@@ -174,6 +183,7 @@ export const sessionHandlers: HandlerMap = {
       ...(wasUpdate ? {} : { usage_pct: result.usage_pct, context_warning: result.context_warning }),
       ...(truncationWarnings.length > 0 ? { truncation_warnings: truncationWarnings } : {}),
       ...(transcriptOnSave ? { transcript: transcriptOnSave } : {}),
+      ...(lessonsOnSave ? { lessons: lessonsOnSave } : {}),
       ...(platformNote ? { platform_note: platformNote } : {}),
     };
     if (result.continuation_prompt) responseObj.continuation_prompt = result.continuation_prompt;

@@ -89,7 +89,7 @@ describe('the live session in this folder', () => {
 describe('the rendered line', () => {
   it('adds the host session and archived chats after the usual segments', () => {
     const line = composeStatusline({
-      verdict: 'GREEN', routerPct: 72, contextPct: 41, rate5hPct: 12, rate7dPct: null, memCount: 13,
+      verdict: 'GREEN', routerPct: 72, contextPct: 41, rate5hPct: 12, rate7dPct: null, memCount: 13, noteCount: null,
       host: { name: 'codex', session: CODEX_SESSION, age: '2m ago' }, chats: 3,
     }, { color: false, ascii: true });
     expect(line).toBe('# veto GREEN · router 72% · ctx 41% · 5h 12% · mem 13 · codex 019f0000 2m ago · chats 3');

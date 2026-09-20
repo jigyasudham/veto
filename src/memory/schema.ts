@@ -254,6 +254,7 @@ export const CREATE_TABLES = `
     project_identity  TEXT NOT NULL,
     project_label     TEXT,
     scope             TEXT NOT NULL DEFAULT 'project',
+    scope_reason      TEXT,
     kind              TEXT NOT NULL DEFAULT 'note',
     text_masked       TEXT NOT NULL,
     source_hash       TEXT NOT NULL,
@@ -274,10 +275,56 @@ export const CREATE_TABLES = `
     checked_at       TEXT NOT NULL
   );
 
+  -- What each source file looked like when it was last harvested, so an
+  -- unchanged file costs a stat instead of a parse (council 534e2bd5). The
+  -- hash is authoritative; mtime and size are only the fast path that avoids
+  -- reading. harvester_version invalidates every row when the parsing,
+  -- masking or classifying logic changes.
+  --
+  -- unavailable_streak backs off a source that cannot be read - an unplugged
+  -- drive costs a multi-second stat, and save must never wait on one.
+  CREATE TABLE IF NOT EXISTS lesson_file_state (
+    source_cli         TEXT NOT NULL,
+    source_path        TEXT NOT NULL,
+    mtime              TEXT,
+    size               INTEGER,
+    content_hash       TEXT,
+    project_identity   TEXT,
+    harvester_version  INTEGER NOT NULL DEFAULT 0,
+    unavailable_streak INTEGER NOT NULL DEFAULT 0,
+    unavailable_at     TEXT,
+    checked_at         TEXT NOT NULL,
+    PRIMARY KEY (source_cli, source_path)
+  );
+
   CREATE TABLE IF NOT EXISTS project_identity_aliases (
     alias_path       TEXT PRIMARY KEY,
     project_identity TEXT NOT NULL,
     updated_at       TEXT NOT NULL
+  );
+
+  -- 'veto lessons forget' is permanent: a note matching a tombstone by place
+  -- (the same section of the same file), by entry (the same file name and
+  -- section in another checkout of the project) or by its text is never
+  -- harvested again. Only hashes and locations are kept, never the text.
+  -- One forget writes a tombstone per copy it removed, sharing a forget_id.
+  CREATE TABLE IF NOT EXISTS lesson_tombstones (
+    id              TEXT PRIMARY KEY,
+    forget_id       TEXT NOT NULL,
+    source_cli      TEXT NOT NULL,
+    source_path     TEXT NOT NULL,
+    section_anchor  TEXT NOT NULL,
+    entry_key       TEXT NOT NULL,
+    signature       TEXT NOT NULL,
+    created_at      TEXT NOT NULL
+  );
+
+  -- Projects kept out of sharing entirely: their notes are not harvested and
+  -- nothing is selected for them. Keyed by identity, so every checkout counts.
+  CREATE TABLE IF NOT EXISTS lesson_project_exclusions (
+    project_identity TEXT PRIMARY KEY,
+    project_label    TEXT,
+    created_at       TEXT NOT NULL
   );
 
   -- Prospective-evaluation evidence only. No row means no delivery occurred.
@@ -314,6 +361,9 @@ export const CREATE_TABLES = `
   CREATE INDEX IF NOT EXISTS idx_lessons_project       ON lessons(project_identity);
   CREATE INDEX IF NOT EXISTS idx_lessons_source        ON lessons(source_cli, source_path);
   CREATE INDEX IF NOT EXISTS idx_lesson_alias_identity ON project_identity_aliases(project_identity);
+  CREATE INDEX IF NOT EXISTS idx_lesson_tombstone_place ON lesson_tombstones(source_cli, source_path, section_anchor);
+  CREATE INDEX IF NOT EXISTS idx_lesson_tombstone_entry ON lesson_tombstones(entry_key);
+  CREATE INDEX IF NOT EXISTS idx_lesson_tombstone_text  ON lesson_tombstones(signature);
   CREATE INDEX IF NOT EXISTS idx_shadow_log_created    ON lesson_shadow_log(created_at);
 `;
 

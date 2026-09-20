@@ -7,7 +7,7 @@ import { isLessonsSharingEnabled } from '../memory/config.js';
 import type { LessonSource } from './adapters/index.js';
 import { resolveProjectIdentity } from './identity.js';
 import { claudeProjectSlug, sameClaudeSlug } from './source-project.js';
-import { disabledLessonSources, type LessonRow } from './store.js';
+import { disabledLessonSources, isProjectExcluded, lessonEntryKey, type LessonRow } from './store.js';
 
 const K1 = 1.2;
 const B = 0.75;
@@ -22,7 +22,7 @@ export type ShadowSelection = {
   lessonIds: string[];
   estimatedTokens: number;
   targetProjectIdentity: string | null;
-  reason: 'selected' | 'no_match' | 'consent_off';
+  reason: 'selected' | 'no_match' | 'consent_off' | 'project_excluded';
 };
 
 const title = (row: LessonRow): string => row.text_masked.split('\n', 1)[0].trim();
@@ -91,6 +91,7 @@ function rank(query: string, candidates: LessonRow[], collection: LessonRow[]): 
 export function selectLessonsForShadow(input: { query: string; targetProjectDir: string; targetHost: LessonSource; now?: number }): ShadowSelection {
   if (!isLessonsSharingEnabled()) return { lessonIds: [], estimatedTokens: 0, targetProjectIdentity: null, reason: 'consent_off' };
   const targetIdentity = resolveProjectIdentity(input.targetProjectDir);
+  if (isProjectExcluded(targetIdentity)) return { lessonIds: [], estimatedTokens: 0, targetProjectIdentity: targetIdentity, reason: 'project_excluded' };
   const now = input.now ?? Date.now();
   const disabled = disabledLessonSources();
   const all = getDb().prepare('SELECT * FROM lessons').all() as LessonRow[];
@@ -109,19 +110,19 @@ export function selectLessonsForShadow(input: { query: string; targetProjectDir:
   // Newest wins on conflict: the same entry held in several places (one memory
   // file copied into the D:, F: and G: checkouts' folders) counts once, as its
   // newest version, even when an older copy ranks higher. Identical text from
-  // different entries is served once too.
-  const entryKey = (row: LessonRow) => `${basename(row.source_path).toLowerCase()}#${row.section_anchor}`;
+  // different entries is served once too. Same-named files of two different
+  // projects are two entries.
   const newestByEntry = new Map<string, LessonRow>();
   for (const row of candidates) {
-    const held = newestByEntry.get(entryKey(row));
-    if (!held || Date.parse(row.source_mtime) > Date.parse(held.source_mtime)) newestByEntry.set(entryKey(row), row);
+    const held = newestByEntry.get(lessonEntryKey(row));
+    if (!held || Date.parse(row.source_mtime) > Date.parse(held.source_mtime)) newestByEntry.set(lessonEntryKey(row), row);
   }
 
   const chosen: LessonRow[] = [];
   const seenText = new Set<string>();
   let tokens = 0;
   for (const { row } of ranked) {
-    if (newestByEntry.get(entryKey(row)) !== row || seenText.has(row.text_masked)) continue;
+    if (newestByEntry.get(lessonEntryKey(row)) !== row || seenText.has(row.text_masked)) continue;
     const estimate = estimateTokens(row.text_masked);
     if (tokens + estimate > TOKEN_CAP) continue;
     chosen.push(row);

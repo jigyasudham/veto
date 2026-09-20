@@ -16,10 +16,10 @@ import {
 } from '../../src/cli/statusline.js';
 
 const FULL: StatuslineData = {
-  verdict: 'GREEN', routerPct: 94, contextPct: 42, rate5hPct: 30, rate7dPct: 8, memCount: 15,
+  verdict: 'GREEN', routerPct: 94, contextPct: 42, rate5hPct: 30, rate7dPct: 8, memCount: 15, noteCount: null,
 };
 const EMPTY: StatuslineData = {
-  verdict: null, routerPct: null, contextPct: null, rate5hPct: null, rate7dPct: null, memCount: null,
+  verdict: null, routerPct: null, contextPct: null, rate5hPct: null, rate7dPct: null, memCount: null, noteCount: null,
 };
 
 const NO_COLOR = { color: false } as const;
@@ -34,6 +34,20 @@ describe('composeStatusline (pure formatter)', () => {
       .toBe('⬡ veto GREEN · router 94% · ctx 42% · 7d 8% · mem 15');
     expect(composeStatusline({ ...FULL, contextPct: null, rate7dPct: null }, NO_COLOR))
       .toBe('⬡ veto GREEN · router 94% · 5h 30% · mem 15');
+  });
+
+  it('shows how many notes are held, after the memory count', () => {
+    expect(composeStatusline({ ...FULL, noteCount: 175 }, NO_COLOR))
+      .toBe('⬡ veto GREEN · router 94% · ctx 42% · 5h 30% · 7d 8% · mem 15 · notes 175');
+  });
+
+  it('says nothing about notes when sharing is off, rather than showing zero', () => {
+    // A zero would still be a claim about something that is switched off.
+    expect(composeStatusline(FULL, NO_COLOR)).not.toContain('notes');
+  });
+
+  it('shows notes 0 when sharing is on and everything has been forgotten', () => {
+    expect(composeStatusline({ ...FULL, noteCount: 0 }, NO_COLOR)).toContain('notes 0');
   });
 
   it('colors each live gauge by its own threshold (5h crit, 7d safe)', () => {
