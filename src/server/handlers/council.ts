@@ -14,6 +14,17 @@ import { withPastSessions } from '../../transcripts/context.js';
 import { parsePrdIntoTasks, getActiveProjectDir } from '../runtime.js';
 import type { HandlerMap } from '../registry.js';
 
+/** Name what arrived, so a caller can see why their responses were not used. */
+function describeAgentResponses(raw: unknown): string {
+  if (typeof raw === 'string') return `a string of ${raw.length} characters that did not contain a usable JSON object`;
+  if (Array.isArray(raw)) return `an array of ${raw.length} items, where an object keyed by agent was expected`;
+  if (raw && typeof raw === 'object') {
+    const keys = Object.keys(raw as Record<string, unknown>);
+    return keys.length ? `an object with keys ${keys.slice(0, 8).join(', ')}` : 'an empty object';
+  }
+  return `a value of type ${typeof raw}`;
+}
+
 export const councilHandlers: HandlerMap = {
   veto_council_debate: async ({ args, server }) => {
     const task = String(args?.task ?? '').trim();
@@ -39,10 +50,16 @@ export const councilHandlers: HandlerMap = {
       editor_model: args?.editor_model ? String(args.editor_model) : undefined,
     };
 
-    // Phase 2: agent_responses provided — run verdict engine on LLM-generated votes
+    // Phase 2: agent_responses provided — run verdict engine on LLM-generated votes.
+    //
+    // A string is accepted as well as an object. The schema asks for an object,
+    // but a model following the instruction "generate the JSON" often sends the
+    // JSON as text, and silently treating that as "no responses given" made a
+    // caller's whole debate disappear into a repeat of phase 1.
     const rawAgentResponses = args?.agent_responses;
-    if (rawAgentResponses && typeof rawAgentResponses === 'object') {
-      const parsed = parseAgentResponses(JSON.stringify(rawAgentResponses), task);
+    if (rawAgentResponses !== undefined && rawAgentResponses !== null) {
+      const asText = typeof rawAgentResponses === 'string' ? rawAgentResponses : JSON.stringify(rawAgentResponses);
+      const parsed = parseAgentResponses(asText, task);
       if (parsed) {
         const debateStart = Date.now();
         const result = runFromAgentResponses(debateInput, parsed);
@@ -70,6 +87,21 @@ export const councilHandlers: HandlerMap = {
         };
         return { content: [{ type: 'text', text: result.formatted_output + '\n\n' + JSON.stringify(payload, null, 2) }] };
       }
+      // Responses were offered and could not be used. Quietly running phase 1
+      // again would hand back a deterministic verdict that reads like an
+      // answer, while the caller's seven analyses vanished without a word.
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            error: 'agent_responses could not be read, so no LLM-backed verdict was produced.',
+            expected: 'A JSON object keyed by lead_dev, pm, architect, ux, devil, legal and security, each carrying at least { verdict, reason }.',
+            received: describeAgentResponses(rawAgentResponses),
+            next: 'Correct the shape and call again. Omit agent_responses entirely to get the deterministic phase-1 verdict.',
+          }, null, 2),
+        }],
+        isError: true,
+      };
     }
 
     // Phase 1: run deterministic debate + attach llm_upgrade prompt for host AI
