@@ -78,11 +78,46 @@ Rules:
 
 // ─── Response parsers ─────────────────────────────────────────────────────────
 
+/**
+ * Whether a parsed response actually carries a plan, rather than being valid
+ * JSON of some other shape.
+ *
+ * Every field in planSchema has a default and a .catch(), so Zod accepts even
+ * `{}` and fills it in. Without this guard a response of the wrong shape is
+ * silently turned into a complete plan reading "No approach provided." with
+ * empty steps — a confident answer built entirely out of defaults. AGENTS.md
+ * rule 5: a parse failure must be a visible error, never an empty result.
+ *
+ * Repairing a field is still fine and deliberate: an out-of-range tier becomes
+ * 2. That is a plan with a bad field. This is not a plan at all.
+ */
+function hasPlanSubstance(p: Record<string, unknown>): boolean {
+  if (typeof p.approach === 'string' && p.approach.trim()) return true;
+  return (['steps', 'checklist', 'pitfalls', 'patterns'] as const)
+    .some(key => Array.isArray(p[key]) && (p[key] as unknown[]).some(v => typeof v === 'string' && v.trim()));
+}
+
+/**
+ * The same guard for an analysis, where inventing one is worse: the defaults
+ * are score 70 and verdict "approved_with_warnings", so an unparseable
+ * security scan would otherwise report as broadly passing with no findings.
+ *
+ * An empty `findings` array IS substance — the prompt says an empty array is
+ * the right answer for clean code — but the key has to be there.
+ */
+function hasAnalysisSubstance(p: Record<string, unknown>): boolean {
+  if (Array.isArray(p.findings)) return true;
+  if (typeof p.score === 'number') return true;
+  if (typeof p.verdict === 'string' && p.verdict.trim()) return true;
+  return typeof p.summary === 'string' && !!p.summary.trim();
+}
+
 export function parsePlanResponse(raw: string, agent: WorkerAgentType, task: string): AgentPlan | null {
   try {
     const match = raw.match(/\{[\s\S]*\}/);
     if (!match) return null;
     const p = JSON.parse(match[0]);
+    if (!p || typeof p !== 'object' || !hasPlanSubstance(p)) return null;
 
     const plan: AgentPlan = {
       agent,
@@ -96,7 +131,10 @@ export function parsePlanResponse(raw: string, agent: WorkerAgentType, task: str
       duration_estimate: typeof p.duration_estimate === 'string' ? p.duration_estimate : '2-4 hours',
     };
 
-    return validateAgentPlan(plan, agent) ?? plan;
+    // Dead fallback removed: planSchema cannot reject anything, so `?? plan`
+    // meant the validator's answer was never used. If that ever changes, a
+    // rejection must be a null here, not a quiet pass.
+    return validateAgentPlan(plan, agent);
   } catch {
     return null;
   }
@@ -107,6 +145,8 @@ export function parseAnalysisResponse(raw: string, agent: WorkerAgentType): Agen
     const match = raw.match(/\{[\s\S]*\}/);
     if (!match) return null;
     const p = JSON.parse(match[0]);
+
+    if (!p || typeof p !== 'object' || !hasAnalysisSubstance(p)) return null;
 
     const verdicts = ['approved', 'approved_with_warnings', 'needs_revision', 'rejected'] as const;
     const analysis: AgentAnalysis = {
@@ -120,7 +160,7 @@ export function parseAnalysisResponse(raw: string, agent: WorkerAgentType): Agen
       high_count: typeof p.high_count === 'number' ? p.high_count : 0,
     };
 
-    return validateAgentAnalysis(analysis, agent) ?? analysis;
+    return validateAgentAnalysis(analysis, agent);
   } catch {
     return null;
   }
@@ -248,7 +288,7 @@ export function parseAgenticAgentResponses(
         output: deriveOutputFromAny(undefined, analysis || undefined),
         duration_ms: Date.now() - start,
         llm_backed: true,
-        error: !analysis ? 'Failed to parse agent analysis JSON' : undefined,
+        error: !analysis ? `Agent response was not an analysis (needs findings, score, verdict or summary). Received: ${describeShape(raw)}` : undefined,
       });
     } else {
       const plan = parsePlanResponse(typeof raw === 'string' ? raw : JSON.stringify(raw), task.agent, task.task);
@@ -259,12 +299,23 @@ export function parseAgenticAgentResponses(
         output: deriveOutputFromAny(plan || undefined, undefined),
         duration_ms: Date.now() - start,
         llm_backed: true,
-        error: !plan ? 'Failed to parse agent plan JSON' : undefined,
+        error: !plan ? `Agent response was not a plan (needs approach or steps). Received: ${describeShape(raw)}` : undefined,
       });
     }
   }
 
   return results;
+}
+
+/** Name what actually arrived, so a shape mismatch is diagnosable from the error alone. */
+function describeShape(raw: unknown): string {
+  try {
+    const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return 'no JSON object';
+    const keys = Object.keys(JSON.parse(match[0]) as Record<string, unknown>);
+    return keys.length ? `an object with keys ${keys.slice(0, 8).join(', ')}` : 'an empty object';
+  } catch { return 'unparseable JSON'; }
 }
 
 function deriveOutputFromAny(plan?: AgentPlan, analysis?: AgentAnalysis): AgentOutput {

@@ -45,6 +45,29 @@ describe('parsePlanResponse', () => {
     expect(parsePlanResponse('the model refused to answer', 'coder', 't')).toBeNull();
   });
 
+  // Every field in planSchema has a default and a .catch(), so Zod accepts
+  // even `{}`. Without a substance check these become a confident plan made
+  // entirely of defaults.
+  it('returns null for valid JSON that is not a plan', () => {
+    const wrongShape = JSON.stringify({ agent: 'reviewer', status: 'complete', findings: ['x'], risk: 'low', verdict: 'sound' });
+    expect(parsePlanResponse(wrongShape, 'reviewer', 't')).toBeNull();
+  });
+
+  it('returns null for an empty object rather than inventing a plan', () => {
+    expect(parsePlanResponse('{}', 'coder', 't')).toBeNull();
+  });
+
+  it('returns null when every field is present but empty', () => {
+    const hollow = JSON.stringify({ agent: 'coder', task: 't', tier: 2, approach: '   ', steps: [], checklist: [], pitfalls: [], patterns: [] });
+    expect(parsePlanResponse(hollow, 'coder', 't')).toBeNull();
+  });
+
+  it('still accepts a plan carrying only steps', () => {
+    const plan = parsePlanResponse(JSON.stringify({ steps: ['do the thing'] }), 'coder', 't');
+    expect(plan).not.toBeNull();
+    expect(plan!.steps).toEqual(['do the thing']);
+  });
+
   it('returns null for an empty string', () => {
     expect(parsePlanResponse('', 'coder', 't')).toBeNull();
   });
@@ -82,6 +105,20 @@ describe('parseAnalysisResponse', () => {
   it('returns null for non-JSON garbage', () => {
     expect(parseAnalysisResponse('no analysis available', 'reviewer')).toBeNull();
   });
+
+  // The invented defaults here are score 70 and verdict
+  // approved_with_warnings, so an unparseable security scan would otherwise
+  // report as broadly passing with nothing found.
+  it('refuses to invent a passing verdict from a response of the wrong shape', () => {
+    const wrongShape = JSON.stringify({ agent: 'security-scanner', approach: 'I looked at it', steps: ['read the file'] });
+    expect(parseAnalysisResponse(wrongShape, 'security-scanner')).toBeNull();
+  });
+
+  it('treats an empty findings array as a real result, because clean code has none', () => {
+    const clean = parseAnalysisResponse(JSON.stringify({ findings: [] }), 'reviewer');
+    expect(clean).not.toBeNull();
+    expect(clean!.findings).toEqual([]);
+  });
 });
 
 describe('buildAgenticAgentPrompt', () => {
@@ -113,6 +150,19 @@ describe('parseAgenticAgentResponses', () => {
     expect(results[0].llm_backed).toBe(true);
     expect(results[0].plan).toBeDefined();
     expect(results[0].error).toBeUndefined();
+  });
+
+  it('reports a shape mismatch as a visible error, never as an empty result', () => {
+    const tasks: AgentTask[] = [{ id: 'r1', agent: 'reviewer', task: 'review the diff' }];
+    // The shape a reviewer naturally produces when asked to review rather than plan.
+    const responses = { r1: { agent: 'reviewer', status: 'complete', findings: ['a real finding'], risk: 'low' } };
+
+    const results = parseAgenticAgentResponses(tasks, responses);
+
+    expect(results[0].plan).toBeUndefined();
+    expect(results[0].error).toContain('not a plan');
+    // The error names what arrived, so the mismatch is diagnosable from it alone.
+    expect(results[0].error).toContain('findings');
   });
 
   it('produces an error result when a task has no response', () => {
