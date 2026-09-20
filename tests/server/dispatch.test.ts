@@ -110,6 +110,34 @@ describe('dispatch — council', () => {
     const b = body(await call('veto_council_debate', {}));
     expect(b.success).toBe(false);
   });
+
+  // The schema asks for an object, but a model told to "generate the JSON"
+  // often sends the JSON as text. That used to fall through to phase 1, so the
+  // caller's seven analyses disappeared and a deterministic verdict came back
+  // looking like the answer.
+  it('veto_council_debate accepts agent_responses sent as a JSON string', async () => {
+    const V = { verdict: 'approve', reason: 'fine' };
+    const votes = { lead_dev: V, pm: V, architect: V, ux: V, devil: { verdict: 'warn', reason: 'careful' }, legal: V, security: V };
+    const b = tailJson(await call('veto_council_debate', { task: 'Add a caching layer', agent_responses: JSON.stringify(votes) }));
+    expect(b.llm_backed).toBe(true);
+    expect(b.votes.devil.reason).toBe('careful');
+  });
+
+  it('veto_council_debate still accepts agent_responses as an object', async () => {
+    const V = { verdict: 'approve', reason: 'fine' };
+    const votes = { lead_dev: V, pm: V, architect: V, ux: V, devil: { verdict: 'warn', reason: 'careful' }, legal: V, security: V };
+    const b = tailJson(await call('veto_council_debate', { task: 'Add a caching layer', agent_responses: votes }));
+    expect(b.llm_backed).toBe(true);
+  });
+
+  it('veto_council_debate reports unusable agent_responses instead of silently redoing phase 1', async () => {
+    const res: any = await call('veto_council_debate', { task: 'Add a caching layer', agent_responses: 'I could not produce the JSON' });
+    expect(res.isError).toBe(true);
+    const b = tailJson(res);
+    expect(b.error).toContain('could not be read');
+    expect(b.received).toContain('string');
+    expect(b.llm_backed).toBeUndefined();
+  });
 });
 
 describe('dispatch — review pipelines', () => {
