@@ -196,6 +196,75 @@ export function purgeVanishedLessonSources(present: Array<{ source: LessonSource
   return removed;
 }
 
+export type LessonFileState = {
+  mtime: string | null;
+  size: number | null;
+  content_hash: string | null;
+  project_identity: string | null;
+  harvester_version: number;
+  unavailable_streak: number;
+};
+
+/** What this file looked like when it was last harvested, or null if never. */
+export function lessonFileState(source: LessonSource, sourcePath: string): LessonFileState | null {
+  const row = getDb().prepare('SELECT mtime, size, content_hash, project_identity, harvester_version, unavailable_streak FROM lesson_file_state WHERE source_cli = ? AND source_path = ?')
+    .get(source, sourcePath) as LessonFileState | undefined;
+  return row ?? null;
+}
+
+/** Remember a successful look at a file. Clears any unavailable streak. */
+export function recordLessonFileState(input: {
+  source: LessonSource; sourcePath: string; mtime: string; size: number; contentHash: string; projectIdentity: string; harvesterVersion: number;
+}): void {
+  getDb().prepare(`INSERT INTO lesson_file_state (source_cli, source_path, mtime, size, content_hash, project_identity, harvester_version, unavailable_streak, unavailable_at, checked_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)
+    ON CONFLICT(source_cli, source_path) DO UPDATE SET mtime = excluded.mtime, size = excluded.size, content_hash = excluded.content_hash,
+      project_identity = excluded.project_identity, harvester_version = excluded.harvester_version, unavailable_streak = 0, unavailable_at = NULL, checked_at = excluded.checked_at`)
+    .run(input.source, input.sourcePath, input.mtime, input.size, input.contentHash, input.projectIdentity, input.harvesterVersion, new Date().toISOString());
+}
+
+/**
+ * A file that could not be read. The streak grows so a source that is gone —
+ * an unplugged drive, most often — is probed less and less on the save path,
+ * where a multi-second stat would be paid by the user for nothing.
+ */
+export function recordLessonFileUnavailable(source: LessonSource, sourcePath: string): number {
+  const now = new Date().toISOString();
+  getDb().prepare(`INSERT INTO lesson_file_state (source_cli, source_path, harvester_version, unavailable_streak, unavailable_at, checked_at)
+    VALUES (?, ?, 0, 1, ?, ?)
+    ON CONFLICT(source_cli, source_path) DO UPDATE SET unavailable_streak = lesson_file_state.unavailable_streak + 1, unavailable_at = excluded.unavailable_at, checked_at = excluded.checked_at`)
+    .run(source, sourcePath, now, now);
+  return lessonFileState(source, sourcePath)?.unavailable_streak ?? 1;
+}
+
+/** Drop remembered state for files no longer discovered, so it cannot outlive them. */
+export function purgeVanishedLessonFileState(present: Array<{ source: LessonSource; sourcePath: string }>): number {
+  const keep = new Set(present.map(p => `${p.source}\u0000${p.sourcePath}`));
+  const db = getDb();
+  const rows = db.prepare('SELECT source_cli, source_path FROM lesson_file_state').all() as Array<{ source_cli: LessonSource; source_path: string }>;
+  const del = db.prepare('DELETE FROM lesson_file_state WHERE source_cli = ? AND source_path = ?');
+  let removed = 0;
+  for (const row of rows) {
+    if (!keep.has(`${row.source_cli}\u0000${row.source_path}`)) removed += Number(del.run(row.source_cli, row.source_path).changes);
+  }
+  return removed;
+}
+
+/**
+ * Projects whose Claude folder was never traced back to a directory on this
+ * machine - an unplugged drive, most often. Counted from what is stored rather
+ * than from a pass, because a pass that changed nothing resolves no projects.
+ */
+export function unresolvedProjectCount(): number {
+  const row = getDb().prepare("SELECT COUNT(DISTINCT project_identity) AS n FROM lessons WHERE project_identity LIKE 'claude-slug:%'").get() as { n: number };
+  return row.n;
+}
+
+/** `veto lessons off` and a forced refresh both need the memory of files cleared. */
+export function clearLessonFileState(): number {
+  return Number(getDb().prepare('DELETE FROM lesson_file_state').run().changes);
+}
+
 export function enableLessonSource(source: LessonSource): boolean {
   return Number(getDb().prepare('DELETE FROM lesson_source_state WHERE source_cli = ?').run(source).changes) > 0;
 }

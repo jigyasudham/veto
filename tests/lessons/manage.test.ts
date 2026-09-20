@@ -176,7 +176,14 @@ describe('keeping a project out', () => {
   it('stops its notes leaving and other notes arriving, and include lets it back in', () => {
     const notes = all().length;
     expect(excludeProjectDir(projectA)).toEqual({ label: 'alpha', added: true, removed: notes });
-    expect(syncLessonSources(home)).toMatchObject({ excluded: 3, harvested: 0 });
+    // Its files are untouched, so a pass passes over them without reading
+    // them; either way nothing of the project's comes back.
+    expect(syncLessonSources(home)).toMatchObject({ harvested: 0, unchanged: 3 });
+    expect(all()).toEqual([]);
+
+    // Editing an excluded project's memory still harvests nothing from it.
+    claudeFolder(projectA, { 'feedback_quoting_rule.md': fixture('feedback_quoting_rule.md').replace('lose every backslash', 'lose all of the backslashes') });
+    expect(syncLessonSources(home)).toMatchObject({ excluded: 1, harvested: 0 });
     expect(all()).toEqual([]);
 
     claudeFolder(projectB, { 'feedback_quoting_rule.md': fixture('feedback_quoting_rule.md').replace('lose every backslash', 'lose backslashes too') });

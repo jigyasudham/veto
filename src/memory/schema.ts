@@ -275,6 +275,28 @@ export const CREATE_TABLES = `
     checked_at       TEXT NOT NULL
   );
 
+  -- What each source file looked like when it was last harvested, so an
+  -- unchanged file costs a stat instead of a parse (council 534e2bd5). The
+  -- hash is authoritative; mtime and size are only the fast path that avoids
+  -- reading. harvester_version invalidates every row when the parsing,
+  -- masking or classifying logic changes.
+  --
+  -- unavailable_streak backs off a source that cannot be read - an unplugged
+  -- drive costs a multi-second stat, and save must never wait on one.
+  CREATE TABLE IF NOT EXISTS lesson_file_state (
+    source_cli         TEXT NOT NULL,
+    source_path        TEXT NOT NULL,
+    mtime              TEXT,
+    size               INTEGER,
+    content_hash       TEXT,
+    project_identity   TEXT,
+    harvester_version  INTEGER NOT NULL DEFAULT 0,
+    unavailable_streak INTEGER NOT NULL DEFAULT 0,
+    unavailable_at     TEXT,
+    checked_at         TEXT NOT NULL,
+    PRIMARY KEY (source_cli, source_path)
+  );
+
   CREATE TABLE IF NOT EXISTS project_identity_aliases (
     alias_path       TEXT PRIMARY KEY,
     project_identity TEXT NOT NULL,

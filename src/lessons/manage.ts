@@ -13,15 +13,30 @@ import { syncLessonSources, type LessonSyncReport } from './harvest.js';
 import { addProjectAlias, canonicalProjectPath, computeProjectIdentity, resolveProjectIdentity } from './identity.js';
 import { claudeProjectSlug, sameClaudeSlug } from './source-project.js';
 import {
-  disabledLessonSourceReasons, enableLessonSource, excludedProjects, excludeProject, includeProject, tombstoneLesson,
+  clearLessonFileState, disabledLessonSourceReasons, enableLessonSource, excludedProjects, excludeProject, includeProject, tombstoneLesson,
   type LessonRow, type ProjectExclusion,
 } from './store.js';
 
 export const HOST_NAMES: Record<LessonSource, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' };
 
-/** Re-read every source so what is shown matches the files as they are now. Only with consent. */
-export function refreshLessons(home?: string): LessonSyncReport | null {
-  return isLessonsSharingEnabled() ? syncLessonSources(home) : null;
+/**
+ * Re-read every source so what is shown matches the files as they are now.
+ * Only with consent. A pass run from a command has no time budget: a person
+ * waiting for output would rather wait than be told a half-truth.
+ */
+export function refreshLessons(home?: string, options: { forced?: boolean } = {}): LessonSyncReport | null {
+  return isLessonsSharingEnabled() ? syncLessonSources({ home, forced: options.forced }) : null;
+}
+
+/**
+ * Forget what every file looked like, so the next pass reads them all again.
+ * Needed after a decision that changes what a file would yield without
+ * touching the file: re-including a project, or pointing an alias somewhere
+ * new. Without this the fast path would skip exactly the files that changed
+ * meaning.
+ */
+function invalidateHarvestedState(): void {
+  clearLessonFileState();
 }
 
 export const lessonTitle = (row: LessonRow): string => row.text_masked.split('\n', 1)[0].trim();
@@ -156,6 +171,7 @@ export function turnLessonsOff(): LessonsOffResult {
   disableLessonsSharing();
   const db = getDb();
   const notes = Number(db.prepare('DELETE FROM lessons').run().changes);
+  clearLessonFileState();
   const shadowLog = Number(db.prepare('DELETE FROM lesson_shadow_log').run().changes);
   const count = (table: string) => (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
   return { wasOn, notes, shadowLog, remaining: count('lessons') + count('lesson_shadow_log') };
@@ -304,6 +320,7 @@ export function setProjectAlias(aliasPath: string, targetDir: string): SetAliasR
     if (own.startsWith('git:') && own !== identity) return { ok: false, error: 'different-repository' };
   }
   addProjectAlias(aliasPath, identity);
+  invalidateHarvestedState();
   const slug = claudeProjectSlug(canonicalProjectPath(aliasPath));
   const folders = getDb().prepare("SELECT DISTINCT source_path FROM lessons WHERE source_cli = 'claude'").all() as Array<{ source_path: string }>;
   const memoryFolders = new Set(folders.map(row => basename(dirname(dirname(row.source_path)))).filter(folder => sameClaudeSlug(folder, slug))).size;
@@ -311,7 +328,9 @@ export function setProjectAlias(aliasPath: string, targetDir: string): SetAliasR
 }
 
 export function removeProjectAlias(aliasPath: string): boolean {
-  return Number(getDb().prepare('DELETE FROM project_identity_aliases WHERE alias_path = ?').run(canonicalProjectPath(aliasPath)).changes) > 0;
+  const removed = Number(getDb().prepare('DELETE FROM project_identity_aliases WHERE alias_path = ?').run(canonicalProjectPath(aliasPath)).changes) > 0;
+  if (removed) invalidateHarvestedState();
+  return removed;
 }
 
 export function excludeProjectDir(projectDir: string): { label: string; added: boolean; removed: number } {
@@ -320,13 +339,20 @@ export function excludeProjectDir(projectDir: string): { label: string; added: b
 }
 
 export function includeProjectDir(projectDir: string): { label: string; removed: boolean } {
-  return { label: basename(projectDir.replace(/[\\/]+$/, '')) || projectDir, removed: includeProject(resolveProjectIdentity(projectDir)) };
+  const removed = includeProject(resolveProjectIdentity(projectDir));
+  // The project's files are untouched, so only forgetting their fingerprints
+  // brings its notes back.
+  if (removed) invalidateHarvestedState();
+  return { label: basename(projectDir.replace(/[\\/]+$/, '')) || projectDir, removed };
 }
 
 /** Switch a host's harvester back on after a format change, and check it again straight away. */
 export function recheckSource(source: LessonSource, home?: string): { wasDisabled: boolean; stillDisabled: string | null; report: LessonSyncReport | null } {
   const wasDisabled = enableLessonSource(source);
-  const report = refreshLessons(home);
+  // The file that tripped the canary has not changed; only our willingness to
+  // read it has.
+  if (wasDisabled) invalidateHarvestedState();
+  const report = refreshLessons(home, { forced: true });
   return { wasDisabled, stillDisabled: disabledLessonSourceReasons().get(source) ?? null, report };
 }
 

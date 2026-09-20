@@ -24,6 +24,15 @@ export type LessonsConfig = {
   consent_at: string | null;
   cross_project: boolean;
   cross_vendor: boolean;
+  /**
+   * Whether saving a session also re-reads each AI's memory. On by default:
+   * recording notes by hand is the thing that never happens. Turning it off
+   * leaves consent and every `veto lessons` command working, so a problem in
+   * the field is one setting away from being stopped (council 534e2bd5).
+   */
+  harvest_on_save: boolean;
+  /** When saving a session first harvested; the one-time note is shown once. */
+  first_harvest_at: string | null;
 };
 
 // Consent v2 covers the trial only: reading notes and logging what would have
@@ -37,6 +46,8 @@ export const DEFAULT_LESSONS: LessonsConfig = {
   consent_at: null,
   cross_project: false,
   cross_vendor: false,
+  harvest_on_save: true,
+  first_harvest_at: null,
 };
 
 export type VetoConfig = {
@@ -104,6 +115,8 @@ function normalizeLessons(raw: Partial<LessonsConfig> | undefined): LessonsConfi
     consent_at: typeof raw?.consent_at === 'string' ? raw.consent_at : null,
     cross_project: raw?.cross_project === true,
     cross_vendor: raw?.cross_vendor === true,
+    harvest_on_save: raw?.harvest_on_save !== false,
+    first_harvest_at: typeof raw?.first_harvest_at === 'string' ? raw.first_harvest_at : null,
   };
 }
 
@@ -169,6 +182,10 @@ export function enableLessonsSharing(): LessonsConfig {
     consent_at: new Date().toISOString(),
     cross_project: true,
     cross_vendor: true,
+    // Turning sharing on keeps the switch the user last chose, so a machine
+    // that had harvest-on-save off does not silently get it back.
+    harvest_on_save: getConfig().lessons.harvest_on_save,
+    first_harvest_at: getConfig().lessons.first_harvest_at,
   };
   setConfig({ lessons });
   return lessons;
@@ -177,6 +194,19 @@ export function enableLessonsSharing(): LessonsConfig {
 export function disableLessonsSharing(): void {
   const current = getConfig().lessons;
   setConfig({ lessons: { ...current, enabled: false, cross_project: false, cross_vendor: false } });
+}
+
+/** True once, the first time a save harvests, so the user is told it happens. */
+export function firstHarvestOnSave(): boolean {
+  const current = getConfig().lessons;
+  if (current.first_harvest_at) return false;
+  setConfig({ lessons: { ...current, first_harvest_at: new Date().toISOString() } });
+  return true;
+}
+
+/** Whether a session save should also re-read each AI's memory. */
+export function isHarvestOnSaveEnabled(config: LessonsConfig = getConfig().lessons): boolean {
+  return isLessonsSharingEnabled(config) && config.harvest_on_save !== false;
 }
 
 export function isLessonsSharingEnabled(config: LessonsConfig = getConfig().lessons): boolean {
