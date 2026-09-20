@@ -145,7 +145,7 @@ describe('files it declines to read', () => {
     expect(noteCount()).toBe(before);
   });
 
-  it('refuses a memory file that links outside the home folder', () => {
+  it("refuses a memory file that links outside its host's folder", () => {
     const { memory } = home();
     enableLessonsSharing();
     const outside = join(root(), 'elsewhere.md');
@@ -157,10 +157,15 @@ describe('files it declines to read', () => {
       return; // Creating symlinks needs a privilege this machine may not grant.
     }
 
-    const outcome = harvestNativeMemory({ source: 'claude', sourcePath: link, projectIdentity: 'git:demo' });
+    const outcome = harvestNativeMemory({ source: 'claude', sourcePath: link, projectIdentity: 'git:demo', root: memory });
     expect(outcome).toMatchObject({ status: 'unavailable' });
-    expect(outcome).toHaveProperty('reason', expect.stringContaining('outside your home folder'));
+    expect(outcome).toHaveProperty('reason', expect.stringContaining('outside its host'));
     expect(noteCount()).toBe(0);
+
+    // A file that really is inside the host's folder is read as normal, even
+    // when that folder is nowhere near the user's home directory.
+    expect(harvestNativeMemory({ source: 'claude', sourcePath: join(memory, 'feedback_quoting_rule.md'), projectIdentity: 'git:demo', root: memory }))
+      .toMatchObject({ status: 'harvested' });
   });
 });
 

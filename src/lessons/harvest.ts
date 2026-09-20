@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { basename, relative, isAbsolute } from 'node:path';
+import { basename, dirname, relative, isAbsolute } from 'node:path';
 import { isLessonsSharingEnabled } from '../memory/config.js';
 import { parseNativeMemory, type LessonSource } from './adapters/index.js';
 import { classifyLesson } from './classify.js';
@@ -45,20 +44,21 @@ export type HarvestOutcome =
   | { status: 'disabled' | 'unavailable'; reason: string };
 
 /**
- * A memory file is followed only while it really lives inside the user's home
- * directory — a dotfiles checkout is a real setup worth supporting, but a link
- * dropped into a memory folder must not turn the harvester into a reader of
- * arbitrary files elsewhere on the machine.
+ * A memory file is followed only while it resolves inside the host directory
+ * it was discovered under: a link dropped into a memory folder must not turn
+ * the harvester into a reader of arbitrary files elsewhere on the machine.
  *
- * The whole path is resolved, not just its last part: a symlinked *folder*
- * anywhere above the file leads out of home just as effectively, and testing
- * only the file itself would not notice.
+ * The boundary is that host directory and NOT the user's home, because neither
+ * is reliably inside the other — CODEX_HOME and a relocated Claude directory
+ * both live wherever the user puts them, and a home-based rule would refuse
+ * every note those users have.
+ *
+ * The whole path is resolved rather than just its last part, so a symlinked
+ * folder above the file is caught as well.
  */
-function resolvesOutsideHome(sourcePath: string): boolean {
+function resolvesOutsideRoot(sourcePath: string, root: string): boolean {
   try {
-    const target = realpathSync(sourcePath);
-    const home = realpathSync(homedir());
-    const rel = relative(home, target);
+    const rel = relative(realpathSync(root), realpathSync(sourcePath));
     return rel.startsWith('..') || isAbsolute(rel);
   } catch { return true; }
 }
@@ -93,12 +93,16 @@ export function harvestNativeMemory(input: {
   /** The project's own names; a note naming its project stays project scope. */
   projectNames?: string[];
   global?: boolean;
+  /** The host directory this file was found under; it may not resolve outside it. */
+  root?: string;
   /** Ignore what this file looked like last time and read it again regardless. */
   forced?: boolean;
 }): HarvestOutcome {
   if (!isLessonSourceEnabled(input.source)) return { status: 'disabled', reason: 'source disabled after format drift' };
-  if (resolvesOutsideHome(input.sourcePath)) {
-    return { status: 'unavailable', reason: 'memory file resolves outside your home folder and was not read' };
+  // Defaults to the file's own folder when a caller names no root, which is
+  // the strictest sensible reading of "where this file is allowed to live".
+  if (resolvesOutsideRoot(input.sourcePath, input.root ?? dirname(input.sourcePath))) {
+    return { status: 'unavailable', reason: "memory file resolves outside its host's own folder and was not read" };
   }
 
   // Stat first: an unchanged file costs this and nothing more. No transaction
@@ -290,7 +294,7 @@ export function syncLessonSources(options: string | SyncOptions = {}): LessonSyn
     }
     const outcome = harvestNativeMemory({
       source: source.source, sourcePath: source.sourcePath, projectIdentity: project.identity,
-      projectLabel: project.label, projectNames: project.names, global: source.global, forced: opts.forced,
+      projectLabel: project.label, projectNames: project.names, global: source.global, root: source.root, forced: opts.forced,
     });
     report[outcome.status]++;
     if (outcome.status === 'harvested') { report.inserted += outcome.inserted; report.updated += outcome.updated; report.removed += outcome.removed; }
