@@ -18,4 +18,9 @@ describe('test config isolation', () => {
     expect(process.env.VETO_CONFIG_PATH).toBeTruthy();
     expect(resolve(process.env.VETO_CONFIG_PATH!)).not.toBe(real);
   });
+
+  it("never points a test at the real Codex sessions either", () => {
+    expect(process.env.CODEX_HOME).toBeTruthy();
+    expect(resolve(process.env.CODEX_HOME!)).not.toBe(resolve(join(homedir(), '.codex')));
+  });
 });

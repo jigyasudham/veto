@@ -85,18 +85,26 @@ describe('veto lessons without consent', () => {
   });
 });
 
-describe('veto lessons on (consent v2)', () => {
+describe('veto lessons on (consent v3)', () => {
   it('shows a disclosure that names both flows, the trial, and the controls', async () => {
     const { text } = await on();
     expect(text).toContain('ACROSS YOUR PROJECTS');
     expect(text).toContain('BETWEEN AIs');
     expect(text).toContain("goes to that AI's company as part of your");
     expect(text).toContain('gives none of them to any AI yet');
-    // The trial must claim only what it does. Recording which notes WOULD be
-    // shared is not wired to anything, so the disclosure must not promise it.
-    expect(text).toContain('works out nothing about which ones it would give');
-    expect(text).not.toContain('records which ones');
-    expect(text).toContain('Before it starts giving\n  notes to your AIs, Veto will ask you again.');
+    // The trial must claim exactly what it does (councils 2ef0124f, 187593c4):
+    // it reads each Codex session's first message, even one Veto took no part
+    // in, keeps only the choice, never the message, and `off` deletes it. The
+    // v2 promise that it worked this out for nothing is no longer true, so it
+    // must be gone.
+    const flat = text.replace(/\s+/g, ' ');
+    expect(flat).toContain("Veto reads that session's first message from Codex's own session files, even when Veto took no part in the session.");
+    expect(flat).toContain('keeps only that choice on this computer: which notes, which project, which AI, and when. It never keeps your message.');
+    expect(flat).toContain('for 8 weeks or 20 Codex sessions, whichever comes first');
+    expect(flat).toContain('`veto lessons off` deletes all of it.');
+    expect(flat).toContain('it tells you before it shows any of this to an AI.');
+    expect(flat).not.toContain('works out nothing');
+    expect(text).toContain('Before it starts giving notes to your AIs, Veto will ask you again.');
     for (const command of ['veto lessons list', 'veto lessons forget <id>', 'veto lessons exclude', 'veto lessons off']) expect(text).toContain(command);
   });
 
@@ -131,10 +139,10 @@ describe('veto lessons on (consent v2)', () => {
     expect(isLessonsSharingEnabled()).toBe(false);
   });
 
-  it('on yes: records consent v2, reads every AI\'s memory once, and summarises it in plain words', async () => {
+  it('on yes: records consent v3, reads every AI\'s memory once, and summarises it in plain words', async () => {
     const r = await on({ answer: ' YES ' });
     expect(r.code).toBe(0);
-    expect(getConfig().lessons).toMatchObject({ enabled: true, consent_version: 2, cross_project: true, cross_vendor: true });
+    expect(getConfig().lessons).toMatchObject({ enabled: true, consent_version: 3, cross_project: true, cross_vendor: true });
     expect(r.text).toContain('✓ Sharing is on.');
     expect(r.text).toContain('Veto read 3 memory files and found 7 notes (Claude 7 · Codex 0 · Gemini 0) across 1 project.');
     expect(r.text).toContain('   2  may be shared into any project');
@@ -155,7 +163,7 @@ describe('veto lessons on (consent v2)', () => {
     expect(isLessonsSharingEnabled()).toBe(false);
     expect(run('status').text).toContain('Turn it on, in a terminal of your own: veto lessons on');
 
-    writeFileSync(process.env.VETO_CONFIG_PATH!, JSON.stringify({ lessons: { enabled: true, consent_version: 1, cross_project: true, cross_vendor: true } }));
+    writeFileSync(process.env.VETO_CONFIG_PATH!, JSON.stringify({ lessons: { enabled: true, consent_version: 2, cross_project: true, cross_vendor: true } }));
     expect(isLessonsSharingEnabled()).toBe(false);
     expect(run('status').text).toContain('paused: what sharing does has changed since you accepted it → veto lessons on');
     expect(rows()).toEqual([]);
@@ -233,7 +241,7 @@ describe('veto lessons with consent', () => {
     const { code, text } = run('off');
     expect(code).toBe(0);
     expect(text).toContain('Sharing is off.');
-    expect(text).toContain('Deleted 7 harvested notes and 0 shadow-log records.');
+    expect(text).toContain('Deleted 7 harvested notes and 0 trial records.');
     expect(text).toContain("Checked: nothing harvested is left in Veto's database.");
     expect(rows()).toEqual([]);
     expect(run('list').text).toContain('(none)');

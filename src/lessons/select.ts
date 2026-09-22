@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { basename, dirname } from 'node:path';
 import { getDb } from '../memory/local.js';
 import { tokenize } from '../transcripts/tokenize.js';
@@ -23,6 +22,10 @@ export type ShadowSelection = {
   estimatedTokens: number;
   targetProjectIdentity: string | null;
   reason: 'selected' | 'no_match' | 'consent_off' | 'project_excluded';
+  /** Notes this session could have been given at all. */
+  poolSize: number;
+  /** Eligible notes that existed before the session but changed after it began, so were left out. */
+  changedSinceStart: number;
 };
 
 const title = (row: LessonRow): string => row.text_masked.split('\n', 1)[0].trim();
@@ -87,19 +90,34 @@ function rank(query: string, candidates: LessonRow[], collection: LessonRow[]): 
   });
 }
 
-/** Deterministic, non-delivering selection used only for prospective shadow logs. */
-export function selectLessonsForShadow(input: { query: string; targetProjectDir: string; targetHost: LessonSource; now?: number }): ShadowSelection {
-  if (!isLessonsSharingEnabled()) return { lessonIds: [], estimatedTokens: 0, targetProjectIdentity: null, reason: 'consent_off' };
+/**
+ * Deterministic, non-delivering selection used only for the shadow trial.
+ *
+ * `asOf` is when the session began. Only notes as they were then count: a note
+ * harvested later did not exist for this session, and one that changed since
+ * no longer has the text it had then, so both are left out. lessons.updated_at
+ * moves only when a note's content changes (store.ts syncLessons), which is
+ * what makes this cut exact; tests/lessons/trial.test.ts holds it to that.
+ */
+export function selectLessonsForShadow(input: { query: string; targetProjectDir: string; targetHost: LessonSource; now?: number; asOf?: number }): ShadowSelection {
+  const none = { lessonIds: [], estimatedTokens: 0, poolSize: 0, changedSinceStart: 0 };
+  if (!isLessonsSharingEnabled()) return { ...none, targetProjectIdentity: null, reason: 'consent_off' };
   const targetIdentity = resolveProjectIdentity(input.targetProjectDir);
-  if (isProjectExcluded(targetIdentity)) return { lessonIds: [], estimatedTokens: 0, targetProjectIdentity: targetIdentity, reason: 'project_excluded' };
-  const now = input.now ?? Date.now();
+  if (isProjectExcluded(targetIdentity)) return { ...none, targetProjectIdentity: targetIdentity, reason: 'project_excluded' };
+  const now = input.asOf ?? input.now ?? Date.now();
   const disabled = disabledLessonSources();
-  const all = getDb().prepare('SELECT * FROM lessons').all() as LessonRow[];
-  const candidates = all.filter(row =>
+  const everything = getDb().prepare('SELECT * FROM lessons').all() as LessonRow[];
+  const asOf = input.asOf;
+  const existedThen = (row: LessonRow): boolean => asOf === undefined || Date.parse(row.updated_at) <= asOf;
+  const all = everything.filter(existedThen);
+  const usable = (row: LessonRow): boolean =>
     !disabled.has(row.source_cli)
     && !nativelyLoaded(row, input.targetHost, input.targetProjectDir)
     && !staleStatus(row, now)
-    && eligible(row, targetIdentity));
+    && eligible(row, targetIdentity);
+  const candidates = all.filter(usable);
+  const changedSinceStart = asOf === undefined ? 0
+    : everything.filter(row => !existedThen(row) && Date.parse(row.created_at) <= asOf && usable(row)).length;
 
   // Relevance first, then newest source on ties; a note without enough query
   // terms in common is not selected at all, however much budget is left.
@@ -134,15 +152,7 @@ export function selectLessonsForShadow(input: { query: string; targetProjectDir:
     estimatedTokens: tokens,
     targetProjectIdentity: targetIdentity,
     reason: chosen.length ? 'selected' : 'no_match',
+    poolSize: candidates.length,
+    changedSinceStart,
   };
-}
-
-/** Append-only prospective evidence. It records IDs and metadata, never delivery. */
-export function logShadowSelection(input: { query: string; targetHost: LessonSource; selection: ShadowSelection }): string {
-  const id = randomUUID();
-  getDb().prepare(`INSERT INTO lesson_shadow_log (id, query, target_project_identity, target_host, lesson_ids, estimated_tokens, reason, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(id, input.query, input.selection.targetProjectIdentity ?? '', input.targetHost, JSON.stringify(input.selection.lessonIds),
-      input.selection.estimatedTokens, input.selection.reason, new Date().toISOString());
-  return id;
 }

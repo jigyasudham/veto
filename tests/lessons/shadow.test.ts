@@ -7,7 +7,7 @@ import { getDb, resetDb } from '../../src/memory/local.js';
 import { discoverNativeMemorySources } from '../../src/lessons/discover.js';
 import { syncLessonSources } from '../../src/lessons/harvest.js';
 import { addProjectAlias, resolveProjectIdentity } from '../../src/lessons/identity.js';
-import { logShadowSelection, selectLessonsForShadow } from '../../src/lessons/select.js';
+import { selectLessonsForShadow } from '../../src/lessons/select.js';
 import { claudeProjectSlug } from '../../src/lessons/source-project.js';
 import { disableLessonSource, type LessonRow } from '../../src/lessons/store.js';
 
@@ -162,12 +162,5 @@ describe('shadow selection', () => {
       expect.stringContaining('lose every backslash'),
       expect.stringContaining('another launcher'),
     ]));
-  });
-
-  it('logs shadow evidence as IDs, without delivering anything', () => {
-    const selection = select('inline script backslashes', projectB);
-    logShadowSelection({ query: 'inline script backslashes', targetHost: 'claude', selection });
-    const log = getDb().prepare('SELECT target_project_identity, lesson_ids, reason FROM lesson_shadow_log').all() as Array<{ target_project_identity: string; lesson_ids: string; reason: string }>;
-    expect(log).toEqual([{ target_project_identity: resolveProjectIdentity(projectB), lesson_ids: JSON.stringify(selection.lessonIds), reason: 'selected' }]);
   });
 });

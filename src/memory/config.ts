@@ -35,11 +35,13 @@ export type LessonsConfig = {
   first_harvest_at: string | null;
 };
 
-// Consent v2 covers the trial only: reading notes and logging what would have
-// been shared. Its disclosure PROMISES to ask again before any note is given to
-// an AI (owner, 2026-09-20), so the release that starts delivery must bump this
-// to 3, which pauses sharing until each user accepts the new disclosure.
-export const LESSONS_CONSENT_VERSION = 2;
+// Consent v3 covers the trial: reading notes, and recording which of them each
+// Codex session would have been given (owner, 2026-09-22). v2 had promised that
+// Veto worked out nothing about that, so the trial could not run under it. The
+// disclosure still PROMISES to ask again before any note is given to an AI
+// (owner, 2026-09-20), so the release that starts delivery must bump this to 4,
+// which pauses sharing until each user accepts the new disclosure.
+export const LESSONS_CONSENT_VERSION = 3;
 export const DEFAULT_LESSONS: LessonsConfig = {
   enabled: false,
   consent_version: 0,

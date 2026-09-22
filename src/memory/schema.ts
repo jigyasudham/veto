@@ -342,16 +342,27 @@ export const CREATE_TABLES = `
     created_at       TEXT NOT NULL
   );
 
-  -- Prospective-evaluation evidence only. No row means no delivery occurred.
-  CREATE TABLE IF NOT EXISTS lesson_shadow_log (
-    id                      TEXT PRIMARY KEY,
-    query                   TEXT NOT NULL,
-    target_project_identity TEXT NOT NULL,
-    target_host             TEXT NOT NULL,
-    lesson_ids              TEXT NOT NULL,
-    estimated_tokens        INTEGER NOT NULL,
-    reason                  TEXT NOT NULL,
-    created_at              TEXT NOT NULL
+  -- The shadow trial (councils 2ef0124f, 187593c4): one row per Codex session,
+  -- recording which notes Veto WOULD have given it. Nothing is delivered. The
+  -- session's own request is read to choose and is never stored; the row keeps
+  -- the choice and a pointer to Codex's rollout file. outcome is one of
+  -- selected, no_match, no_request, no_notes, no_project, project_excluded,
+  -- subagent, before_trial. archive_state is pending, archived, capture_off or
+  -- failed.
+  CREATE TABLE IF NOT EXISTS lesson_trial_sessions (
+    source_session_id    TEXT PRIMARY KEY,
+    source_cli           TEXT NOT NULL,
+    rollout_path         TEXT NOT NULL,
+    project_identity     TEXT,
+    project_label        TEXT,
+    started_at           TEXT NOT NULL,
+    outcome              TEXT NOT NULL,
+    lesson_ids           TEXT NOT NULL,
+    estimated_tokens     INTEGER NOT NULL,
+    pool_size            INTEGER NOT NULL,
+    changed_since_start  INTEGER NOT NULL,
+    archive_state        TEXT NOT NULL,
+    logged_at            TEXT NOT NULL
   );
 
   CREATE INDEX IF NOT EXISTS idx_tool_trace_session ON tool_call_trace_log(session_id);
@@ -379,7 +390,7 @@ export const CREATE_TABLES = `
   CREATE INDEX IF NOT EXISTS idx_lesson_tombstone_place ON lesson_tombstones(source_cli, source_path, section_anchor);
   CREATE INDEX IF NOT EXISTS idx_lesson_tombstone_entry ON lesson_tombstones(entry_key);
   CREATE INDEX IF NOT EXISTS idx_lesson_tombstone_text  ON lesson_tombstones(signature);
-  CREATE INDEX IF NOT EXISTS idx_shadow_log_created    ON lesson_shadow_log(created_at);
+  CREATE INDEX IF NOT EXISTS idx_trial_started         ON lesson_trial_sessions(started_at);
 `;
 
 export type SessionRow = {

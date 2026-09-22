@@ -576,13 +576,13 @@ Claude, Codex and Gemini each keep notes in their own memory: Claude's per-proje
 > - **Between AIs:** a note Claude wrote can reach Codex and Gemini, and the other way round. A note given to an AI goes to that AI's company as part of your conversation, like anything else you send it.
 > - **Read-only.** Veto never changes or deletes an AI's memory files. It keeps a copy of each note in its own local database, with email addresses, your home folder and anything that looks like a password or key removed first. Veto itself uploads nothing.
 > - **Off until you say so, and only you can say so.** `veto lessons on` shows this disclosure and asks you to type `yes` in a terminal of your own. When an AI runs the command, it is refused, so no AI can switch sharing on for you. No upgrade ever turns it on, and if what sharing does materially changes, you are asked again.
-> - **A trial for now.** Veto reads the notes and keeps its own masked copy of them on this computer. It gives none of them to any AI yet, and works out nothing about which ones it *would* give. Before it starts giving notes to your AIs, Veto will ask you again.
+> - **A trial for now.** Veto reads the notes and keeps its own masked copy of them on this computer. It gives none of them to any AI yet. To find out whether they would help, for 8 weeks or 20 Codex sessions (whichever comes first) it also reads the first message of each Codex session in your projects from Codex's own session files, even when Veto took no part in the session. It works out which notes it *would* have given, and keeps only that choice: which notes, which project, which AI, and when. It never keeps your message. If transcript capture is on, it also archives those Codex sessions so each choice can be checked later. Checking is a step you start yourself, and it tells you before it shows any of this to an AI. Veto sends nothing anywhere, and `veto lessons off` deletes all of it. Before it starts giving notes to your AIs, Veto will ask you again.
 
 Most notes never leave their project. A note stays home if it is about that project, or if it contains a command, a web address, a credential or an instruction to fetch, send or run something; notes about secrets or personal details never leave their project at all. Only a note about *you* (Claude's `user` and `feedback` notes, a CLI's global instructions) or about *this computer* (its shell, console or network) may travel. A shared note arrives marked as information from another AI session, never as an instruction.
 
 ```bash
 veto lessons on                  # Read the disclosure; type yes to accept (your own terminal only)
-veto lessons                     # Status: notes found, how many may travel, anything switched off
+veto lessons                     # Status: notes found, how many may travel, anything switched off, and the trial so far
 veto lessons list                # Every note Veto has read, by project (--shared, --held, --scope=, --source=, --json)
 veto lessons why <id>            # One note: who wrote it, when, why it stays or travels, where it may go
 veto lessons flows               # Where each AI's notes may go, per project

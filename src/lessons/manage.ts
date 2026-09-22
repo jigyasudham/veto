@@ -16,6 +16,7 @@ import {
   clearLessonFileState, clearLessonFolderState, disabledLessonSourceReasons, enableLessonSource, excludedProjects, excludeProject, includeProject, tombstoneLesson,
   type LessonRow, type ProjectExclusion,
 } from './store.js';
+import { archiveTrialSessions, clearTrialSessions, runLessonsTrial, trialStatus, type TrialStatus } from './trial.js';
 
 export const HOST_NAMES: Record<LessonSource, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' };
 
@@ -25,7 +26,15 @@ export const HOST_NAMES: Record<LessonSource, string> = { claude: 'Claude', code
  * waiting for output would rather wait than be told a half-truth.
  */
 export function refreshLessons(home?: string, options: { forced?: boolean } = {}): LessonSyncReport | null {
-  return isLessonsSharingEnabled() ? syncLessonSources({ home, forced: options.forced }) : null;
+  if (!isLessonsSharingEnabled()) return null;
+  const report = syncLessonSources({ home, forced: options.forced });
+  // The trial is brought up to date by the same commands, with no budget
+  // either, so `veto lessons status` counts every Codex session there is.
+  try {
+    runLessonsTrial();
+    void archiveTrialSessions();
+  } catch { /* the trial never stops a command from showing the notes */ }
+  return report;
 }
 
 /**
@@ -161,12 +170,13 @@ export function forgetLesson(row: LessonRow): { removed: number } {
   return { removed: tombstoneLesson(row) };
 }
 
-export type LessonsOffResult = { wasOn: boolean; notes: number; shadowLog: number; remaining: number };
+export type LessonsOffResult = { wasOn: boolean; notes: number; trialSessions: number; remaining: number };
 
 /**
- * Turn sharing off and delete everything harvested, plus the would-have-shared
- * log. Forgotten-note tombstones, exclusions and aliases stay: they are the
- * user's own decisions and hold no note text. `remaining` is the purge proof.
+ * Turn sharing off and delete everything harvested, plus the trial's record of
+ * what would have been given. Forgotten-note tombstones, exclusions and aliases
+ * stay: they are the user's own decisions and hold no note text. `remaining` is
+ * the purge proof.
  */
 export function turnLessonsOff(): LessonsOffResult {
   const wasOn = isLessonsSharingEnabled();
@@ -175,9 +185,13 @@ export function turnLessonsOff(): LessonsOffResult {
   const notes = Number(db.prepare('DELETE FROM lessons').run().changes);
   clearLessonFileState();
   clearLessonFolderState();
-  const shadowLog = Number(db.prepare('DELETE FROM lesson_shadow_log').run().changes);
-  const count = (table: string) => (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
-  return { wasOn, notes, shadowLog, remaining: count('lessons') + count('lesson_shadow_log') };
+  const trialSessions = clearTrialSessions();
+  // An upgrade drops the old shadow log only while it is empty (local.ts), so
+  // one that is still here holds rows and is emptied like everything else.
+  let legacy = 0;
+  try { legacy = Number(db.prepare('DELETE FROM lesson_shadow_log').run().changes); } catch { /* dropped on upgrade */ }
+  const count = (table: string) => { try { return (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n; } catch { return 0; } };
+  return { wasOn, notes, trialSessions: trialSessions + legacy, remaining: count('lessons') + count('lesson_trial_sessions') + count('lesson_shadow_log') };
 }
 
 export type LessonFlow = {
@@ -374,7 +388,8 @@ export type LessonsStatus = {
   excluded: ProjectExclusion[];
   unresolved: number;
   forgotten: number;
-  shadowLog: number;
+  /** The shadow trial, while sharing is on. */
+  trial: TrialStatus | null;
 };
 
 export function lessonsStatus(): LessonsStatus {
@@ -383,7 +398,6 @@ export function lessonsStatus(): LessonsStatus {
   const rows = db.prepare('SELECT * FROM lessons').all() as LessonRow[];
   const byHost = { claude: 0, codex: 0, gemini: 0 } as Record<LessonSource, number>;
   for (const row of rows) byHost[row.source_cli] = (byHost[row.source_cli] ?? 0) + 1;
-  const count = (table: string) => (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
   return {
     sharing: isLessonsSharingEnabled(config),
     needsReconsent: config.enabled && config.consent_version !== LESSONS_CONSENT_VERSION,
@@ -396,6 +410,6 @@ export function lessonsStatus(): LessonsStatus {
     excluded: excludedProjects(),
     unresolved: unresolvedFolders().length,
     forgotten: (db.prepare('SELECT COUNT(DISTINCT forget_id) AS n FROM lesson_tombstones').get() as { n: number }).n,
-    shadowLog: count('lesson_shadow_log'),
+    trial: trialStatus(),
   };
 }
