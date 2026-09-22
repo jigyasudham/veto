@@ -13,7 +13,7 @@ import { syncLessonSources, type LessonSyncReport } from './harvest.js';
 import { addProjectAlias, canonicalProjectPath, computeProjectIdentity, resolveProjectIdentity } from './identity.js';
 import { claudeProjectSlug, sameClaudeSlug } from './source-project.js';
 import {
-  clearLessonFileState, disabledLessonSourceReasons, enableLessonSource, excludedProjects, excludeProject, includeProject, tombstoneLesson,
+  clearLessonFileState, clearLessonFolderState, disabledLessonSourceReasons, enableLessonSource, excludedProjects, excludeProject, includeProject, tombstoneLesson,
   type LessonRow, type ProjectExclusion,
 } from './store.js';
 
@@ -33,10 +33,12 @@ export function refreshLessons(home?: string, options: { forced?: boolean } = {}
  * Needed after a decision that changes what a file would yield without
  * touching the file: re-including a project, or pointing an alias somewhere
  * new. Without this the fast path would skip exactly the files that changed
- * meaning.
+ * meaning. An alias also changes which project a folder belongs to, so what
+ * passes worked out about folders goes too.
  */
 function invalidateHarvestedState(): void {
   clearLessonFileState();
+  clearLessonFolderState();
 }
 
 export const lessonTitle = (row: LessonRow): string => row.text_masked.split('\n', 1)[0].trim();
@@ -172,6 +174,7 @@ export function turnLessonsOff(): LessonsOffResult {
   const db = getDb();
   const notes = Number(db.prepare('DELETE FROM lessons').run().changes);
   clearLessonFileState();
+  clearLessonFolderState();
   const shadowLog = Number(db.prepare('DELETE FROM lesson_shadow_log').run().changes);
   const count = (table: string) => (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
   return { wasOn, notes, shadowLog, remaining: count('lessons') + count('lesson_shadow_log') };

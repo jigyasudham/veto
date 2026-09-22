@@ -9,9 +9,9 @@ import { projectNames, resolveProjectIdentity } from './identity.js';
 import { maskLessonText } from './mask.js';
 import { resolveClaudeProjectFolder } from './source-project.js';
 import {
-  deleteLessonSource, disableLessonSource, isLessonSourceEnabled, isProjectExcluded, lessonFileState,
-  purgeVanishedLessonFileState, purgeVanishedLessonSources, recordLessonFileState, recordLessonFileUnavailable,
-  syncLessons, unresolvedProjectCount, type HarvestedSection,
+  deleteLessonSource, disableLessonSource, isLessonSourceEnabled, isProjectExcluded, lessonFileState, lessonFolderState,
+  purgeVanishedLessonFileState, purgeVanishedLessonFolderState, purgeVanishedLessonSources, recordLessonFileState,
+  recordLessonFileUnavailable, recordLessonFolderState, syncLessons, unresolvedProjectCount, type HarvestedSection,
 } from './store.js';
 
 /**
@@ -22,6 +22,14 @@ import {
  * without this being bumped, so the reminder is not a comment alone.
  */
 export const HARVESTER_VERSION = 1;
+
+/**
+ * Bump when anything that decides which project a Claude memory folder belongs
+ * to changes: sourceProject below, source-project.ts, identity.ts or the slug
+ * rules. Every remembered folder is worked out again on the next pass.
+ * `tests/lessons/harvester-version.test.ts` holds this one to account too.
+ */
+export const FOLDER_RESOLVER_VERSION = 1;
 
 /**
  * A memory file is a hand-written note; anything this large is not one. The
@@ -209,14 +217,29 @@ export type SyncOptions = {
 
 type SourceProject = { identity: string; label: string | null; names: string[] };
 
-function sourceProject(source: NativeMemorySource, folders: Map<string, SourceProject>): SourceProject {
+/**
+ * Which project a file's folder belongs to. Working that out is most of what a
+ * cold pass costs, because git runs for every folder (about 65 ms each on
+ * Windows), and every pass used to redo it: a save reached only a few files
+ * before its budget ran out, so catching up took some twenty saves. A save now
+ * reuses what an earlier pass found. A command (`fresh`) works it out again and
+ * records the answer, so a renamed remote or a folder that gained git history
+ * is noticed the next time a command looks at it, not by a save.
+ */
+function sourceProject(source: NativeMemorySource, folders: Map<string, SourceProject>, fresh: boolean): SourceProject {
   if (source.global || !source.claudeFolder || !source.claudeSlug) return { identity: `global:${source.source}`, label: null, names: [] };
   const cached = folders.get(source.claudeFolder);
   if (cached) return cached;
+  const remembered = fresh ? null : lessonFolderState(source.claudeFolder, FOLDER_RESOLVER_VERSION);
+  if (remembered) {
+    folders.set(source.claudeFolder, remembered);
+    return remembered;
+  }
   const { projectDir } = resolveClaudeProjectFolder(source.claudeFolder, source.claudeSlug);
   const resolved = projectDir
     ? { identity: resolveProjectIdentity(projectDir), label: basename(projectDir.replace(/[\\/]+$/, '')) || projectDir, names: projectNames(projectDir) }
     : { identity: `claude-slug:${source.claudeSlug}`, label: source.claudeSlug, names: [] };
+  recordLessonFolderState(source.claudeFolder, resolved, FOLDER_RESOLVER_VERSION);
   folders.set(source.claudeFolder, resolved);
   return resolved;
 }
@@ -267,7 +290,8 @@ export function syncLessonSources(options: string | SyncOptions = {}): LessonSyn
   report.sources = sources.length;
   const folders = new Map<string, SourceProject>();
   // Only a pass that is not racing a save can afford to look for folders that
-  // were unresolved last time.
+  // were unresolved last time, or to work out again which project a folder
+  // belongs to rather than reuse what an earlier pass found.
   const recheckUnresolved = opts.budgetMs === undefined;
   let index = 0;
   for (const source of sources) {
@@ -285,7 +309,7 @@ export function syncLessonSources(options: string | SyncOptions = {}): LessonSyn
       if (state) { report.unchanged++; continue; }
     }
 
-    const project = sourceProject(source, folders);
+    const project = sourceProject(source, folders, recheckUnresolved);
     if (isProjectExcluded(project.identity)) {
       // Not even read: an excluded project's notes never reach the store.
       report.excluded++;
@@ -306,6 +330,7 @@ export function syncLessonSources(options: string | SyncOptions = {}): LessonSyn
   if (report.notReached === 0) {
     report.removed += purgeVanishedLessonSources(sources);
     purgeVanishedLessonFileState(sources);
+    purgeVanishedLessonFolderState(sources.flatMap(source => source.claudeFolder ? [source.claudeFolder] : []));
   }
   report.elapsedMs = Date.now() - started;
   return report;
