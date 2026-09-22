@@ -11,7 +11,7 @@ import {
   excludeProjectDir, explainLesson, findLesson, forgetLesson, includeProjectDir, lessonFlows, lessonReach, recheckSource,
   setProjectAlias, suggestAlias, turnLessonsOff, unresolvedFolders,
 } from '../../src/lessons/manage.js';
-import { logShadowSelection, selectLessonsForShadow } from '../../src/lessons/select.js';
+import { selectLessonsForShadow } from '../../src/lessons/select.js';
 import { claudeProjectSlug } from '../../src/lessons/source-project.js';
 import type { LessonRow } from '../../src/lessons/store.js';
 
@@ -158,17 +158,18 @@ describe('forget', () => {
 describe('off', () => {
   it('turns sharing off and deletes everything harvested, with proof, but keeps the user\'s own decisions', () => {
     const notes = all().length;
-    logShadowSelection({ query: 'inline script backslashes', targetHost: 'claude', selection: select('inline script backslashes', projectB) });
+    getDb().prepare(`INSERT INTO lesson_trial_sessions (source_session_id, source_cli, rollout_path, started_at, outcome, lesson_ids,
+      estimated_tokens, pool_size, changed_since_start, archive_state, logged_at) VALUES ('s1', 'codex', 'r.jsonl', '2026-09-22T00:00:00Z', 'selected', '[]', 0, 1, 0, 'capture_off', '2026-09-22T00:00:00Z')`).run();
     forgetLesson(one('feedback_server_config.md'));
     excludeProjectDir(projectB);
 
-    expect(turnLessonsOff()).toEqual({ wasOn: true, notes: notes - 1, shadowLog: 1, remaining: 0 });
+    expect(turnLessonsOff()).toEqual({ wasOn: true, notes: notes - 1, trialSessions: 1, remaining: 0 });
     expect(isLessonsSharingEnabled()).toBe(false);
     expect(syncLessonSources(home)).toMatchObject({ consent: false, sources: 0 });
     expect(all()).toEqual([]);
     const count = (table: string) => (getDb().prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
     expect([count('lesson_tombstones'), count('lesson_project_exclusions')]).toEqual([1, 1]);
-    expect(turnLessonsOff()).toEqual({ wasOn: false, notes: 0, shadowLog: 0, remaining: 0 });
+    expect(turnLessonsOff()).toEqual({ wasOn: false, notes: 0, trialSessions: 0, remaining: 0 });
   });
 });
 

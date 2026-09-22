@@ -13,6 +13,7 @@
 
 import { firstHarvestOnSave, isHarvestOnSaveEnabled } from '../memory/config.js';
 import { syncLessonSources } from './harvest.js';
+import { archiveTrialSessions, runLessonsTrial } from './trial.js';
 
 /**
  * A quiet pass costs one stat per file and opens no transaction, so this bound
@@ -47,6 +48,15 @@ export function harvestOnSave(options: { home?: string } = {}): OnSaveLessons | 
   } catch {
     return null;
   }
+  // The shadow trial gets whatever the harvest left of the same budget, so a
+  // save never waits longer for it; what it does not reach waits for the next
+  // save. Archiving a finished trial session is left to run after the save
+  // has answered. Neither says anything here: `veto lessons status` does.
+  try {
+    const left = BUDGET_MS - report.elapsedMs;
+    if (left > 0) runLessonsTrial({ budgetMs: left });
+    void archiveTrialSessions();
+  } catch { /* the trial is best-effort and never a reason a save fails */ }
   const added = report.inserted;
   const { updated, removed } = report;
   // Work still queued is not news. A cold pass drains over several saves, and

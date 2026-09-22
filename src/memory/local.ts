@@ -121,6 +121,7 @@ export function getDb(): DatabaseSync {
   migrateProjectDirCase(_db);
   migrateSessionCreatedAtIso(_db);
   migrateLessonColumns(_db);
+  migrateDropShadowLog(_db);
   // Stamp the read-contract version so external readers (veto-vscode, statusline)
   // can detect drift via `PRAGMA user_version`. See VETO_DB_SCHEMA_VERSION.
   _db.exec(`PRAGMA user_version = ${VETO_DB_SCHEMA_VERSION}`);
@@ -171,6 +172,18 @@ function migrateLessonColumns(db: DatabaseSync): void {
   if (!names.has('project_label')) db.exec('ALTER TABLE lessons ADD COLUMN project_label TEXT');
   if (!names.has('quarantine_reason')) db.exec('ALTER TABLE lessons ADD COLUMN quarantine_reason TEXT');
   if (!names.has('scope_reason')) db.exec('ALTER TABLE lessons ADD COLUMN scope_reason TEXT');
+}
+
+// 3.4.0 and 3.5.0 created lesson_shadow_log, which nothing outside the tests
+// ever wrote. Its query column would have held a session's prompt, which the
+// shadow trial must never store (council 2ef0124f), so lesson_trial_sessions
+// replaces it. Dropped only while empty: a table somebody did write to is left
+// for `veto lessons off` to empty, never deleted by an upgrade.
+function migrateDropShadowLog(db: DatabaseSync): void {
+  try {
+    const row = db.prepare('SELECT COUNT(*) AS n FROM lesson_shadow_log').get() as { n: number };
+    if (row.n === 0) db.exec('DROP TABLE lesson_shadow_log');
+  } catch { /* no such table: a database created by this build or before 3.4.0 */ }
 }
 
 // Creates tool_call_trace_log table for auditing and session replay (v1.8.0 migration)

@@ -52,3 +52,30 @@ describe('upgrading a 3.4.0 database', () => {
     expect(explainLesson(row).scope).toBe('user: classified before Veto recorded why');
   });
 });
+
+describe('upgrading a 3.5.0 database', () => {
+  const tables = () => new Set((getDb().prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(r => r.name));
+  const shadowLog = `CREATE TABLE IF NOT EXISTS lesson_shadow_log (
+    id TEXT PRIMARY KEY, query TEXT NOT NULL, target_project_identity TEXT NOT NULL, target_host TEXT NOT NULL,
+    lesson_ids TEXT NOT NULL, estimated_tokens INTEGER NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL)`;
+
+  it('drops the empty shadow log, whose query column could have held a prompt, and adds the trial table', () => {
+    getDb().exec(shadowLog);
+    resetDb();
+    expect(tables().has('lesson_shadow_log')).toBe(false);
+    expect(columns('lesson_trial_sessions')).toEqual(expect.arrayContaining(['source_session_id', 'outcome', 'lesson_ids', 'archive_state']));
+    expect(columns('lesson_trial_sessions')).not.toContain('query');
+  });
+
+  it('never drops a shadow log that holds rows: `veto lessons off` empties it instead', async () => {
+    getDb().exec(shadowLog);
+    getDb().prepare(`INSERT INTO lesson_shadow_log VALUES ('x', 'a prompt', 'git:a', 'claude', '[]', 0, 'no_match', '2026-09-20T00:00:00.000Z')`).run();
+    resetDb();
+    expect(tables().has('lesson_shadow_log')).toBe(true);
+
+    const { turnLessonsOff } = await import('../../src/lessons/manage.js');
+    expect(turnLessonsOff()).toMatchObject({ trialSessions: 1, remaining: 0 });
+    resetDb();
+    expect(tables().has('lesson_shadow_log')).toBe(false);
+  });
+});

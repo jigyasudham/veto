@@ -12,6 +12,7 @@ import {
   removeProjectAlias, setProjectAlias, turnLessonsOff, unresolvedFolders, type FindLesson,
 } from '../lessons/manage.js';
 import type { LessonRow } from '../lessons/store.js';
+import { TRIAL_DAYS, type TrialStatus } from '../lessons/trial.js';
 
 type Out = (line?: string) => void;
 type Colors = Record<'bold' | 'dim' | 'green' | 'yellow' | 'cyan' | 'red', (s: string) => string>;
@@ -80,6 +81,25 @@ function sharingLine(c: Colors): string {
   return `${c.dim('off')}${s.notes ? '' : c.dim(": Veto has not read any AI's memory")}`;
 }
 
+/**
+ * The shadow trial at a glance: how far along it is, what each counted session
+ * came to, and a warning when sessions stop yielding a request at all, which
+ * would mean Codex changed its format rather than that no note fitted.
+ */
+function trialLines(t: TrialStatus, c: Colors, now = Date.now()): string[] {
+  const n = (outcome: keyof TrialStatus['byOutcome']) => t.byOutcome[outcome] ?? 0;
+  const day = Math.min(TRIAL_DAYS, Math.floor((now - Date.parse(t.startedAt)) / (24 * 60 * 60 * 1000)) + 1);
+  const progress = `${t.qualifying} of ${t.target} Codex sessions counted`;
+  const lines = [`  Trial:        ${t.complete ? `finished · ${progress} · ready to be judged` : `day ${day} of ${TRIAL_DAYS} · ${progress}`}`];
+  const parts = [`${n('selected')} with notes chosen`, `${n('no_match')} with none that fitted`];
+  if (n('no_request')) parts.push(`${n('no_request')} with no request found`);
+  const elsewhere = n('no_notes') + n('no_project') + n('project_excluded');
+  if (elsewhere) parts.push(`${elsewhere} in projects with no notes to give`);
+  lines.push(c.dim(`                ${parts.join(' · ')}${t.archived ? ` · ${t.archived} kept for checking` : ''}`));
+  if (t.drift) lines.push(c.yellow('  Trial:        the last few Codex sessions had no request Veto could read. Codex may have changed its format; please report it.'));
+  return lines;
+}
+
 function status(out: Out, c: Colors, home: string | undefined): number {
   refreshLessons(home);
   const s = lessonsStatus();
@@ -97,7 +117,7 @@ function status(out: Out, c: Colors, home: string | undefined): number {
   if (s.excluded.length) out(`  Kept out:     ${s.excluded.map(e => e.project_label ?? e.project_identity).join(', ')} ${c.dim('(nothing leaves, nothing enters)')}`);
   if (s.unresolved) out(`  Unlinked:     ${plural(s.unresolved, 'memory folder')} with no project Veto can find ${c.dim('→ veto lessons alias')}`);
   if (s.forgotten) out(`  Forgotten:    ${s.forgotten} ${c.dim('(permanent)')}`);
-  if (s.shadowLog) out(`  Shadow log:   ${plural(s.shadowLog, 'record')} of what would have been shared`);
+  if (s.trial) for (const line of trialLines(s.trial, c)) out(line);
   if (s.notes && !s.sharing) out(c.yellow('  Sharing is off, but notes harvested earlier are still stored.') + c.dim(' Delete them with: veto lessons off'));
   if (!s.sharing && !s.needsReconsent) out(c.dim('  Turn it on, in a terminal of your own: veto lessons on'));
   out('');
@@ -215,7 +235,7 @@ function off(out: Out, c: Colors): number {
   const r = turnLessonsOff();
   out('');
   out(c.green(`  ✓ Sharing is off${r.wasOn ? '' : ' (it already was)'}.`));
-  out(`    Deleted ${plural(r.notes, 'harvested note')} and ${plural(r.shadowLog, 'shadow-log record')}.`);
+  out(`    Deleted ${plural(r.notes, 'harvested note')} and ${plural(r.trialSessions, 'trial record')}.`);
   if (r.remaining === 0) out(c.dim('    Checked: nothing harvested is left in Veto\'s database. Your AIs\' own memory files are untouched.'));
   else out(c.red(`    ${r.remaining} rows could not be deleted. Run this again, or report it.`));
   out(c.dim('    Forgotten notes, excluded projects and aliases are kept, so they still apply if you turn sharing back on.'));

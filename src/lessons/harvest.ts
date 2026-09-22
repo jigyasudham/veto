@@ -64,7 +64,7 @@ export type HarvestOutcome =
  * The whole path is resolved rather than just its last part, so a symlinked
  * folder above the file is caught as well.
  */
-function resolvesOutsideRoot(sourcePath: string, root: string): boolean {
+export function resolvesOutsideRoot(sourcePath: string, root: string): boolean {
   try {
     const rel = relative(realpathSync(root), realpathSync(sourcePath));
     return rel.startsWith('..') || isAbsolute(rel);
