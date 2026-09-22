@@ -265,6 +265,45 @@ export function clearLessonFileState(): number {
   return Number(getDb().prepare('DELETE FROM lesson_file_state').run().changes);
 }
 
+export type LessonFolderState = { identity: string; label: string | null; names: string[] };
+
+/** The project a pass last traced this Claude folder to, or null if never or under other rules. */
+export function lessonFolderState(claudeFolder: string, resolverVersion: number): LessonFolderState | null {
+  const row = getDb().prepare('SELECT project_identity, project_label, project_names, resolver_version FROM lesson_folder_state WHERE claude_folder = ?')
+    .get(claudeFolder) as { project_identity: string; project_label: string | null; project_names: string; resolver_version: number } | undefined;
+  if (!row || row.resolver_version !== resolverVersion) return null;
+  let names: unknown;
+  try { names = JSON.parse(row.project_names); } catch { return null; }
+  if (!Array.isArray(names) || !names.every(name => typeof name === 'string')) return null;
+  return { identity: row.project_identity, label: row.project_label, names };
+}
+
+export function recordLessonFolderState(claudeFolder: string, state: LessonFolderState, resolverVersion: number): void {
+  getDb().prepare(`INSERT INTO lesson_folder_state (claude_folder, project_identity, project_label, project_names, resolver_version, resolved_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(claude_folder) DO UPDATE SET project_identity = excluded.project_identity, project_label = excluded.project_label,
+      project_names = excluded.project_names, resolver_version = excluded.resolver_version, resolved_at = excluded.resolved_at`)
+    .run(claudeFolder, state.identity, state.label, JSON.stringify(state.names), resolverVersion, new Date().toISOString());
+}
+
+/** Drop folders no longer discovered, so a remembered project cannot outlive its folder. */
+export function purgeVanishedLessonFolderState(present: Iterable<string>): number {
+  const keep = new Set(present);
+  const db = getDb();
+  const rows = db.prepare('SELECT claude_folder FROM lesson_folder_state').all() as Array<{ claude_folder: string }>;
+  const del = db.prepare('DELETE FROM lesson_folder_state WHERE claude_folder = ?');
+  let removed = 0;
+  for (const row of rows) {
+    if (!keep.has(row.claude_folder)) removed += Number(del.run(row.claude_folder).changes);
+  }
+  return removed;
+}
+
+/** An alias or policy change can move a folder to another project, so what was worked out must go. */
+export function clearLessonFolderState(): number {
+  return Number(getDb().prepare('DELETE FROM lesson_folder_state').run().changes);
+}
+
 export function enableLessonSource(source: LessonSource): boolean {
   return Number(getDb().prepare('DELETE FROM lesson_source_state WHERE source_cli = ?').run(source).changes) > 0;
 }

@@ -297,6 +297,21 @@ export const CREATE_TABLES = `
     PRIMARY KEY (source_cli, source_path)
   );
 
+  -- Which project a Claude memory folder belongs to, as a pass last worked it
+  -- out. Working it out means reading transcripts, maybe walking a drive, and
+  -- running git for the folder's names - about 65 ms a folder on Windows, paid
+  -- again by every pass. A save reuses this row; a command works it out again
+  -- and replaces it. resolver_version invalidates every row when the logic
+  -- changes. Holds paths and identities only, never note text.
+  CREATE TABLE IF NOT EXISTS lesson_folder_state (
+    claude_folder     TEXT PRIMARY KEY,
+    project_identity  TEXT NOT NULL,
+    project_label     TEXT,
+    project_names     TEXT NOT NULL,
+    resolver_version  INTEGER NOT NULL,
+    resolved_at       TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS project_identity_aliases (
     alias_path       TEXT PRIMARY KEY,
     project_identity TEXT NOT NULL,
