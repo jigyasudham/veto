@@ -50,31 +50,56 @@ export const advisorHandlers: HandlerMap = {
   veto_dep_advisor: async ({ args }) => {
     const projectDir = String(args?.project_dir ?? '').trim();
     let ecosystem = String(args?.ecosystem ?? 'auto');
-    let packages: Array<{ name: string; version: string }> = [];
+    let packages: Array<{ name: string; version: string | null; version_source: string }> = [];
 
-    // Try npm first
+    // The version OSV is asked about must be the one in use. Before 3.7.0 every
+    // range was cut to its major ("^4.19.2" → "4.0.0"), so OSV reported
+    // vulnerabilities fixed long before the version actually installed.
+    const exactVersion = (range: string): string | null => {
+      const m = String(range).match(/(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+      return m ? `${m[1]}.${m[2] ?? 0}.${m[3] ?? 0}` : null;
+    };
     if (ecosystem === 'auto' || ecosystem === 'npm') {
       try {
         const pkg = JSON.parse(readFileSync(join(projectDir, 'package.json'), 'utf8'));
-        const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-        packages = Object.entries(deps).map(([name, ver]) => ({ name, version: String(ver).replace(/[\^~>=<]/g, '').split('.')[0] + '.0.0' })).slice(0, 50);
+        let lock: Record<string, { version?: string }> = {};
+        try { lock = (JSON.parse(readFileSync(join(projectDir, 'package-lock.json'), 'utf8')) as { packages?: Record<string, { version?: string }> }).packages ?? {}; } catch { /* no lockfile */ }
+        const deps = { ...pkg.dependencies, ...pkg.devDependencies } as Record<string, string>;
+        packages = Object.entries(deps).slice(0, 50).map(([name, range]) => {
+          try {
+            const installed = JSON.parse(readFileSync(join(projectDir, 'node_modules', name, 'package.json'), 'utf8')) as { version?: string };
+            if (installed.version) return { name, version: installed.version, version_source: 'installed' };
+          } catch { /* not installed */ }
+          const locked = lock[`node_modules/${name}`]?.version;
+          if (locked) return { name, version: locked, version_source: 'package-lock.json' };
+          const v = exactVersion(range);
+          return { name, version: v, version_source: v ? `lowest version allowed by "${range}"` : `unresolvable range "${range}"` };
+        });
         ecosystem = 'npm';
       } catch { /* try next */ }
     }
     if ((ecosystem === 'auto' || ecosystem === 'pypi') && packages.length === 0) {
       try {
         const req = readFileSync(join(projectDir, 'requirements.txt'), 'utf8');
-        packages = req.split('\n').filter(l => l.trim() && !l.startsWith('#')).map(l => { const [name, ver='0.0.0'] = l.split(/[==>=<]/); return { name: name.trim(), version: ver.trim() || '0.0.0' }; }).slice(0, 50);
+        packages = req.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#') && !l.startsWith('-')).slice(0, 50).map(l => {
+          const m = l.match(/^([A-Za-z0-9_.\-[\]]+)\s*(==|>=|~=)?\s*([0-9][^\s;,]*)?/);
+          const name = (m?.[1] ?? l).replace(/\[.*\]$/, '');
+          const version = m?.[3] ? exactVersion(m[3]) : null;
+          return { name, version, version_source: m?.[2] === '==' ? 'pinned' : version ? `lowest version allowed by "${l}"` : 'unpinned' };
+        });
         ecosystem = 'pypi';
       } catch { /* skip */ }
     }
     if (packages.length === 0) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No package.json or requirements.txt found in project_dir.' }) }], isError: true };
 
+    const checkable = packages.filter(p => p.version);
     let vulnerabilities: Array<{ package: string; version: string; vuln_id: string; severity: string; summary: string }> = [];
     let osvAvailable = false;
+    let osvError: string | null = null;
     try {
       const osvEcosystem = ecosystem === 'npm' ? 'npm' : ecosystem === 'pypi' ? 'PyPI' : 'crates.io';
-      const body = { queries: packages.slice(0, 30).map(p => ({ package: { name: p.name, ecosystem: osvEcosystem }, version: p.version })) };
+      const batch = checkable.slice(0, 30);
+      const body = { queries: batch.map(p => ({ package: { name: p.name, ecosystem: osvEcosystem }, version: p.version })) };
       const resp = await fetch('https://api.osv.dev/v1/querybatch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -82,34 +107,66 @@ export const advisorHandlers: HandlerMap = {
         signal: AbortSignal.timeout(8000),
       });
       if (resp.ok) {
-        const data = await resp.json() as { results: Array<{ vulns?: Array<{ id: string; summary: string; database_specific?: { severity?: string } }> }> };
+        const data = await resp.json() as { results: Array<{ vulns?: Array<{ id: string; summary?: string; database_specific?: { severity?: string } }> }> };
         data.results.forEach((r, i) => {
           for (const v of (r.vulns ?? [])) {
-            vulnerabilities.push({ package: packages[i].name, version: packages[i].version, vuln_id: v.id, severity: v.database_specific?.severity?.toLowerCase() ?? 'unknown', summary: v.summary });
+            vulnerabilities.push({ package: batch[i].name, version: batch[i].version!, vuln_id: v.id, severity: v.database_specific?.severity?.toLowerCase() ?? 'unknown', summary: v.summary ?? '' });
           }
         });
         osvAvailable = true;
+        // querybatch returns ids only — every vuln came back with severity
+        // "unknown" and an empty summary. Fetch the details (bounded).
+        const ids = [...new Set(vulnerabilities.map(v => v.vuln_id))].slice(0, 25);
+        const details = new Map<string, { summary?: string; severity?: string; affected?: Array<{ package?: { name?: string }; ranges?: Array<{ events?: Array<{ fixed?: string }> }> }> }>();
+        await Promise.all(ids.map(async id => {
+          try {
+            const r = await fetch(`https://api.osv.dev/v1/vulns/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(6000) });
+            if (r.ok) {
+              const d = await r.json() as { summary?: string; details?: string; database_specific?: { severity?: string }; affected?: Array<{ package?: { name?: string }; ranges?: Array<{ events?: Array<{ fixed?: string }> }> }> };
+              details.set(id, { summary: d.summary ?? d.details?.slice(0, 200), severity: d.database_specific?.severity, affected: d.affected });
+            }
+          } catch { /* keep the id-only record */ }
+        }));
+        vulnerabilities = vulnerabilities.map(v => {
+          const d = details.get(v.vuln_id);
+          if (!d) return v;
+          const fixed = d.affected?.filter(a => a.package?.name === v.package).flatMap(a => a.ranges ?? []).flatMap(r => r.events ?? []).map(e => e.fixed).filter((f): f is string => !!f);
+          return { ...v, summary: d.summary ?? v.summary, severity: d.severity?.toLowerCase() ?? v.severity, ...(fixed?.length ? { fixed_in: fixed } : {}) };
+        });
+      } else {
+        osvError = `OSV returned HTTP ${resp.status}`;
       }
-    } catch { /* OSV unavailable — proceed without vuln data */ }
+    } catch (e) { osvError = `OSV unreachable: ${e instanceof Error ? e.message : String(e)}`; }
 
     const depRun = await runHandlerAgent('veto_dep_advisor', {
       id: 'dep-1',
       agent: 'dependency-audit',
-      task: 'Analyze these dependencies and produce a risk-ranked upgrade plan. For each vulnerable or outdated package: (1) risk level, (2) recommended version, (3) breaking-change risk, (4) migration steps.',
-      code: JSON.stringify({ packages: packages.slice(0, 20), vulnerabilities }, null, 2).slice(0, 6000),
+      task: 'Produce a risk-ranked upgrade plan for these dependencies.',
+      code: JSON.stringify({ packages: packages.slice(0, 30), vulnerabilities }, null, 2).slice(0, 8000),
+      deliverable: {
+        description: 'From the packages and OSV vulnerabilities in the material, produce an upgrade plan ranked by risk. Only list packages that have a vulnerability or a concrete reason to upgrade; do not invent CVEs.',
+        shape: {
+          upgrade_plan: '[{ "package": "...", "current": "...", "recommended": "<version>", "risk": "critical|high|medium|low", "breaking_change_risk": "high|medium|low", "steps": ["..."] }, ...] ([] if nothing needs upgrading)',
+          summary: '"<one paragraph>"',
+        },
+        required: ['summary'],
+      },
     }, args?.agent_response);
-    const depResult = depRun.result;
 
-    recordOutcome('dep_advisor', 50, 2, 'dependency-audit', depResult.analysis?.score ?? Math.round(depResult.output.confidence * 100));
+    recordOutcome('dep_advisor', 50, 2, 'dependency-audit', depRun.deliverable ? 80 : 50);
 
     return handlerAgentResponse({
       ecosystem,
-      packages_scanned:    packages.length,
+      packages_scanned:      packages.length,
+      packages_checked:      Math.min(checkable.length, 30),
+      unchecked:             packages.filter(p => !p.version).map(p => ({ name: p.name, why: p.version_source })),
       vulnerabilities_found: vulnerabilities.length,
-      vulns:               vulnerabilities,
-      upgrade_plan:        depResult.plan?.approach ?? depResult.output.recommendation ?? '',
-      osv_available:       osvAvailable,
-    }, depRun);
+      vulns:                 vulnerabilities,
+      osv_available:         osvAvailable,
+      ...(osvError ? { osv_error: osvError } : {}),
+      upgrade_plan:          depRun.deliverable?.upgrade_plan ?? null,
+      summary:               depRun.deliverable?.summary ?? null,
+    }, depRun, { generated: ['upgrade_plan', 'summary'] });
   },
 
   veto_query_advisor: async ({ args }) => {
@@ -131,25 +188,34 @@ export const advisorHandlers: HandlerMap = {
     const queryRun = await runHandlerAgent('veto_query_advisor', {
       id: 'query-1',
       agent: 'database',
-      task: 'Analyze this SQL query for performance issues. Provide: (1) Rewritten optimized query, (2) Specific CREATE INDEX statements needed, (3) N+1 query detection if this is part of a loop, (4) Estimated improvement percentage, (5) Index risk assessment (will this lock the table?)',
+      task: 'Optimise this SQL query.',
       code: query.slice(0, 4000),
-      context: [schema && `Schema:\n${schema}`, explainOutput && `EXPLAIN:\n${explainOutput}`].filter(Boolean).join('\n'),
+      context: [schema && `Schema:\n${schema}`, explainOutput && `EXPLAIN:\n${explainOutput}`, issues.length ? `Deterministic checks found:\n${issues.map(i => `- ${i}`).join('\n')}` : ''].filter(Boolean).join('\n\n') || undefined,
+      deliverable: {
+        description: 'Optimise the SQL query in the material using the schema and EXPLAIN output if given. Only propose indexes on columns that exist in the schema (or say the schema is needed).',
+        shape: {
+          optimized_query: '"<rewritten SQL>"',
+          index_statements: '["CREATE INDEX ...", ...] ([] if none needed)',
+          n_plus_one_risk: 'true|false',
+          estimated_improvement: '"<e.g. full scan → index seek; say \'unknown without EXPLAIN\' when it is>"',
+          lock_risk: '"<will creating the indexes lock the table, and how to avoid it>"',
+          recommendations: '["...", ...]',
+        },
+        required: ['optimized_query'],
+      },
     }, args?.agent_response);
-    const queryResult = queryRun.result;
-
-    recordOutcome('query_advisor', 50, 2, 'database', queryResult.analysis?.score ?? Math.round(queryResult.output.confidence * 100));
-
-    const agentOutput = queryResult.plan?.approach ?? queryResult.output.recommendation ?? '';
-    const indexStatements = agentOutput.split('\n').filter((l: string) => /CREATE INDEX/i.test(l)).map((l: string) => l.trim());
+    const qd = queryRun.deliverable;
+    recordOutcome('query_advisor', 50, 2, 'database', qd ? 80 : 50);
 
     return handlerAgentResponse({
-      issues_detected:      issues,
-      optimized_query:      '',
-      index_statements:     indexStatements,
-      n_plus_one_risk:      /n\+1|n \+ 1/i.test(agentOutput),
-      recommendations:      agentOutput,
-      estimated_improvement: '',
-    }, queryRun);
+      issues_detected:       issues,
+      optimized_query:       qd?.optimized_query ?? null,
+      index_statements:      qd?.index_statements ?? null,
+      n_plus_one_risk:       qd?.n_plus_one_risk ?? null,
+      estimated_improvement: qd?.estimated_improvement ?? null,
+      lock_risk:             qd?.lock_risk ?? null,
+      recommendations:       qd?.recommendations ?? null,
+    }, queryRun, { generated: ['optimized_query', 'index_statements', 'n_plus_one_risk', 'estimated_improvement', 'lock_risk', 'recommendations'] });
   },
 
   veto_bundle_advisor: async ({ args }) => {
@@ -158,77 +224,102 @@ export const advisorHandlers: HandlerMap = {
     let statsData: Record<string, unknown> = {};
     try { statsData = JSON.parse(statsRaw); } catch { return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'stats_file is not valid JSON' }) }], isError: true }; }
 
-    // Extract key metrics from webpack stats format
-    const assets = ((statsData.assets as Array<{ name: string; size: number }>) ?? []).sort((a, b) => b.size - a.size).slice(0, 20);
-    const totalSize = assets.reduce((s, a) => s + (a.size ?? 0), 0);
-    const summary = JSON.stringify({
-      total_assets: assets.length,
+    // webpack stats: { assets[], modules[] }. Anything else is not understood —
+    // say so rather than advising on an empty list.
+    const assets = ((statsData.assets as Array<{ name: string; size: number }>) ?? []).filter(a => a && typeof a.size === 'number').sort((a, b) => b.size - a.size);
+    const modules = ((statsData.modules as Array<{ name: string; size: number }>) ?? []).filter(m => m && typeof m.size === 'number').sort((a, b) => b.size - a.size);
+    if (!assets.length && !modules.length) {
+      return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'stats_file has no assets[] or modules[] with sizes. Generate it with `webpack --json > stats.json` (or an equivalent webpack-format stats file).' }) }], isError: true };
+    }
+    const totalSize = assets.reduce((s, a) => s + a.size, 0) || modules.reduce((s, m) => s + m.size, 0);
+    // Packages that appear under more than one path are duplicated in the bundle.
+    const byPackage: Record<string, Set<string>> = {};
+    for (const m of modules) {
+      const pm = m.name.match(/node_modules[\\/]((?:@[^\\/]+[\\/])?[^\\/]+)/g);
+      if (!pm) continue;
+      const pkg = pm[pm.length - 1].replace(/^node_modules[\\/]/, '');
+      const at = m.name.slice(0, m.name.lastIndexOf(pkg));
+      (byPackage[pkg] ??= new Set()).add(at);
+    }
+    const duplicates = Object.entries(byPackage).filter(([, paths]) => paths.size > 1).map(([pkg, paths]) => ({ package: pkg, copies: paths.size }));
+    const facts = {
       total_size_kb: Math.round(totalSize / 1024),
-      top_assets: assets.slice(0, 10).map(a => ({ name: a.name, size_kb: Math.round(a.size / 1024) })),
-    }, null, 2);
+      assets_analyzed: assets.length,
+      heaviest_assets: assets.slice(0, 10).map(a => ({ name: a.name, size_kb: Math.round(a.size / 1024) })),
+      heaviest_modules: modules.slice(0, 15).map(m => ({ name: m.name, size_kb: Math.round(m.size / 1024) })),
+      duplicate_packages: duplicates,
+    };
 
     const bundleRun = await runHandlerAgent('veto_bundle_advisor', {
       id: 'bundle-1',
       agent: 'frontend',
-      task: 'Analyze this bundle stats and provide: (1) Top 10 heaviest modules to target, (2) Duplicate packages to deduplicate, (3) Code-split candidates (lazy-loadable routes or heavy features), (4) Packages safe to move to CDN externals (React, lodash, etc.), (5) Estimated size reduction achievable.',
-      code: summary,
+      task: 'Advise how to shrink this bundle.',
+      code: JSON.stringify(facts, null, 2).slice(0, 6000),
+      deliverable: {
+        description: 'From the bundle facts in the material, say what to cut. Base size estimates only on the sizes shown.',
+        shape: {
+          code_split_candidates: '["<module or route> — why", ...]',
+          externalize: '["<package safe to load from a CDN> — why", ...]',
+          recommendations: '["...", ...]',
+          estimated_reduction_kb: '<number, from the sizes shown>',
+        },
+        required: ['recommendations'],
+      },
     }, args?.agent_response);
-    const bundleResult = bundleRun.result;
-
-    recordOutcome('bundle_advisor', 50, 2, 'frontend', bundleResult.analysis?.score ?? Math.round(bundleResult.output.confidence * 100));
+    const bd = bundleRun.deliverable;
+    recordOutcome('bundle_advisor', 50, 2, 'frontend', bd ? 80 : 50);
 
     return handlerAgentResponse({
-      total_size_kb:        Math.round(totalSize / 1024),
-      assets_analyzed:      assets.length,
-      heaviest_modules:     assets.slice(0, 10).map(a => ({ name: a.name, size_kb: Math.round(a.size / 1024) })),
-      recommendations:      bundleResult.plan?.approach ?? bundleResult.output.recommendation ?? '',
-      estimated_reduction_pct: 0,
-    }, bundleRun);
+      ...facts,
+      code_split_candidates:  bd?.code_split_candidates ?? null,
+      externalize:            bd?.externalize ?? null,
+      recommendations:        bd?.recommendations ?? null,
+      estimated_reduction_kb: bd?.estimated_reduction_kb ?? null,
+    }, bundleRun, { generated: ['code_split_candidates', 'externalize', 'recommendations', 'estimated_reduction_kb'] });
   },
 
   veto_dead_code: async ({ args }) => {
     const projectDir = String(args?.project_dir ?? '').trim();
-    const exts = Array.isArray(args?.extensions) ? (args.extensions as unknown[]).map(String) : ['.ts', '.js'];
-    const includeArgs = exts.map(e => `--include="*${e}"`).join(' ');
+    if (!projectDir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
+    const exts = Array.isArray(args?.extensions) ? (args.extensions as unknown[]).map(String) : ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
 
-    const patterns: Array<{ label: string; regex: string }> = [
-      { label: 'exported but possibly unused', regex: 'export (function|const|class|interface|type)' },
-      { label: 'TODO/FIXME markers',           regex: '// (TODO|FIXME|HACK|XXX)' },
-      { label: 'feature flag patterns',         regex: 'if.*flags?\\.\\w+|if.*feature.*enabled|if.*isEnabled' },
-      { label: 'commented-out code blocks',     regex: '^\\/\\/' },
-    ];
-    let findings = '';
-    for (const { label, regex } of patterns) {
-      try {
-        const out = execSync(`git grep -rn "${regex}" ${includeArgs} -- . ":(exclude)node_modules" ":(exclude)dist"`, { windowsHide: true, cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
-        const lines = out.split('\n').filter(Boolean).slice(0, 20);
-        if (lines.length > 0) findings += `\n=== ${label} (${lines.length} found) ===\n${lines.join('\n')}`;
-      } catch { /* no matches — git grep exits 1 */ }
+    // Real analysis, not a grep that could not match: before 3.7.0 this passed
+    // GNU grep's --include to `git grep` (which rejects it) and used `|` in a
+    // basic regex, so it always reported "No dead code patterns detected".
+    const { unusedExports, codeMarkers } = await import('../worker-evidence.js');
+    const unused = unusedExports(projectDir, exts);
+    const markers = codeMarkers(projectDir, exts);
+    const facts = {
+      files_scanned: unused.files_scanned,
+      exports_found: unused.exports_found,
+      unused_exports: unused.unused,
+      public_api_exports: unused.public_api.length,
+      todo_markers: markers.todos,
+      commented_code_blocks: markers.commented_code_blocks,
+    };
+    if (!unused.unused.length && !markers.commented_code_blocks.length) {
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...facts, summary: `No export is unused and no commented-out code was found in ${unused.files_scanned} files.` }, null, 2) }] };
     }
-    if (!findings) return { content: [{ type: 'text', text: JSON.stringify({ success: true, dead_code_items: [], summary: 'No dead code patterns detected.' }) }] };
 
-    const ctx = buildContextString(projectDir);
     const deadRun = await runHandlerAgent('veto_dead_code', {
       id: 'dead-1',
       agent: 'code-quality',
-      task: 'Identify dead code and safe deletion candidates from these patterns. For each item: (1) is it actually dead/unused?, (2) safe to delete?, (3) deletion risk (high/medium/low). Focus on exports with zero imports, always-true/false flags, and commented blocks older than 6 months.',
-      code: findings.slice(0, 6000),
-      context: ctx || undefined,
+      task: 'Judge which of these candidates are safe to delete.',
+      code: JSON.stringify({ unused_exports: unused.unused.slice(0, 60), commented_code_blocks: markers.commented_code_blocks.slice(0, 30) }, null, 2).slice(0, 8000),
+      context: buildContextString(projectDir) || undefined,
+      deliverable: {
+        description: 'For each candidate in the material (exports no other project file mentions, and commented-out code), judge whether it is really dead. Consider dynamic use, public API, tests, and framework conventions (e.g. Next.js page exports).',
+        shape: { items: '[{ "symbol_or_block": "...", "file": "...", "line": <n>, "dead": true|false, "safe_to_delete": true|false, "risk": "high|medium|low", "why": "..." }, ...]' },
+        required: ['items'],
+      },
     }, args?.agent_response);
-    const deadResult = deadRun.result;
-
-    recordOutcome('dead_code', 50, 2, 'code-quality', deadResult.analysis?.score ?? Math.round(deadResult.output.confidence * 100));
-
-    const agentOut = deadResult.plan?.approach ?? deadResult.output.recommendation ?? '';
-    const safeMatches = agentOut.match(/\blow\b.*\bdelete\b|\bsafe to delete\b|\bsafely removed\b/gi) ?? [];
+    recordOutcome('dead_code', 50, 2, 'code-quality', deadRun.deliverable ? 80 : 50);
 
     return handlerAgentResponse({
-      dead_code_items:  [],
-      total_found:      findings.split('\n').filter(l => l.startsWith('===')).length,
-      safe_to_delete:   safeMatches.length,
-      recommendations:  agentOut,
-      council_note:     'Run veto_council_debate before deleting any exports to check downstream impact.',
-    }, deadRun);
+      ...facts,
+      assessment: deadRun.deliverable?.items ?? null,
+      council_note: 'Run veto_council_debate before deleting exports another package might use.',
+    }, deadRun, { generated: ['assessment'] });
   },
 
   veto_hitl_checkpoint: ({ args }) => {
@@ -276,54 +367,62 @@ export const advisorHandlers: HandlerMap = {
     const writeFileArg = args?.write_file === true;
     const framework  = String(args?.framework ?? 'auto');
 
+    // Route definitions, found by what the code says rather than what the file
+    // is called: before 3.7.0 only files NAMED route/router/api/controller were
+    // read, so an Express app in src/app.ts had "no route files".
+    const ROUTE_RE = /\b(?:app|router|server|api|fastify)\.(?:get|post|put|patch|delete|route|all)\s*\(|@(?:Get|Post|Put|Patch|Delete|RequestMapping|GetMapping|PostMapping)\s*\(|@(?:app|router|bp|blueprint)\.(?:route|get|post|put|patch|delete)\s*\(|\bHandleFunc\s*\(|\bexport\s+(?:async\s+)?function\s+(?:GET|POST|PUT|PATCH|DELETE)\b/;
     let routeContent = '';
+    const routeFiles: string[] = [];
     if (filePath) {
-      try { routeContent = readFileSync(filePath, 'utf8').slice(0, 10000); } catch (e) { return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Cannot read ${filePath}: ${e}` }) }], isError: true }; }
+      try { routeContent = readFileSync(filePath, 'utf8').slice(0, 10000); routeFiles.push(filePath); } catch (e) { return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Cannot read ${filePath}: ${e}` }) }], isError: true }; }
     } else if (projectDir) {
-      try {
-        const candidates = execSync(
-          'git ls-files --cached -- "*.ts" "*.js" "*.py"',
-          { windowsHide: true, cwd: projectDir, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }
-        ).toString().split('\n').filter((f: string) => /route|router|api|endpoint|controller/i.test(f) && !f.includes('node_modules') && !f.includes('dist/')).slice(0, 5);
-        for (const f of candidates) {
-          try { routeContent += `\n// FILE: ${f}\n${readFileSync(join(projectDir, f), 'utf8').slice(0, 3000)}\n`; } catch { /* skip */ }
-        }
-      } catch { /* not a git repo */ }
+      const { listProjectFiles } = await import('../worker-evidence.js');
+      for (const f of listProjectFiles(projectDir, ['.ts', '.tsx', '.js', '.mjs', '.cjs', '.py', '.go', '.java', '.kt'])) {
+        if (routeFiles.length >= 8 || routeContent.length > 16000) break;
+        let text = '';
+        try { text = readFileSync(join(projectDir, f), 'utf8'); } catch { continue; }
+        if (!ROUTE_RE.test(text)) continue;
+        routeFiles.push(f);
+        routeContent += `\n// FILE: ${f}\n${text.slice(0, 4000)}\n`;
+      }
     }
-    if (!routeContent) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No route files found. Provide file_path or project_dir with route files.' }) }], isError: true };
+    if (!routeContent) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'No route definitions found (Express/Fastify/Nest/Flask/FastAPI/Spring/Go http/Next.js route handlers). Pass file_path to point at one.' }) }], isError: true };
+    const routesDetected = routeContent.split('\n').filter(l => ROUTE_RE.test(l)).length;
 
     const openapiRun = await runHandlerAgent('veto_openapi_gen', {
       id:    'openapi-1',
       agent: 'api' as WorkerAgentType,
-      task:  `Generate a complete OpenAPI 3.1 specification in YAML format for these ${framework === 'auto' ? 'API' : framework} route definitions. Include: info block (title, version), servers, all paths with HTTP methods, request body schemas, response schemas (200, 400, 401, 404, 500), and security schemes if auth is detected. Output ONLY valid YAML — no markdown fences, no explanation.`,
+      task:  `Write the OpenAPI 3.1 spec for these ${framework === 'auto' ? '' : framework + ' '}routes.`,
       code:  routeContent,
+      deliverable: {
+        description: 'Write an OpenAPI 3.1 specification (YAML) covering exactly the routes in the material: every path and method, parameters, request bodies and responses inferred from the handlers, and security schemes only if auth is visible in the code.',
+        shape: { spec: '"<YAML starting with openapi: 3.1.0>"', unknowns: '["<what could not be inferred from the code>", ...]' },
+        required: ['spec'],
+        max_tokens: 8000,
+      },
     }, args?.agent_response);
-    const openapiResult = openapiRun.result;
 
-    const rawSpec = openapiResult.plan?.approach ?? openapiResult.output.recommendation ?? '';
-    const specLines = rawSpec.split('\n');
-    const specStart = specLines.findIndex((l: string) => /^(openapi:|info:)/.test(l.trim()));
-    const spec = specStart >= 0 ? specLines.slice(specStart).join('\n').trim() : rawSpec.trim();
+    let spec = typeof openapiRun.deliverable?.spec === 'string' ? openapiRun.deliverable.spec.replace(/^```(?:ya?ml)?\s*|```\s*$/g, '').trim() : null;
+    const problem = spec && !/^openapi:\s*3\./m.test(spec) ? 'The generated text is not an OpenAPI 3 document (no "openapi: 3.x" line), so it was not returned or written.' : null;
+    if (problem) spec = null;
 
     let writtenTo: string | null = null;
     if (writeFileArg && projectDir && spec) {
-      try {
-        const outPath = join(projectDir, 'openapi.yaml');
-        writeFileSync(outPath, spec, 'utf8');
-        writtenTo = outPath;
-      } catch { /* skip write errors */ }
+      const outPath = join(projectDir, 'openapi.yaml');
+      writeFileSync(outPath, spec + '\n', 'utf8');
+      writtenTo = outPath;
     }
-
-    const routeLineCount = (routeContent.match(/\bget\b|\bpost\b|\bput\b|\bpatch\b|\bdelete\b/gi) ?? []).length;
-
-    recordOutcome('openapi_gen', 50, 2, 'api', openapiResult.analysis?.score ?? Math.round(openapiResult.output.confidence * 100));
+    recordOutcome('openapi_gen', 50, 2, 'api', spec ? 80 : 40);
 
     return handlerAgentResponse({
-      spec,
-      written_to:       writtenTo,
-      routes_detected:  routeLineCount,
+      route_files:      routeFiles,
+      routes_detected:  routesDetected,
       framework,
-    }, openapiRun);
+      spec,
+      unknowns:         openapiRun.deliverable?.unknowns ?? null,
+      written_to:       writtenTo,
+      ...(problem ? { problem } : {}),
+    }, openapiRun, { generated: ['spec', 'unknowns'] });
   },
 
   veto_flag_auditor: async ({ args }) => {
@@ -332,55 +431,39 @@ export const advisorHandlers: HandlerMap = {
 
     if (!projectDir) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'project_dir is required.' }) }], isError: true };
 
-    const patterns = [
-      { label: 'LaunchDarkly', regex: 'ldClient\\.variation|isFeatureEnabled|client\\.boolVariation' },
-      { label: 'Unleash',      regex: 'isEnabled\\(|getVariant\\(|unleash\\.isEnabled' },
-      { label: 'Custom flags', regex: 'flags?\\[|flags?\\.\\w+|feature[Ff]lag|isFeature|FEATURE_' },
-      { label: 'Env-based flags', regex: 'process\\.env\\.FEATURE_|process\\.env\\.ENABLE_|process\\.env\\.FF_' },
-    ];
-
-    let findings = '';
-    let totalMatches = 0;
-    for (const { label, regex } of patterns) {
-      try {
-        const out = execSync(
-          `git grep -rn "${regex}" --include="*.ts" --include="*.js" --include="*.py" -- . ":(exclude)node_modules" ":(exclude)dist"`,
-          { windowsHide: true, cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }
-        ).toString();
-        const lines = out.split('\n').filter(Boolean);
-        totalMatches += lines.length;
-        if (lines.length > 0) findings += `\n=== ${label} (${lines.length} occurrences) ===\n${lines.slice(0, 15).join('\n')}`;
-      } catch { /* no matches */ }
-    }
-
-    if (!findings) return { content: [{ type: 'text', text: JSON.stringify({ success: true, flags_found: 0, flag_items: [], summary: 'No feature flag patterns detected.' }) }] };
+    // A real scan (the old `git grep --include=` call always failed, so this
+    // tool always reported 0 flags).
+    const { featureFlags } = await import('../worker-evidence.js');
+    const scan = featureFlags(projectDir);
+    const flags = sdk === 'auto' ? scan.flags : scan.flags.filter(f => f.sdk === sdk || (sdk === 'custom' && f.sdk === 'env'));
+    if (!flags.length) return { content: [{ type: 'text', text: JSON.stringify({ success: true, flags_found: 0, flags: [], summary: 'No feature-flag usage found.' }, null, 2) }] };
 
     const flagRun = await runHandlerAgent('veto_flag_auditor', {
       id:    'flags-1',
       agent: 'code-quality' as WorkerAgentType,
-      task:  'Analyze these feature flag usages and classify each unique flag as: (1) ACTIVE — still toggled in code and worth keeping, (2) CANDIDATE_REMOVAL — always-true/always-false or deprecated, (3) ORPHANED — referenced but flag definition not found. For each, provide: flag name, classification, last-seen location, and safe-to-remove assessment.',
-      code:  findings.slice(0, 6000),
+      task:  'Classify these feature flags.',
+      code:  JSON.stringify(flags.slice(0, 60), null, 2).slice(0, 8000),
+      deliverable: {
+        description: 'Classify each flag in the material as ACTIVE (still meaningfully toggled), CANDIDATE_REMOVAL (always on/off or obsolete) or ORPHANED (read but never defined/set). Say what evidence each classification rests on.',
+        shape: { flags: '[{ "name": "...", "classification": "ACTIVE|CANDIDATE_REMOVAL|ORPHANED", "safe_to_remove": true|false, "why": "..." }, ...]' },
+        required: ['flags'],
+      },
     }, args?.agent_response);
-    const flagResult = flagRun.result;
+    recordOutcome('flag_audit', 50, 2, 'code-quality', flagRun.deliverable ? 80 : 50);
 
-    const agentOut = flagResult.plan?.approach ?? flagResult.output.recommendation ?? '';
-    recordOutcome('flag_audit', 50, 2, 'code-quality', flagResult.analysis?.score ?? Math.round(flagResult.output.confidence * 100));
-
-    // Parse a rough count from agentOut heuristics
-    const activeCount    = (agentOut.match(/ACTIVE/g) ?? []).length;
-    const removalCount   = (agentOut.match(/CANDIDATE_REMOVAL/g) ?? []).length;
-    const orphanedCount  = (agentOut.match(/ORPHANED/g) ?? []).length;
-
+    const classified = Array.isArray(flagRun.deliverable?.flags) ? flagRun.deliverable!.flags as Array<{ classification?: string }> : null;
+    const count = (c: string) => classified ? classified.filter(f => f.classification === c).length : null;
     return handlerAgentResponse({
-      flags_found:        totalMatches,
-      active:             activeCount,
-      candidate_removal:  removalCount,
-      orphaned:           orphanedCount,
-      flag_items:         [],
-      recommendations:    agentOut,
-      sdk_detected:       sdk === 'auto' ? (findings.includes('ldClient') ? 'launchdarkly' : findings.includes('unleash') ? 'unleash' : 'custom') : sdk,
-      council_note:       'Run veto_council_debate before removing any flags to assess downstream risk.',
-    }, flagRun);
+      flags_found:       flags.length,
+      occurrences:       flags.reduce((n, f) => n + f.locations.length, 0),
+      flags,
+      sdks_seen:         [...new Set(flags.map(f => f.sdk))],
+      classification:    classified,
+      active:            count('ACTIVE'),
+      candidate_removal: count('CANDIDATE_REMOVAL'),
+      orphaned:          count('ORPHANED'),
+      council_note:      'Run veto_council_debate before removing any flags to assess downstream risk.',
+    }, flagRun, { generated: ['classification', 'active', 'candidate_removal', 'orphaned'] });
   },
 
   veto_drift_check: async ({ args }) => {
@@ -527,14 +610,26 @@ export const advisorHandlers: HandlerMap = {
       driftRun = await runHandlerAgent('veto_drift_check', {
         id: `drift-${Date.now().toString(36)}`,
         agent: 'debugger' as WorkerAgentType,
-        task: `The AI coding assistant is verifying its session for compounding errors or loops. Analyze this trace. Under 'Remediation Plan', list 2-3 specific actions the AI should take to break the loop (e.g. read a specific file, check for syntax errors, check if a mock server is down, revert a commit).`,
+        task: 'Check this session trace for compounding errors or loops.',
         code: JSON.stringify(analysisPayload, null, 2),
         project_dir: projectDir,
+        deliverable: {
+          description: 'The AI coding assistant is checking its own session for compounding errors or loops. From the trace and heuristics in the material, list the specific actions that would break the loop (read a specific file, check a syntax error, check whether a server is down, revert a commit...).',
+          shape: { remediation_plan: '["<specific action>", ...] 2-3 items, or [] if there is no loop' },
+          required: [],
+        },
       }, args?.agent_response);
-      const agentResult = driftRun.result;
-
-      agentOut = agentResult.plan?.approach ?? agentResult.output.recommendation ?? '';
-      recommendations = agentOut;
+      if (driftRun.error) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: driftRun.error }, null, 2) }], isError: true };
+      }
+      const plan = Array.isArray(driftRun.deliverable?.remediation_plan) ? (driftRun.deliverable!.remediation_plan as unknown[]).map(String) : null;
+      if (plan) {
+        agentOut = plan.join('\n');
+        recommendations = plan.length ? plan.map((s, i) => `${i + 1}. ${s}`).join('\n') : recommendations;
+      } else if (verdict !== 'GREEN') {
+        // No LLM ran: the heuristics above are real; the remediation is not written yet.
+        recommendations = 'Loop indicators found (see above). Remediation needs the LLM step — see llm_upgrade.';
+      }
     }
 
     recordOutcome('drift_check', 30, 2, 'debugger', verdict === 'RED' ? 30 : verdict === 'YELLOW' ? 60 : 95);

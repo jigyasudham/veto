@@ -41,106 +41,6 @@ function printBanner() {
   console.log('');
 }
 
-// Merge veto entry into an existing JSON config file, creating it if needed.
-// Supports both "mcpServers" format (Gemini/Cursor/Windsurf) and "context_servers" (Zed)
-// and "servers" format (VS Code).
-function writeVetoConfig(
-  configPath: string,
-  format: 'mcpServers' | 'servers' | 'context_servers'
-): 'created' | 'updated' | 'skipped' {
-  let existing: Record<string, unknown> = {};
-
-  if (existsSync(configPath)) {
-    try {
-      existing = JSON.parse(readFileSync(configPath, 'utf8'));
-    } catch {
-      // Unreadable / invalid JSON — skip to avoid corrupting it
-      return 'skipped';
-    }
-  } else {
-    mkdirSync(dirname(configPath), { recursive: true });
-  }
-
-  const wasEmpty = Object.keys(existing).length === 0;
-
-  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-  if (format === 'mcpServers') {
-    const servers = (existing.mcpServers as Record<string, unknown>) ?? {};
-    servers['veto'] = { command: npxCmd, args: ['-y', '--package', '@jigyasudham/veto@latest', 'veto-server'] };
-    existing.mcpServers = servers;
-  } else if (format === 'context_servers') {
-    const servers = (existing.context_servers as Record<string, unknown>) ?? {};
-    servers['veto'] = { command: npxCmd, args: ['-y', '--package', '@jigyasudham/veto@latest', 'veto-server'] };
-    existing.context_servers = servers;
-  } else {
-    const servers = (existing.servers as Record<string, unknown>) ?? {};
-    servers['veto'] = { type: 'stdio', command: npxCmd, args: ['-y', '--package', '@jigyasudham/veto@latest', 'veto-server'] };
-    existing.servers = servers;
-  }
-
-  writeFileSync(configPath, JSON.stringify(existing, null, 2) + '\n', 'utf8');
-  return wasEmpty ? 'created' : 'updated';
-}
-
-// Append a [mcp_servers.veto] section to a TOML config file (used for Codex CLI fallback).
-function writeVetoTomlEntry(configPath: string): 'created' | 'updated' | 'skipped' {
-  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-  try {
-    let existing = '';
-    if (existsSync(configPath)) {
-      try { existing = readFileSync(configPath, 'utf8'); } catch { return 'skipped'; }
-      if (/\[mcp_servers\.veto\]/.test(existing)) return 'updated';
-    }
-    const entry = `\n[mcp_servers.veto]\ncommand = '${npxCmd}'\nargs = ['-y', '--package', '@jigyasudham/veto@latest', 'veto-server']\n`;
-    writeFileSync(configPath, existing + entry, 'utf8');
-    return existing.trim() === '' ? 'created' : 'updated';
-  } catch {
-    return 'skipped';
-  }
-}
-
-// All platforms Veto supports, with their config paths and formats.
-// Claude Code and Codex CLI are NOT in this list — they are handled separately via
-// their own CLIs (`claude mcp add -s user` / `codex mcp add`) because they store MCP
-// registrations internally and do NOT read plain mcpServers JSON files.
-const PLATFORMS = [
-  {
-    name: 'Gemini CLI',
-    path: join(HOME, '.gemini', 'settings.json'),
-    format: 'mcpServers' as const,
-    detectionDir: join(HOME, '.gemini'),
-  },
-  {
-    name: 'Antigravity CLI',
-    path: join(HOME, '.gemini', 'antigravity-cli', 'mcp_config.json'),
-    format: 'mcpServers' as const,
-    detectionDir: join(HOME, '.gemini', 'antigravity-cli'),
-  },
-  {
-    name: 'Cursor',
-    path: join(HOME, '.cursor', 'mcp.json'),
-    format: 'mcpServers' as const,
-    detectionDir: join(HOME, '.cursor'),
-  },
-  {
-    name: 'Windsurf',
-    path: join(HOME, '.codeium', 'windsurf', 'mcp_config.json'),
-    format: 'mcpServers' as const,
-    detectionDir: join(HOME, '.codeium', 'windsurf'),
-  },
-  {
-    name: 'Zed',
-    // macOS/Linux: ~/.config/zed/settings.json  |  Windows: %APPDATA%\Zed\settings.json
-    path: process.platform === 'win32'
-      ? join(process.env.APPDATA ?? HOME, 'Zed', 'settings.json')
-      : join(HOME, '.config', 'zed', 'settings.json'),
-    format: 'context_servers' as const,
-    detectionDir: process.platform === 'win32'
-      ? join(process.env.APPDATA ?? HOME, 'Zed')
-      : join(HOME, '.config', 'zed'),
-  },
-];
-
 async function initCommand() {
   printBanner();
 
@@ -216,104 +116,62 @@ async function initCommand() {
   let configured = 0;
   let skipped = 0;
 
-  // ── Claude Code: use `claude mcp add -s user` (global across all windows/projects) ──
-  // Claude Code does NOT read mcp_servers.json — it manages MCPs via its own registry.
-  // The -s user flag stores the config at user scope so every window/project picks it up.
-  const claudeDir = join(HOME, '.claude');
-  if (existsSync(claudeDir)) {
-    // Use npx.cmd on Windows — Claude Code cannot resolve a bare `npx` there.
-    const npxBin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-    const mcpCmd = `claude mcp add veto -s user -- ${npxBin} -y --package @jigyasudham/veto@latest veto-server`;
-    try {
-      execSync(mcpCmd, { windowsHide: true, stdio: 'pipe', timeout: 15000 });
-      console.log(c.green('  ✓ ') + 'Claude Code — registered (user scope: all windows & projects)');
-      configured++;
-    } catch (err: unknown) {
-      const stderr = (err instanceof Error && 'stderr' in err) ? String((err as NodeJS.ErrnoException & { stderr?: Buffer }).stderr) : '';
-      // "already exists" means it was previously registered. But a stale entry can be
-      // BROKEN — e.g. an old `node <global-install>/dist/server.js` that stops resolving
-      // once the global install is removed (`npm rm -g`). Detect that and self-repair.
-      if (/already|exists/i.test(stderr)) {
-        if (repairBrokenClaudeEntry(join(HOME, '.claude.json'), mcpCmd)) {
-          console.log(c.green('  ✓ ') + 'Claude Code — repaired stale registration (was pointing at a missing file)');
-        } else {
-          console.log(c.green('  ✓ ') + 'Claude Code — already registered (user scope)');
-        }
-        configured++;
-      } else {
-        // claude CLI not in PATH — fall back to ~/.claude/settings.json directly
-        const result = writeVetoConfig(join(claudeDir, 'settings.json'), 'mcpServers');
-        if (result === 'skipped') {
-          console.log(c.yellow('  ⚠ ') + 'Claude Code — could not auto-configure. Run manually:');
-          console.log(c.dim(`          ${mcpCmd}`));
-          skipped++;
-        } else {
-          console.log(c.yellow('  ⚠ ') + `Claude Code — wrote settings.json (restart Claude Code)`);
-          console.log(c.dim(`         For global scope, also run: ${mcpCmd}`));
-          configured++;
-        }
-      }
-    }
-  } else {
-    console.log(c.dim('  · ') + c.dim('Claude Code — not detected, skipping'));
-  }
-
-  // ── Codex CLI: use `codex mcp add` (writes to config.toml, NOT config.json) ──
-  // Codex CLI stores MCP servers under [mcp_servers.name] in config.toml.
-  // Writing to config.json with mcpServers format has no effect on Codex.
-  const codexDir = join(HOME, '.codex');
-  if (existsSync(codexDir)) {
-    const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-    const codexMcpCmd = `codex mcp add veto -- ${npxCmd} -y --package @jigyasudham/veto@latest veto-server`;
-    try {
-      execSync(codexMcpCmd, { windowsHide: true, stdio: 'pipe', timeout: 15000 });
-      console.log(c.green('  ✓ ') + 'Codex CLI — registered');
-      configured++;
-    } catch (err: unknown) {
-      const stderr = (err instanceof Error && 'stderr' in err) ? String((err as NodeJS.ErrnoException & { stderr?: Buffer }).stderr) : '';
-      if (/already|exists/i.test(stderr)) {
-        console.log(c.green('  ✓ ') + 'Codex CLI — already registered');
-        configured++;
-      } else {
-        // codex CLI not in PATH — write directly to config.toml
-        const tomlResult = writeVetoTomlEntry(join(codexDir, 'config.toml'));
-        if (tomlResult === 'skipped') {
-          console.log(c.yellow('  ⚠ ') + 'Codex CLI — could not auto-configure. Run manually:');
-          console.log(c.dim(`          ${codexMcpCmd}`));
-          skipped++;
-        } else {
-          console.log(c.yellow('  ⚠ ') + 'Codex CLI — wrote config.toml (restart Codex to pick up)');
-          configured++;
-        }
-      }
-    }
-  } else {
-    console.log(c.dim('  · ') + c.dim('Codex CLI — not detected, skipping'));
-  }
-
-  // ── All other platforms: write global config files ─────────────────────────
-  for (const platform of PLATFORMS) {
-    const detected = existsSync(platform.detectionDir);
-    if (!detected) {
-      console.log(c.dim('  · ') + c.dim(`${platform.name} — not installed, skipping`));
+  // Every host from one table (cli/hosts.ts). A host's own CLI registers Veto
+  // where that host reads it; a file is written only when the CLI is absent,
+  // and only a file the host is known to read.
+  const { hostSpecs, detectHost, serverCommand } = await import('./cli/hosts.js');
+  const { registerHost } = await import('./cli/register.js');
+  const { command: npxBin, args: serverArgs } = serverCommand();
+  for (const spec of hostSpecs()) {
+    const installed = detectHost(spec);
+    if (!installed.installed) {
+      console.log(c.dim('  · ') + c.dim(`${spec.name} — not installed, skipping`));
       continue;
     }
-
-    const result = writeVetoConfig(platform.path, platform.format);
-
-    if (result === 'skipped') {
-      console.log(c.yellow('  ⚠ ') + `${platform.name} — config unreadable, skipped`);
+    const outcome = registerHost(spec, installed);
+    if (outcome.status === 'manual') {
+      console.log(c.yellow('  ⚠ ') + `${spec.name} — not registered: ${outcome.detail}`);
+      for (const line of outcome.instructions) console.log(c.dim(`          ${line.replace(/\n/g, '\n          ')}`));
       skipped++;
-    } else if (result === 'created') {
-      console.log(c.green('  ✓ ') + `${platform.name} — configured (restart ${platform.name} to pick up)`);
-      configured++;
-    } else {
-      console.log(c.green('  ✓ ') + `${platform.name} — updated (restart ${platform.name} to pick up)`);
-      configured++;
+      continue;
     }
+    if (outcome.status === 'skipped') {
+      console.log(c.dim('  · ') + c.dim(`${spec.name} — ${outcome.detail}`));
+      continue;
+    }
+    if (spec.id === 'claude' && outcome.status === 'already') {
+      // An old entry can point at a deleted global install; heal it in place.
+      const mcpCmd = ['claude', 'mcp', 'add', 'veto', '-s', 'user', '--', npxBin, ...serverArgs].join(' ');
+      if (repairBrokenClaudeEntry(join(HOME, '.claude.json'), mcpCmd)) {
+        console.log(c.green('  ✓ ') + 'Claude Code — repaired stale registration (was pointing at a missing file)');
+        configured++;
+        continue;
+      }
+    }
+    const how = outcome.via === 'cli' ? outcome.detail : `wrote ${outcome.detail}`;
+    const verb = outcome.status === 'already' ? 'already registered' : outcome.status === 'updated' ? 'updated' : 'registered';
+    console.log(c.green('  ✓ ') + `${spec.name} — ${verb} ${c.dim(`(${how})`)}`);
+    if (outcome.status !== 'already' && outcome.backup) console.log(c.dim(`          previous file kept as ${outcome.backup}`));
+    for (const legacy of spec.legacyConfigs ?? []) {
+      if (existsSync(legacy)) console.log(c.dim(`          note: ${legacy} is an old location ${spec.name} no longer reads`));
+    }
+    configured++;
   }
 
   console.log('');
+
+  // Veto-owned fallback skill: the one instruction an AI still sees when its
+  // host failed to start Veto (cli/fallback-skill.ts).
+  {
+    const { writeFallbackSkill } = await import('./cli/fallback-skill.js');
+    const dirs = hostSpecs().filter(s => detectHost(s).installed).flatMap(s => s.skillDirs ?? []);
+    for (const w of writeFallbackSkill(dirs)) {
+      const where = join(w.dir, 'veto', 'SKILL.md');
+      if (w.result === 'written' || w.result === 'updated') console.log(c.green('  ✓ ') + `Fallback skill ${w.result} ${c.dim(where)}`);
+      else if (w.result === 'foreign') console.log(c.dim('  · ') + c.dim(`${where} is your own skill — left untouched`));
+      else if (w.result === 'failed') console.log(c.yellow('  ⚠ ') + `Could not write ${where}`);
+    }
+  }
 
   // 5. Write platform-specific context guidance files
   // These are read at session start by each AI client — zero tool calls needed.
@@ -346,6 +204,10 @@ Recommended start sequence:
 3. veto_route_task — pick the right agent
 4. veto_diff_review — validate before shipping
 5. veto_session_save — checkpoint before context fills
+
+**If no veto_* tool is available** (Veto did not load in this app): say so in one
+sentence, then use the CLI, which runs the same code — \`veto continue <id> --as <client>\`,
+\`veto sessions --all\`, \`veto doctor\`. Never read ~/.veto/veto.db or import Veto's files.
 `;
 
   let ctxWritten = 0;
@@ -399,80 +261,16 @@ Recommended start sequence:
 
   if (ctxWritten > 0) console.log('');
 
-  // 6. Write Claude Code hook templates to .claude/hooks/ in current project
-  // Hooks enforce secrets scanning on every file write and auto-save before compaction.
-  if (existsSync(claudeDir)) {
-    const hooksDir = join(cwd, '.claude', 'hooks');
-    const settingsPath = join(cwd, '.claude', 'settings.json');
-    try {
-      mkdirSync(hooksDir, { recursive: true });
-
-      // Secrets scan — bash (Mac/Linux)
-      const shLines = [
-        '#!/usr/bin/env bash',
-        '# Veto hook: scan written files for exposed secrets (no API key needed).',
-        '# Triggered by Claude Code PostToolUse after Write/Edit tool calls.',
-        'FILE="$1"',
-        '[ -z "$FILE" ] && exit 0',
-        '[ ! -f "$FILE" ] && exit 0',
-        "PATTERNS='(api[_-]?key|secret[_-]?key|password|passwd|token|access[_-]?key|private[_-]?key)\\s*[=:]\\s*[A-Za-z0-9+/]{20,}'",
-        'if grep -qiE "$PATTERNS" "$FILE" 2>/dev/null; then',
-        '  echo "Veto: possible secret detected in $FILE — run veto_secrets_scan to confirm"',
-        '  exit 1',
-        'fi',
-        'exit 0',
-        '',
-      ];
-      writeFileSync(join(hooksDir, 'veto-secrets-scan.sh'), shLines.join('\n'), 'utf8');
-
-      // Secrets scan — PowerShell (Windows)
-      const ps1Lines = [
-        '# Veto hook: scan written files for exposed secrets (no API key needed).',
-        'param([string]$File)',
-        'if (-not $File -or -not (Test-Path $File)) { exit 0 }',
-        "$pattern = '(api[_-]?key|secret[_-]?key|password|passwd|token|access[_-]?key|private[_-]?key)\\s*[=:]\\s*[A-Za-z0-9+/]{20,}'",
-        'if (Select-String -Path $File -Pattern $pattern -Quiet -CaseSensitive:$false) {',
-        '  Write-Host "Veto: possible secret detected in $File — run veto_secrets_scan to confirm"',
-        '  exit 1',
-        '}',
-        'exit 0',
-        '',
-      ];
-      writeFileSync(join(hooksDir, 'veto-secrets-scan.ps1'), ps1Lines.join('\n'), 'utf8');
-
-      // Phase 1.4: Write standard hook files that Claude Code looks for
-      const postFileWrite = process.platform === 'win32'
-        ? `@powershell -NoProfile -ExecutionPolicy Bypass -File ".claude\\hooks\\veto-secrets-scan.ps1" "%1"`
-        : `#!/bin/sh\n./.claude/hooks/veto-secrets-scan.sh "$1"`;
-
-      const preCompact = process.platform === 'win32'
-        ? `@npx -y @jigyasudham/veto veto_session_save --auto_summarize=true`
-        : `#!/bin/sh\nnpx -y @jigyasudham/veto veto_session_save --auto_summarize=true`;
-
-      writeFileSync(join(hooksDir, 'post-file-write'), postFileWrite, { mode: 0o755 });
-      writeFileSync(join(hooksDir, 'pre-compact'), preCompact, { mode: 0o755 });
-
-      // Wire hooks into .claude/settings.json if it exists or create it
-      let projectSettings: Record<string, unknown> = {};
-      if (existsSync(settingsPath)) {
-        try { projectSettings = JSON.parse(readFileSync(settingsPath, 'utf8')); } catch { /* leave empty */ }
-      } else {
-        mkdirSync(dirname(settingsPath), { recursive: true });
-      }
-      const hooks = (projectSettings.hooks as Record<string, unknown>) ?? {};
-      // Only add if not already configured
-      if (!hooks['PostToolUse']) {
-        const scanCmd = process.platform === 'win32'
-          ? 'powershell -ExecutionPolicy Bypass -File .claude/hooks/veto-secrets-scan.ps1 "$CLAUDE_TOOL_INPUT_FILE_PATH"'
-          : 'bash .claude/hooks/veto-secrets-scan.sh "$CLAUDE_TOOL_INPUT_FILE_PATH"';
-        hooks['PostToolUse'] = [{ matcher: 'Write|Edit', hooks: [{ type: 'command', command: scanCmd }] }];
-        projectSettings.hooks = hooks;
-        writeFileSync(settingsPath, JSON.stringify(projectSettings, null, 2) + '\n', 'utf8');
-        console.log(c.green('  ✓ ') + 'Claude Code — wrote .claude/hooks/veto-secrets-scan + PostToolUse hook entry');
-      } else {
-        console.log(c.dim('  · ') + c.dim('Claude Code — PostToolUse hook already configured, skipping'));
-      }
-    } catch { console.log(c.yellow('  ⚠ ') + 'Claude Code — could not write hook templates (permission denied?)'); }
+  // 6. Claude Code secrets-scan hook for this project (cli/claude-hook.ts).
+  // Older inits installed one that never fired; this replaces it in place.
+  if (detectHost(hostSpecs().find(s => s.id === 'claude')!).installed) {
+    const { installClaudeHook } = await import('./cli/claude-hook.js');
+    const r = installClaudeHook(cwd);
+    if (r.settings === 'migrated') console.log(c.green('  ✓ ') + 'Claude Code — replaced the old secrets-scan hook, which never ran, with a working one');
+    else if (r.settings === 'added') console.log(c.green('  ✓ ') + 'Claude Code — added a secrets-scan hook for Write/Edit in .claude/settings.json');
+    else if (r.settings === 'present') console.log(c.dim('  · ') + c.dim('Claude Code — secrets-scan hook already installed'));
+    else console.log(c.yellow('  ⚠ ') + 'Claude Code — could not update .claude/settings.json (invalid JSON or no permission)');
+    for (const f of r.removedDeadFiles) console.log(c.dim(`          removed ${f} (Claude Code never ran it)`));
     console.log('');
   }
 
@@ -482,13 +280,13 @@ Recommended start sequence:
     console.log('');
   } else {
     console.log('');
-    console.log(c.green(`  ✓ Veto configured for ${configured} tool${configured !== 1 ? 's' : ''}!`));
+    console.log(c.green(`  ✓ Veto registered with ${configured} app${configured !== 1 ? 's' : ''}.`));
+    if (skipped > 0) console.log(c.yellow(`  ⚠ ${skipped} app${skipped !== 1 ? 's' : ''} still need${skipped === 1 ? 's' : ''} the manual step shown above.`));
     console.log('');
     console.log('  Next steps:');
     console.log(c.dim('  1.') + ' Fully restart each configured AI client (not just reload)');
-    console.log(c.dim('  2.') + ' For Claude Code: config is user-scoped — every window picks it up automatically');
-    console.log(c.dim('  3.') + ' For Gemini / Cursor / Windsurf / Zed: config is written globally to your home dir');
-    console.log(c.dim('  4.') + ' Verify: call veto_status in your AI client — should return { "status": "running" }');
+    console.log(c.dim('  2.') + ' Registration is global — every window and project picks it up');
+    console.log(c.dim('  3.') + ` Confirm: ${c.cyan('veto doctor')} — shows, per app, whether it has actually started Veto`);
     console.log('');
     console.log(c.dim('  Tip: run `veto init` again anytime to install newly-added AI tools.'));
     console.log('');
@@ -563,7 +361,7 @@ Recommended start sequence:
 
 // ─── Doctor Command ─────────────────────────────────────────────────────────────
 
-async function doctorCommand(fix = false) {
+async function doctorCommand(fix = false, quick = false) {
   console.log('');
   console.log(c.bold('  Veto Doctor') + c.dim(' — system health check'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
@@ -571,12 +369,15 @@ async function doctorCommand(fix = false) {
 
   let issues = 0;
 
-  // Node.js version
-  const nodeMajor = parseInt(process.version.slice(1).split('.')[0], 10);
-  if (nodeMajor >= 22) {
-    console.log(`  ${c.green('✓')} Node.js ${process.version}`);
+  // Node.js — ask the runtime whether node:sqlite actually loads. A "major >= 22"
+  // check (what doctor did until 3.7.0) passed 22.5–22.12, where the module
+  // exists only behind a flag and persistence is dead; init was fixed for this
+  // long ago and doctor was not.
+  const { sqliteAvailable: sqliteOk } = await import('./memory/local.js');
+  if (sqliteOk()) {
+    console.log(`  ${c.green('✓')} Node.js ${process.version} ${c.dim('(this terminal)')}`);
   } else {
-    console.log(`  ${c.red('✗')} Node.js ${process.version} — need >= 22`);
+    console.log(`  ${c.red('✗')} Node.js ${process.version} — Veto needs >= 22.13 (or >= 23.4) for node:sqlite; persistence will not work`);
     issues++;
   }
 
@@ -692,105 +493,95 @@ async function doctorCommand(fix = false) {
   } catch { /* a health check never fails on its own checks */ }
 
   console.log('');
-  console.log('  ' + c.bold('MCP Registrations'));
+  console.log('  ' + c.bold('AI apps') + c.dim(quick ? ' — registration only (--quick skips the launch test)' : ' — registration · launch test · last start'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
-
-  // Claude Code — check via `claude mcp list`, fall back to reading settings.json
-  const claudeDir = join(HOME, '.claude');
-  if (existsSync(claudeDir)) {
-    let claudeOk = false;
-    let claudeNote = '';
-    try {
-      const out = execSync('claude mcp list', { windowsHide: true, encoding: 'utf8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] });
-      if (/veto/i.test(out)) { claudeOk = true; }
-    } catch { /* claude CLI not in PATH */ }
-
-    // Fall back: check known config files directly
-    if (!claudeOk) {
-      for (const f of ['settings.json', 'mcp_servers.json']) {
-        try {
-          const s = JSON.parse(readFileSync(join(claudeDir, f), 'utf8'));
-          if (s?.mcpServers?.veto) { claudeOk = true; claudeNote = c.dim(` (${f})`); break; }
-        } catch { /* skip */ }
-      }
-    }
-    if (claudeOk) {
-      console.log(`  ${c.green('✓')} Claude Code — registered${claudeNote}`);
-    } else {
-      console.log(`  ${c.red('✗')} Claude Code — not registered`);
-      console.log(`  ${c.dim('    fix: claude mcp add veto -s user -- npx -y --package @jigyasudham/veto@latest veto-server')}`);
-      issues++;
-    }
-  } else {
-    console.log(`  ${c.dim('·')} ${c.dim('Claude Code — not installed')}`);
+  const { diagnoseHosts } = await import('./cli/doctor-hosts.js');
+  const diagnoses = await diagnoseHosts({ probe: !quick, latestVersion: latest || null });
+  for (const d of diagnoses) {
+    if (d.level === 'absent') { console.log(`  ${c.dim('·')} ${c.dim(d.headline)}`); continue; }
+    const mark = d.level === 'ok' ? c.green('✓') : d.level === 'warn' ? c.yellow('⚠') : c.red('✗');
+    console.log(`  ${mark} ${d.headline}`);
+    for (const line of d.details) console.log(c.dim(`      ${line}`));
+    if (d.fix) console.log(`      ${c.dim('fix:')} ${c.cyan(d.fix)}`);
+    if (d.level !== 'ok') issues++;
   }
 
-  // Codex CLI — check via `codex mcp list`, fall back to reading config.toml
-  const codexDirD = join(HOME, '.codex');
-  if (existsSync(codexDirD)) {
-    let codexOk = false;
-    try {
-      const out = execSync('codex mcp list', { windowsHide: true, encoding: 'utf8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] });
-      if (/veto/i.test(out)) { codexOk = true; }
-    } catch { /* codex CLI not in PATH */ }
-
-    if (!codexOk) {
-      try {
-        const toml = readFileSync(join(codexDirD, 'config.toml'), 'utf8');
-        if (/\[mcp_servers\.veto\]/.test(toml)) { codexOk = true; }
-      } catch { /* skip */ }
-    }
-
-    if (codexOk) {
-      console.log(`  ${c.green('✓')} Codex CLI — registered`);
-    } else {
-      const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-      console.log(`  ${c.red('✗')} Codex CLI — not registered`);
-      console.log(`  ${c.dim(`    fix: codex mcp add veto -- ${npxCmd} -y --package @jigyasudham/veto@latest veto-server`)}`);
-      issues++;
-    }
-  } else {
-    console.log(`  ${c.dim('·')} ${c.dim('Codex CLI — not installed')}`);
-  }
-
-  // Other platforms — check their config JSON files
-  const platforms = [
-    { name: 'Gemini CLI',      configPath: join(HOME, '.gemini', 'settings.json'),               detectionDir: join(HOME, '.gemini'),             key: 'mcpServers' },
-    { name: 'Antigravity CLI', configPath: join(HOME, '.gemini', 'antigravity-cli', 'mcp_config.json'), detectionDir: join(HOME, '.gemini', 'antigravity-cli'), key: 'mcpServers' },
-    { name: 'Cursor',          configPath: join(HOME, '.cursor', 'mcp.json'),                    detectionDir: join(HOME, '.cursor'),             key: 'mcpServers' },
-    { name: 'Windsurf',        configPath: join(HOME, '.codeium', 'windsurf', 'mcp_config.json'), detectionDir: join(HOME, '.codeium', 'windsurf'), key: 'mcpServers' },
-    {
-      name: 'Zed',
-      configPath: process.platform === 'win32'
-        ? join(process.env.APPDATA ?? HOME, 'Zed', 'settings.json')
-        : join(HOME, '.config', 'zed', 'settings.json'),
-      detectionDir: process.platform === 'win32'
-        ? join(process.env.APPDATA ?? HOME, 'Zed')
-        : join(HOME, '.config', 'zed'),
-      key: 'context_servers',
-    },
-  ];
-
-  for (const p of platforms) {
-    if (!existsSync(p.detectionDir)) {
-      console.log(`  ${c.dim('·')} ${c.dim(`${p.name} — not installed`)}`);
-      continue;
-    }
-    try {
-      const config = JSON.parse(readFileSync(p.configPath, 'utf8'));
-      if (config?.[p.key]?.veto) {
-        console.log(`  ${c.green('✓')} ${p.name} — registered`);
-      } else {
-        console.log(`  ${c.red('✗')} ${p.name} — veto missing from config`);
-        console.log(`  ${c.dim('    fix: veto init')}`);
+  // The instruction an AI sees when an app did not load Veto (cli/fallback-skill.ts).
+  console.log('');
+  console.log('  ' + c.bold('Fallback guidance') + c.dim(' — what an AI is told when Veto did not load'));
+  console.log(c.dim('  ─────────────────────────────────────────────────────'));
+  {
+    const { skillState } = await import('./cli/fallback-skill.js');
+    const dirs = [...new Set(diagnoses.filter(d => d.level !== 'absent').flatMap(d => d.report.spec.skillDirs ?? []))];
+    if (!dirs.length) console.log(c.dim('  · no installed app lists skills'));
+    for (const dir of dirs) {
+      const state = skillState(dir);
+      const where = join(dir, 'veto', 'SKILL.md');
+      if (state === 'current') console.log(`  ${c.green('✓')} ${c.dim(where)}`);
+      else if (state === 'foreign') console.log(`  ${c.dim('·')} ${c.dim(`${where} is your own skill — Veto leaves it alone`)}`);
+      else {
+        const why = state === 'missing' ? 'missing' : state === 'modified' ? 'edited since Veto wrote it' : 'from an older Veto';
+        console.log(`  ${c.yellow('⚠')} ${where} — ${why}`);
+        console.log(`      ${c.dim('fix:')} ${c.cyan('veto init')}`);
         issues++;
       }
-    } catch {
-      console.log(`  ${c.red('✗')} ${p.name} — config missing or unreadable`);
-      console.log(`  ${c.dim('    fix: veto init')}`);
+    }
+  }
+
+  // This project's Claude Code hook (cli/claude-hook.ts).
+  {
+    const { projectHookState } = await import('./cli/claude-hook.js');
+    if (projectHookState(process.cwd()) === 'legacy-broken') {
+      console.log(`  ${c.yellow('⚠')} This project's Claude Code secrets-scan hook is the old one, which never ran`);
+      console.log(`      ${c.dim('fix:')} ${c.cyan('veto init')} ${c.dim('(replaces it in .claude/settings.json)')}`);
       issues++;
     }
   }
+
+  // Data pipes that can stop silently when a host changes its file format.
+  console.log('');
+  console.log('  ' + c.bold('Freshness') + c.dim(' — pipelines that fail silently when an app changes'));
+  console.log(c.dim('  ─────────────────────────────────────────────────────'));
+  try {
+    const { captureStatus } = await import('./transcripts/config.js');
+    const cs = captureStatus();
+    if (!cs.effective) {
+      console.log(c.dim('  · transcript capture is off'));
+    } else {
+      const { captureFreshness } = await import('./transcripts/freshness.js');
+      const installedSources = (['claude', 'codex', 'gemini'] as const)
+        .filter(id => diagnoses.some(d => d.report.spec.id === id && d.level !== 'absent'));
+      for (const f of captureFreshness({ captureSince: cs.consent_at ?? null, sources: installedSources })) {
+        if (!f.lastSaveFromHost && !f.newestArchive) continue;
+        if (f.stalled) {
+          console.log(`  ${c.yellow('⚠')} ${f.source} capture looks stalled — last archive ${f.newestArchive ?? 'never'}, yet a save came from ${f.source} at ${f.lastSaveFromHost}`);
+          console.log(c.dim(`      ${f.source} may have changed its session file format; see: veto transcripts sources`));
+          issues++;
+        } else {
+          console.log(`  ${c.green('✓')} ${f.source} capture ${c.dim(`last archive ${f.newestArchive ?? '—'}`)}`);
+        }
+      }
+      if (diagnoses.some(d => d.report.spec.id === 'antigravity' && d.level !== 'absent')) {
+        console.log(c.dim('  · Antigravity chats are not captured — Veto reads Claude Code, Codex and Gemini CLI session files only'));
+      }
+    }
+  } catch { console.log(c.dim('  · transcript freshness unavailable')); }
+  try {
+    const { trialStatus, trialBacklog } = await import('./lessons/trial.js');
+    const ts = trialStatus();
+    if (ts) {
+      const backlog = trialBacklog();
+      const mark = ts.drift ? c.red('✗') : c.green('✓');
+      console.log(`  ${mark} lessons trial ${ts.qualifying}/${ts.target} qualifying sessions ${c.dim(`· ends ${ts.endsAt.slice(0, 10)}${ts.complete ? ' · complete' : ''}`)}`);
+      if (ts.drift) {
+        console.log(c.dim('      the last sessions in a row had no request Veto could read — Codex has likely changed its rollout format'));
+        issues++;
+      }
+      if (backlog && backlog.unexamined > 0) {
+        console.log(c.dim(`      ${backlog.unexamined} Codex session(s) not examined yet (oldest ${backlog.oldestUnexamined?.slice(0, 10)}) — the trial examines them on the next veto_session_save`));
+      }
+    }
+  } catch { /* lessons optional */ }
 
   // Billing mode
   console.log('');
@@ -814,9 +605,11 @@ async function doctorCommand(fix = false) {
   if (issues === 0) {
     console.log(c.green('  ✓ All checks passed — Veto is healthy!'));
   } else {
-    console.log(c.yellow(`  ⚠  ${issues} issue${issues !== 1 ? 's' : ''} found.`) + ` Run ${c.cyan('veto init')} to repair.`);
+    console.log(c.yellow(`  ⚠  ${issues} issue${issues !== 1 ? 's' : ''} found.`) + ' Each has its fix above.');
   }
   console.log('');
+  // Scriptable: a CI step or a wrapper can trust the exit code.
+  process.exitCode = issues === 0 ? 0 : 1;
 }
 
 // ─── CLI Subcommands ────────────────────────────────────────────────────────────
@@ -843,11 +636,11 @@ async function statusCommand() {
 }
 
 async function sessionsCommand() {
-  const { listSessions, getDb } = await import('./memory/local.js');
+  const { listSessions, countSessions, getDb } = await import('./memory/local.js');
 
-  const flag = process.argv[3];
+  const args = process.argv.slice(3);
 
-  if (flag === '--clean') {
+  if (args[0] === '--clean') {
     const db = getDb();
     const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const result = db.prepare(
@@ -859,14 +652,39 @@ async function sessionsCommand() {
     return;
   }
 
-  const sessions = listSessions(20);
+  // veto sessions [search words] [--all | --limit N] [--json]
+  const asJson = args.includes('--json');
+  let limit = 20;
+  const words: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--all') limit = 100_000;
+    else if (a === '--limit') limit = Number(args[++i]);
+    else if (a.startsWith('--limit=')) limit = Number(a.slice(8));
+    else if (a === '--json') continue;
+    else if (a.startsWith('--')) { console.error(c.red(`  Unknown option ${a}`)); console.error(c.dim('  Usage: veto sessions [search words] [--all | --limit N] [--json] | --clean')); process.exit(1); }
+    else words.push(a);
+  }
+  if (!Number.isFinite(limit) || limit < 1) { console.error(c.red('  --limit needs a positive number')); process.exit(1); }
+  const query = words.join(' ') || undefined;
+  const sessions = listSessions(Math.floor(limit), query);
+  const total = countSessions();
+
+  if (asJson) {
+    console.log(JSON.stringify({
+      total, shown: sessions.length, query: query ?? null,
+      sessions: sessions.map(s => ({ id: s.id, created_at: s.created_at, platform: s.platform, save_type: s.save_type, project_dir: s.project_dir, summary: s.summary })),
+    }, null, 2));
+    return;
+  }
 
   console.log('');
-  console.log(c.bold('  Saved Sessions') + c.dim(` (${sessions.length})`));
+  const scope = query ? `${sessions.length} matching "${query}"` : `${sessions.length} of ${total}`;
+  console.log(c.bold('  Saved Sessions') + c.dim(` (${scope})`));
   console.log(c.dim('  ─────────────────────────────────────────────────────────────'));
 
   if (sessions.length === 0) {
-    console.log(c.dim('  No sessions saved yet. Use veto_session_save inside an AI session.'));
+    console.log(c.dim(query ? '  No session matches that search.' : '  No sessions saved yet. Use veto_session_save inside an AI session.'));
   } else {
     for (const s of sessions) {
       const date = new Date(s.created_at).toLocaleString();
@@ -875,7 +693,9 @@ async function sessionsCommand() {
     }
   }
   console.log('');
-  console.log(c.dim(`  Tip: veto sessions --clean  removes auto-saves older than 7 days`));
+  if (!query && sessions.length < total) console.log(c.dim(`  ${total - sessions.length} older not shown — veto sessions --all, --limit N, or add a search word`));
+  console.log(c.dim('  Resume one: veto continue <first 8 characters> --as <claude|codex|gemini|antigravity>'));
+  console.log(c.dim('  Tip: veto sessions --clean  removes auto-saves older than 7 days'));
   console.log('');
 }
 
@@ -1124,8 +944,9 @@ async function transcriptsCommand() {
     const { discoverCodexSessions, discoverGeminiSessions, codexSessionsDir, geminiTmpDir } =
       await import('./transcripts/discover.js');
     const projFlag = args.find(a => a.startsWith('--project='))?.split('=')[1];
-    const { normalizeProjectDir } = await import('./memory/local.js');
-    const want = projFlag ? normalizeProjectDir(projFlag) : null;
+    // projectKey, not normalizeProjectDir: Gemini records `d:\veto` for D:\Veto.
+    const { projectKey } = await import('./transcripts/project-key.js');
+    const want = projFlag ? projectKey(projFlag) : null;
     console.log('');
     console.log(c.bold('  Transcript sources'));
     console.log(c.dim('  ─────────────────────────────────────────────────────'));
@@ -1136,7 +957,7 @@ async function transcriptsCommand() {
     ] as const) {
       let rows: { sourceSessionId: string; projectDir: string | null; mtimeMs: number }[] = [];
       try { rows = find(); } catch { rows = []; }
-      const shown = want ? rows.filter(r => r.projectDir && normalizeProjectDir(r.projectDir) === want) : rows;
+      const shown = want ? rows.filter(r => r.projectDir && projectKey(r.projectDir) === want) : rows;
       console.log(`  ${c.cyan(name)}  ${c.dim(dir)}`);
       if (shown.length === 0) console.log(c.dim(`     (no sessions discovered${want ? ' for this project' : ''})`));
       for (const r of shown.slice(0, 5)) {
@@ -1223,10 +1044,15 @@ function shortHelpCommand() {
   console.log(c.bold('  CLI Commands'));
   console.log(c.dim('  ─────────────────────────────────────────────────────'));
   console.log(`  ${c.cyan('veto init')}                    Configure all AI tools + scan project`);
-  console.log(`  ${c.cyan('veto doctor')}                  Check MCP registrations + system health`);
+  console.log(`  ${c.cyan('veto doctor')}                  Per app: registered? starts? last started by it? + health`);
+  console.log(`  ${c.cyan('veto doctor --quick')}          Same, without launching the server to test it`);
   console.log(`  ${c.cyan('veto doctor --fix')}            Also rename old Veto guides left in Codex/Gemini files`);
   console.log(`  ${c.cyan('veto status')}                  Version, DB path, memory/session counts`);
-  console.log(`  ${c.cyan('veto sessions')}                List last 20 saved sessions`);
+  console.log(`  ${c.cyan('veto sessions')} ${c.dim('[words] [--all|--limit N] [--json]')}`);
+  console.log(`                         Saved sessions (newest 20 by default; says how many exist)`);
+  console.log(`  ${c.cyan('veto continue')} ${c.dim('[id|prefix] [--as <client>] [--json]')}`);
+  console.log(`                         Restore a session from a terminal — same code as veto_continue,`);
+  console.log(`                         for when an app did not load Veto's tools`);
   console.log(`  ${c.cyan('veto tools')} ${c.dim('[filter]')}         List all MCP tools (--json supported)`);
   console.log(`  ${c.cyan('veto agents')} ${c.dim('[filter]')}        List all worker + council agents (--json)`);
   console.log(`  ${c.cyan('veto memory')} ${c.dim('[query]')}         Search knowledge base`);
@@ -1294,8 +1120,8 @@ function troubleshootCommand() {
   console.log('');
   console.log(`  ${c.yellow('MCP disconnected / tools not loading')}`);
   console.log(`  ${c.dim('→')} Run ${c.cyan('veto init')} again, then fully restart your AI client (Claude / Gemini / Cursor / Windsurf / Zed)`);
-  console.log(`  ${c.dim('→')} Verify the MCP entry in your AI client config file`);
-  console.log(`  ${c.dim('→')} Check Node.js version: ${c.cyan('node --version')}  (need >= 22)`);
+  console.log(`  ${c.dim('→')} Run ${c.cyan('veto doctor')} — it shows, per app, whether the app lists Veto, whether it starts, and when that app last started it`);
+  console.log(`  ${c.dim('→')} Check Node.js version: ${c.cyan('node --version')}  (need >= 22.13, or >= 23.4)`);
   console.log('');
   console.log(`  ${c.yellow('veto command not found')}`);
   console.log(`  ${c.dim('→')} The bare ${c.cyan('veto')} command comes from a global install: ${c.cyan('npm i -g @jigyasudham/veto')}`);
@@ -1306,8 +1132,8 @@ function troubleshootCommand() {
   console.log(`  ${c.yellow('Tools missing in Claude / Gemini after install')}`);
   console.log(`  ${c.dim('→')} Run ${c.cyan('veto init')} to write / regenerate the MCP config`);
   console.log(`  ${c.dim('→')} Fully quit and reopen the AI client (not just reload)`);
-  console.log(`  ${c.dim('→')} Claude Desktop config: ${c.dim('~/.config/claude/claude_desktop_config.json')}`);
-  console.log(`  ${c.dim('→')} Gemini / other: check the platform docs for MCP config location`);
+  console.log(`  ${c.dim('→')} Until the app is fixed, an AI there can still restore a session: ${c.cyan('veto continue <id> --as <client>')}`);
+  console.log(`  ${c.dim('→')} Antigravity reads ${c.dim('~/.gemini/config/mcp_config.json')} — an entry in ~/.gemini/antigravity-cli/ does nothing`);
   console.log('');
   console.log(`  ${c.yellow('Old version still showing after update')}`);
   console.log(`  ${c.dim('→')} The MCP config is pinned to ${c.cyan('@latest')} — fully restart the AI client to fetch it`);
@@ -1316,7 +1142,7 @@ function troubleshootCommand() {
   console.log(`  ${c.dim('→')} Confirm: ${c.cyan('veto doctor')} (compares both against the registry's latest)`);
   console.log('');
   console.log(`  ${c.yellow('Database / SQLite errors on startup')}`);
-  console.log(`  ${c.dim('→')} Requires Node.js >= 22 (uses built-in node:sqlite)`);
+  console.log(`  ${c.dim('→')} Requires Node.js >= 22.13 or >= 23.4 (uses built-in node:sqlite)`);
   console.log(`  ${c.dim('→')} Check ${c.dim('~/.veto')} directory exists and is writable`);
   console.log(`  ${c.dim('→')} Run ${c.cyan('veto status')} to see the active DB path`);
   console.log('');
@@ -1334,7 +1160,7 @@ function troubleshootCommand() {
   console.log('');
   console.log(`  ${c.yellow('veto init fails on first run')}`);
   console.log(`  ${c.dim('→')} Veto does not require an API key — it uses your existing AI subscriptions via MCP`);
-  console.log(`  ${c.dim('→')} Ensure Node.js >= 22 and run ${c.cyan('veto init')} from your project directory`);
+  console.log(`  ${c.dim('→')} Ensure Node.js >= 22.13 and run ${c.cyan('veto init')} from your project directory`);
   console.log(`  ${c.dim('→')} Check that your AI client (Claude Code / Gemini / Codex / Antigravity) is installed`);
   console.log('');
   console.log(`  ${c.yellow('veto_health shows degraded / components failing')}`);
@@ -1698,6 +1524,18 @@ switch (command) {
     });
     break;
 
+  case 'continue':
+  case 'resume':
+    import('./cli/continue.js')
+      .then(async ({ runContinueCommand }) => { process.exitCode = await runContinueCommand(process.argv.slice(3)); })
+      .catch((err) => {
+        console.error(c.red(`Error: ${err.message}`));
+        process.exit(1);
+      })
+      // The server module this reuses can hold timers open; the answer is already out.
+      .finally(() => process.exit(process.exitCode ?? 0));
+    break;
+
   case 'memory':
     memoryCommand().catch((err) => {
       console.error(c.red(`Error: ${err.message}`));
@@ -1727,7 +1565,7 @@ switch (command) {
     break;
 
   case 'doctor':
-    doctorCommand(process.argv.includes('--fix')).catch((err) => {
+    doctorCommand(process.argv.includes('--fix'), process.argv.includes('--quick')).catch((err) => {
       console.error(c.red(`Error: ${err.message}`));
       process.exit(1);
     });

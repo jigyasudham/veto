@@ -8,7 +8,7 @@ export interface PluginModule {
   analyze?: (code: string, context?: string) => AgentAnalysis;
 }
 
-const PLUGIN_DIR = join(homedir(), '.veto', 'agents');
+export const PLUGIN_DIR = join(homedir(), '.veto', 'agents');
 const registry = new Map<string, PluginModule>();
 let loaded = false;
 

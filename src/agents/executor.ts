@@ -190,6 +190,7 @@ export async function executeOne(task: AgentTask): Promise<AgentResult> {
           agent: task.agent,
           plan: llmResult.plan,
           analysis: llmResult.analysis,
+          deliverable: llmResult.deliverable,
           output: deriveOutput(llmResult.plan, llmResult.analysis),
           duration_ms: Date.now() - start,
           llm_backed: true,

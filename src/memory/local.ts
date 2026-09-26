@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { mkdirSync } from 'node:fs';
+import { projectKey, projectKeySql } from '../transcripts/project-key.js';
 
 // node:sqlite ships behind a flag from 22.5 and is only unflagged in 22.13+/23.4+ — use
 // createRequire so bundlers (Vite/esbuild) skip it.
@@ -532,7 +533,8 @@ export function restoreSession(session_id: string, active_client?: string): Rest
   return { found: true, session: row };
 }
 
-const SEARCH_COLUMNS = ['summary', 'context', 'task_state', 'tags', 'project_dir'] as const;
+// `id` is searchable so the 8-character prefix every listing shows can be looked up.
+const SEARCH_COLUMNS = ['id', 'summary', 'context', 'task_state', 'tags', 'project_dir'] as const;
 
 export function listSessions(limit = 10, query?: string): SessionRow[] {
   const db = getDb();
@@ -558,6 +560,35 @@ export function listSessions(limit = 10, query?: string): SessionRow[] {
   return db.prepare(
     'SELECT * FROM sessions ORDER BY created_at DESC LIMIT ?'
   ).all(limit) as SessionRow[];
+}
+
+/** How many sessions exist, so a listing can say "20 of 312" instead of looking complete. */
+export function countSessions(): number {
+  return (getDb().prepare('SELECT COUNT(*) AS n FROM sessions').get() as { n: number }).n;
+}
+
+export type SessionIdResolution =
+  | { kind: 'found'; id: string }
+  | { kind: 'ambiguous'; matches: Array<Pick<SessionRow, 'id' | 'created_at' | 'platform' | 'summary'>> }
+  | { kind: 'none' };
+
+/**
+ * A full session id, or a unique prefix of one (at least 4 characters). People
+ * and listings use the first 8 characters; making them spell out 36 was how an
+ * AI without the tool ended up running `LIKE '%eaca51c0%'` against the DB itself.
+ */
+export function resolveSessionId(idOrPrefix: string): SessionIdResolution {
+  const value = idOrPrefix.trim().toLowerCase();
+  if (!value) return { kind: 'none' };
+  const db = getDb();
+  if (db.prepare('SELECT 1 FROM sessions WHERE id = ?').get(value)) return { kind: 'found', id: value };
+  if (value.length < 4 || !/^[0-9a-f-]+$/.test(value)) return { kind: 'none' };
+  const rows = db.prepare(
+    "SELECT id, created_at, platform, summary FROM sessions WHERE id LIKE ? || '%' ORDER BY created_at DESC LIMIT 6"
+  ).all(value) as Array<Pick<SessionRow, 'id' | 'created_at' | 'platform' | 'summary'>>;
+  if (rows.length === 1) return { kind: 'found', id: rows[0].id };
+  if (rows.length > 1) return { kind: 'ambiguous', matches: rows };
+  return { kind: 'none' };
 }
 
 export function closeSession(session_id: string): void {
@@ -659,8 +690,9 @@ export function searchKnowledge(opts: SearchKnowledgeOptions): KnowledgeRow[] {
     params.push(opts.type);
   }
   if (opts.project_dir) {
-    conditions.push('project_dir = ?');
-    params.push(normalizeProjectDir(opts.project_dir));
+    // Case-folded on Windows: hosts spell one folder differently (d:\veto, d:\Veto).
+    conditions.push(`${projectKeySql('project_dir')} = ?`);
+    params.push(projectKey(opts.project_dir));
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -695,7 +727,7 @@ export function updateProjectMap(input: UpdateProjectMapInput): string {
   const db = getDb();
   const now = new Date().toISOString();
   const project_dir = normalizeProjectDir(input.project_dir);
-  const existing = db.prepare('SELECT id FROM project_map WHERE project_dir = ?').get(project_dir) as { id: string } | undefined;
+  const existing = db.prepare(`SELECT id FROM project_map WHERE ${projectKeySql('project_dir')} = ?`).get(projectKey(project_dir)) as { id: string } | undefined;
 
   const structure = typeof input.structure === 'string' ? input.structure : JSON.stringify(input.structure);
   const key_modules = input.key_modules ? JSON.stringify(input.key_modules) : null;
@@ -704,8 +736,8 @@ export function updateProjectMap(input: UpdateProjectMapInput): string {
   if (existing) {
     db.prepare(`
       UPDATE project_map SET structure = ?, key_modules = ?, tech_stack = ?, updated_at = ?
-      WHERE project_dir = ?
-    `).run(structure, key_modules, tech_stack, now, project_dir);
+      WHERE id = ?
+    `).run(structure, key_modules, tech_stack, now, existing.id);
     return existing.id;
   }
 
@@ -719,7 +751,7 @@ export function updateProjectMap(input: UpdateProjectMapInput): string {
 
 export function getProjectMap(project_dir: string): ProjectMapRow | null {
   const db = getDb();
-  return db.prepare('SELECT * FROM project_map WHERE project_dir = ?').get(normalizeProjectDir(project_dir)) as ProjectMapRow | null;
+  return db.prepare(`SELECT * FROM project_map WHERE ${projectKeySql('project_dir')} = ? ORDER BY updated_at DESC LIMIT 1`).get(projectKey(project_dir)) as ProjectMapRow | null;
 }
 
 // ─── Pattern Operations ───────────────────────────────────────────────────────

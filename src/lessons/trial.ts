@@ -293,6 +293,43 @@ export function trialStatus(now = Date.now()): TrialStatus | null {
   };
 }
 
+export type TrialBacklog = {
+  /** Codex rollouts in the dated folders the window touches. */
+  rollouts: number;
+  /** Of those, how many the trial has not examined yet. */
+  unexamined: number;
+  /** Oldest unexamined rollout's mtime (ISO), when there is one. */
+  oldestUnexamined: string | null;
+  /** When the trial last recorded anything (ISO), when it has. */
+  lastLogged: string | null;
+};
+
+/**
+ * Read-only view of what the trial has not looked at yet, for `veto doctor`.
+ * The trial only advances inside veto_session_save, so sessions pile up here
+ * between saves; that is expected, and they are examined on the next save. What
+ * this makes visible is a trial that has stopped advancing altogether.
+ */
+export function trialBacklog(now = Date.now()): TrialBacklog | null {
+  const window = trialWindow();
+  if (!window) return null;
+  const db = getDb();
+  const seen = new Set((db.prepare('SELECT rollout_path FROM lesson_trial_sessions').all() as Array<{ rollout_path: string }>).map(r => r.rollout_path));
+  const files = rolloutFiles(codexSessionsDir(), window.startedAt, Math.min(now, window.endsAt));
+  let oldest: number | null = null;
+  let unexamined = 0;
+  for (const path of files) {
+    if (seen.has(path)) continue;
+    let mtime: number;
+    try { mtime = statSync(path).mtimeMs; } catch { continue; }
+    if (mtime < window.startedAt) continue;
+    unexamined++;
+    if (oldest === null || mtime < oldest) oldest = mtime;
+  }
+  const last = db.prepare('SELECT MAX(logged_at) AS t FROM lesson_trial_sessions').get() as { t: string | null };
+  return { rollouts: files.length, unexamined, oldestUnexamined: oldest === null ? null : new Date(oldest).toISOString(), lastLogged: last.t };
+}
+
 /** `veto lessons off` deletes the whole record. */
 export function clearTrialSessions(): number {
   return Number(getDb().prepare('DELETE FROM lesson_trial_sessions').run().changes);

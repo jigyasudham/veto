@@ -4,7 +4,7 @@
 // LLM-runner and record learning outcomes. veto_workflow uses ctx.server for
 // the sampling-based HITL callback. Bodies are the verbatim switch handlers.
 
-import { handleAgenticWorker } from '../scan-core.js';
+import { handleAgenticWorker, runHandlerAgent, handlerAgentResponse } from '../scan-core.js';
 import { executeParallel, executeOne } from '../../agents/executor.js';
 import { buildAgenticAgentPrompt, parseAgenticAgentResponses } from '../../agents/llm-runner.js';
 import { recordOutcome } from '../../router/index.js';
@@ -127,34 +127,56 @@ export const agentHandlers: HandlerMap = {
     if (!agentId || !task) {
       return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'agent_id and task are required.' }) }], isError: true };
     }
+    const { AGENT_MANIFEST } = await import('../../agents/manifest.js');
+    if (!AGENT_MANIFEST.some(a => a.id === agentId)) {
+      return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Unknown agent "${agentId}".`, agents: AGENT_MANIFEST.map(a => a.id).sort() }, null, 2) }], isError: true };
+    }
 
-    const enrichedCtx = buildContextString(projectDir, context);
-    const result = await executeOne({ id: 'delegate-1', agent: agentId, task, context: enrichedCtx || undefined, project_dir: projectDir });
+    // The point of delegating is a short, specific answer that keeps the
+    // caller's context clean. Without an LLM this used to return the agent's
+    // canned approach paragraph (twice) as if it were the answer.
+    const run = await runHandlerAgent('veto_delegate', {
+      id: 'delegate-1',
+      agent: agentId,
+      task,
+      context: buildContextString(projectDir, context) || undefined,
+      project_dir: projectDir,
+      deliverable: {
+        description: `Carry out the task as the ${agentId} specialist and report back compactly: the answer first, then only what the caller needs to act on. Stay under ${maxLen} characters in summary.`,
+        shape: { summary: '"<the answer, specific to the task>"', key_points: '["<fact or action the caller needs>", ...]', confidence: '<0-100>' },
+        required: ['summary'],
+      },
+    }, args?.agent_response);
+    const summary = typeof run.deliverable?.summary === 'string' ? run.deliverable.summary.slice(0, maxLen) : null;
+    if (run.deliverable) recordOutcome(task, 50, 2, agentId, typeof run.deliverable.confidence === 'number' ? run.deliverable.confidence : 70);
 
-    recordOutcome(task, 50, 2, agentId, Math.round(result.output.confidence * 100));
-
-    // Return compact summary only — no verbose findings/steps to avoid context pollution
-    const summary = [
-      result.output.recommendation,
-      result.plan?.approach,
-      result.analysis?.verdict ? `Verdict: ${result.analysis.verdict}` : null,
-      result.analysis?.score   ? `Score: ${result.analysis.score}/100`  : null,
-    ].filter(Boolean).join('\n').slice(0, maxLen);
-
-    return { content: [{ type: 'text', text: JSON.stringify({
+    return handlerAgentResponse({
       agent: agentId,
       task: task.slice(0, 100),
       summary,
-      confidence: Math.round(result.output.confidence * 100),
-      severity: result.output.severity ?? null,
-      duration_ms: result.duration_ms,
-      truncated: summary.length >= maxLen,
-    }, null, 2) }] };
+      key_points: run.deliverable?.key_points ?? null,
+      confidence: run.deliverable?.confidence ?? null,
+      truncated: summary ? typeof run.deliverable?.summary === 'string' && run.deliverable.summary.length > maxLen : null,
+    }, run, { generated: ['summary', 'key_points', 'confidence', 'truncated'] });
   },
 
   veto_workflow: async ({ args, server }) => {
     const rawSteps = Array.isArray(args?.steps) ? args.steps : [];
     if (rawSteps.length === 0) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'steps array is required and must not be empty.' }) }], isError: true };
+    // Reject a malformed step up front. It used to run anyway and fail as
+    // 'Unknown agent type: ' with an empty step id.
+    const { AGENT_MANIFEST } = await import('../../agents/manifest.js');
+    const { getPlugin } = await import('../../plugins/loader.js');
+    const known = new Set<string>(AGENT_MANIFEST.map(a => a.id));
+    const problems: string[] = [];
+    rawSteps.forEach((s: Record<string, unknown>, i: number) => {
+      const missing = ['id', 'agent', 'task'].filter(k => typeof s?.[k] !== 'string' || !String(s[k]).trim());
+      if (missing.length) problems.push(`step ${i + 1}: missing ${missing.join(', ')}`);
+      else if (!known.has(String(s.agent)) && !getPlugin(String(s.agent))) problems.push(`step ${i + 1} (${s.id}): unknown agent "${s.agent}"`);
+    });
+    if (problems.length) {
+      return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Invalid workflow — ${problems.join('; ')}.`, each_step_needs: { id: 'string', agent: 'worker agent id', task: 'string' }, agents: [...known].sort() }, null, 2) }], isError: true };
+    }
     const steps: PipelineStep[] = rawSteps.map((s: Record<string, unknown>) => ({
       id: String(s.id ?? ''),
       agent: String(s.agent ?? '') as WorkerAgentType,
@@ -200,31 +222,52 @@ export const agentHandlers: HandlerMap = {
     const max_tasks = typeof args?.max_tasks === 'number' ? Math.min(args.max_tasks, 50) : 20;
     if (!description) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'description is required.' }) }], isError: true };
 
-    const agentResponse = args?.agent_responses?.planner;
-    if (agentResponse) {
-       const results = parseAgenticAgentResponses([{ id: 'planner', agent: 'task-planner', task: description }], { planner: agentResponse });
-       const r = results[0];
-       if (r.plan) {
-          const plan = parsePrdIntoTasks(description, r.plan, max_tasks);
-          saveTaskPlan(description, JSON.stringify(plan));
-          return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...plan }, null, 2) }] };
-       }
+    // The request's own clauses, routed by their words — a real answer on its own.
+    const { splitTask, agentFor } = await import('../task-split.js');
+    const split = splitTask(description, max_tasks);
+    const { AGENT_MANIFEST } = await import('../../agents/manifest.js');
+    const known = new Set<string>(AGENT_MANIFEST.map(a => a.id));
+
+    const run = await runHandlerAgent('veto_task_parse', {
+      id: 'planner',
+      agent: 'task-planner',
+      task: 'Break this request into tasks.',
+      code: description,
+      context: [buildContextString(project_dir), `A first split by clause (refine it):\n${split.map(t => `${t.id} [${t.agent}] ${t.task}`).join('\n')}`].filter(Boolean).join('\n\n'),
+      project_dir,
+      deliverable: {
+        description: `Break the request in the material into concrete, independently checkable tasks (at most ${max_tasks}). Assign each to one Veto worker agent: ${[...known].sort().join(', ')}. Dependencies list the ids a task needs finished first.`,
+        shape: { tasks: '[{ "id": "task-1", "agent": "<agent id from the list>", "task": "...", "dependencies": ["task-…"] }, ...]' },
+        required: ['tasks'],
+      },
+    }, args?.agent_response ?? args?.agent_responses?.planner);
+    if (run.error) return { content: [{ type: 'text', text: JSON.stringify({ success: false, error: run.error }, null, 2) }], isError: true };
+
+    // LLM tasks are checked before they are stored (AGENTS.md: validate before any write).
+    let tasks = split;
+    let source: 'llm' | 'clause_split' = 'clause_split';
+    if (Array.isArray(run.deliverable?.tasks)) {
+      const raw = (run.deliverable!.tasks as Array<Record<string, unknown>>).filter(t => t && typeof t.task === 'string' && t.task.trim()).slice(0, max_tasks);
+      const ids = new Set(raw.map((t, i) => String(t.id ?? `task-${i + 1}`)));
+      if (raw.length) {
+        tasks = raw.map((t, i) => {
+          const task = String(t.task).trim();
+          const agent = typeof t.agent === 'string' && known.has(t.agent) ? t.agent : agentFor(task);
+          const deps = Array.isArray(t.dependencies) ? t.dependencies.map(String).filter(d => ids.has(d)) : [];
+          return { id: String(t.id ?? `task-${i + 1}`), agent, task, dependencies: deps };
+        });
+        source = 'llm';
+      }
     }
+    if (source === 'llm') saveTaskPlan(description, JSON.stringify({ description, tasks }));
 
-    // Try sampling
-    try {
-      const result = await executeOne({ id: 'planner', agent: 'task-planner', task: description, project_dir, llm_backed: true });
-      if (result.llm_backed && result.plan && !result.error) {
-         const plan = parsePrdIntoTasks(description, result.plan, max_tasks);
-         saveTaskPlan(description, JSON.stringify(plan));
-         return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...plan }, null, 2) }] };
-      }
-      if (result.llm_upgrade) {
-         return { content: [{ type: 'text', text: JSON.stringify({ llm_backed: false, llm_upgrade: result.llm_upgrade }, null, 2) }] };
-      }
-    } catch { /* fallback */ }
-
-    const plan = await buildTaskPlan(description, project_dir, max_tasks);
-    return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...plan }, null, 2) }] };
+    return { content: [{ type: 'text', text: JSON.stringify({
+      success: true,
+      description,
+      source,
+      tasks,
+      generated_by: run.generated_by,
+      ...(run.llm_upgrade ? { llm_upgrade: run.llm_upgrade } : {}),
+    }, null, 2) }] };
   },
 };

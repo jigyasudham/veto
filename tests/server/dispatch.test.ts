@@ -103,7 +103,20 @@ describe('dispatch — council', () => {
     expect(b.llm_backed).toBe(false);
     expect(['GREEN', 'YELLOW', 'RED', 'DEADLOCK']).toContain(b.final_verdict);
     expect(b.llm_upgrade?.available).toBe(true);
-    expect(typeof b.outcome_id).toBe('string'); // persisted council_outcomes row id (UUID)
+    // Keyword rules only (no sampling): labelled as such and NOT recorded — no
+    // council_outcomes row for the status line/HUD, no memory "decision".
+    expect(b.outcome_id).toBeNull();
+    expect(b.verdict_basis).toMatch(/keyword rules only/);
+  });
+
+  it('a rules-only verdict leaves no council row and no stored decision behind', async () => {
+    const { getDb } = await import('../../src/memory/local.js');
+    const before = (getDb().prepare('SELECT COUNT(*) AS n FROM council_outcomes').get() as { n: number }).n;
+    const kbBefore = (getDb().prepare("SELECT COUNT(*) AS n FROM knowledge_base WHERE type = 'decision'").get() as { n: number }).n;
+    const text = (await call('veto_council_debate', { task: 'Store user passwords with md5 and expose admin auth over http' })).content[0].text as string;
+    expect(text.startsWith('⚠  PRELIMINARY')).toBe(true);
+    expect((getDb().prepare('SELECT COUNT(*) AS n FROM council_outcomes').get() as { n: number }).n).toBe(before);
+    expect((getDb().prepare("SELECT COUNT(*) AS n FROM knowledge_base WHERE type = 'decision'").get() as { n: number }).n).toBe(kbBefore);
   });
 
   it('veto_council_debate requires a task', async () => {

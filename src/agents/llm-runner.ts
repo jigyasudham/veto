@@ -4,7 +4,7 @@
 
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { getManifestEntry } from './manifest.js';
-import type { AgentTask, AgentResult, AgentPlan, AgentAnalysis, WorkerAgentType, AgentOutput } from './types.js';
+import type { AgentTask, AgentResult, AgentPlan, AgentAnalysis, WorkerAgentType, AgentOutput, Deliverable } from './types.js';
 import { validateAgentPlan, validateAgentAnalysis } from './validate.js';
 import { log, errMsg } from '../log.js';
 import { withPastSessions } from '../transcripts/context.js';
@@ -74,6 +74,58 @@ Rules:
 - verdict: approved (score≥90), approved_with_warnings (score 70-89), needs_revision (50-69), rejected (<50)
 - critical_count and high_count MUST match findings array
 - Keep total JSON under 1000 tokens`;
+}
+
+function buildDeliverablePrompt(agent: WorkerAgentType, role: string, d: Deliverable): string {
+  const shape = Object.entries(d.shape).map(([k, v]) => `    "${k}": ${v}`).join(',\n');
+  return `You are the ${agent} specialist in an AI-assisted software engineering system.
+
+ROLE: ${role}
+
+Your job: ${d.description}
+
+Return ONLY valid JSON (no markdown fences around the JSON, no prose before or after):
+{
+  "agent": "${agent}",
+  "deliverable": {
+${shape}
+  }
+}
+
+Rules:
+- Work from the material provided. Every value must be specific to it — never generic advice.
+- Required, and must not be empty: ${d.required.join(', ')}.
+- If the material is not enough to produce something, say exactly what is missing in the relevant field instead of inventing it.`;
+}
+
+/**
+ * Parse and check a deliverable. Accepts `{ deliverable: {...} }` or the bare
+ * object. Returns null — a visible error to the caller — when a required key
+ * is missing or empty (AGENTS.md rule 5: never a silent empty result).
+ */
+export function parseDeliverableResponse(raw: unknown, d: Deliverable): Record<string, unknown> | null {
+  try {
+    let obj: unknown = raw;
+    if (typeof raw === 'string') {
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (!match) return null;
+      obj = JSON.parse(match[0]);
+    }
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+    const o = obj as Record<string, unknown>;
+    const body = (o.deliverable && typeof o.deliverable === 'object' && !Array.isArray(o.deliverable) ? o.deliverable : o) as Record<string, unknown>;
+    for (const key of d.required) {
+      const v = body[key];
+      if (v === undefined || v === null) return null;
+      if (typeof v === 'string' && !v.trim()) return null;
+      if (Array.isArray(v) && v.length === 0) return null;
+    }
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(d.shape)) if (key in body) out[key] = body[key];
+    return out;
+  } catch {
+    return null;
+  }
 }
 
 // ─── Response parsers ─────────────────────────────────────────────────────────
@@ -177,9 +229,28 @@ function isValidFinding(f: unknown): boolean {
 export async function runAgentLlm(
   server: Server,
   task: AgentTask,
-): Promise<{ plan?: AgentPlan; analysis?: AgentAnalysis } | null> {
+): Promise<{ plan?: AgentPlan; analysis?: AgentAnalysis; deliverable?: Record<string, unknown> } | null> {
   const entry = getManifestEntry(task.agent);
   if (!entry) return null;
+
+  if (task.deliverable) {
+    const context = contextWithHistory(task);
+    const userText = [`Task: ${task.task}`, task.code ? `\nMaterial:\n\`\`\`\n${task.code}\n\`\`\`` : '', context ? `\nContext:\n${context}` : ''].join('\n');
+    try {
+      const result = await server.createMessage({
+        model: task.model,
+        messages: [{ role: 'user', content: { type: 'text', text: userText } }],
+        systemPrompt: buildDeliverablePrompt(task.agent, entry.role, task.deliverable),
+        maxTokens: task.deliverable.max_tokens ?? 3000,
+      } as any);
+      const text = result.content.type === 'text' ? result.content.text : '';
+      const deliverable = text ? parseDeliverableResponse(text, task.deliverable) : null;
+      return deliverable ? { deliverable } : null;
+    } catch (err) {
+      log.debug('mcp sampling failed; falling back', { agent: task.agent, error: errMsg(err) });
+      return null;
+    }
+  }
 
   const isAnalysis = task.code !== undefined && entry.output_type === 'analysis';
   const systemPrompt = isAnalysis
@@ -227,6 +298,22 @@ export async function runAgentLlm(
 export function buildAgenticAgentPrompt(task: AgentTask): import('./types.js').AgenticAgentPrompt | null {
   const entry = getManifestEntry(task.agent);
   if (!entry) return null;
+
+  if (task.deliverable) {
+    const context = contextWithHistory(task);
+    return {
+      mode: 'agentic',
+      agent: task.agent,
+      instruction: `MCP Sampling is unavailable. Reason as the ${task.agent} specialist and produce the deliverable yourself, then return it in the result.`,
+      output_prompt: [
+        `Produce the deliverable as the ${task.agent} specialist.`,
+        `Task: ${task.task}`,
+        task.code ? `Material:\n${task.code}` : '',
+        context ? `Context: ${context}` : '',
+      ].filter(Boolean).join('\n\n'),
+      schema: buildDeliverablePrompt(task.agent, entry.role, task.deliverable),
+    };
+  }
 
   const isAnalysis = task.code !== undefined && entry.output_type === 'analysis';
   const schema = isAnalysis
@@ -278,6 +365,22 @@ export function parseAgenticAgentResponses(
 
     const entry = getManifestEntry(task.agent);
     const isAnalysis = task.code !== undefined && entry?.output_type === 'analysis';
+
+    if (task.deliverable) {
+      const deliverable = parseDeliverableResponse(raw, task.deliverable);
+      results.push({
+        id: task.id,
+        agent: task.agent,
+        deliverable: deliverable ?? undefined,
+        output: { confidence: deliverable ? 0.9 : 0, severity: 'info', recommendation: '', affected_files: [], line_refs: [] },
+        duration_ms: Date.now() - start,
+        llm_backed: true,
+        error: !deliverable
+          ? `LLM response malformed: expected a "deliverable" object with non-empty ${task.deliverable.required.join(', ')}. Received: ${describeShape(raw)}`
+          : undefined,
+      });
+      continue;
+    }
 
     if (isAnalysis) {
       const analysis = parseAnalysisResponse(typeof raw === 'string' ? raw : JSON.stringify(raw), task.agent);

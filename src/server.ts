@@ -27,7 +27,8 @@ import { coreHandlers } from './server/handlers/core.js';
 import { agentHandlers } from './server/handlers/agents.js';
 import { councilHandlers } from './server/handlers/council.js';
 import { VERSION, autoSave } from './server/runtime.js';
-import { listSessions, searchKnowledge, getProjectMap, getPatterns, recordToolCall } from './memory/local.js';
+import { listSessions, searchKnowledge, getProjectMap, getPatterns, recordToolCall, sqliteAvailable } from './memory/local.js';
+import { recordHostStart } from './host-starts.js';
 import { buildRepoMap } from './repo-map/index.js';
 import { initLlmRunner } from './agents/executor.js';
 import { loadPlugins } from './plugins/loader.js';
@@ -85,6 +86,15 @@ server.oninitialized = () => {
   try {
     const impl = server.getClientVersion();
     recordHostClient(impl);
+    // Evidence for `veto doctor`: this host really started Veto, with this Node,
+    // and SQLite did (or did not) load in its runtime. See host-starts.ts.
+    recordHostStart({
+      client: impl?.name ?? '(unnamed client)',
+      client_version: impl?.version ?? null,
+      platform: detectHostPlatform(),
+      veto_version: VERSION,
+      sqlite_ok: sqliteAvailable(),
+    });
     log.debug('MCP client identified', {
       client: impl?.name ?? '(none)',
       version: impl?.version ?? '(none)',

@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { getDb, getDbPath } from './local.js';
+import { projectKey, projectKeySql } from '../transcripts/project-key.js';
 
 const DEFAULT_EXPORT_PATH = join(homedir(), '.veto', 'veto-export.json');
 
@@ -274,8 +275,8 @@ export function exportMemoryMarkdown(projectDir?: string, outputPath?: string): 
 
   try {
     const knowledge = db.prepare(
-      `SELECT * FROM knowledge_base${projectDir ? ' WHERE project_dir = ?' : ''} ORDER BY created_at DESC LIMIT 100`
-    ).all(...(projectDir ? [projectDir] : [])) as Record<string, unknown>[];
+      `SELECT * FROM knowledge_base${projectDir ? ` WHERE ${projectKeySql('project_dir')} = ?` : ''} ORDER BY created_at DESC LIMIT 100`
+    ).all(...(projectDir ? [projectKey(projectDir)] : [])) as Record<string, unknown>[];
 
     const patterns = db.prepare(
       'SELECT * FROM patterns ORDER BY confidence DESC LIMIT 50'
@@ -286,8 +287,8 @@ export function exportMemoryMarkdown(projectDir?: string, outputPath?: string): 
     ).all() as Record<string, unknown>[];
 
     const sessions = db.prepare(
-      `SELECT id, platform, summary, project_dir, started_at FROM sessions${projectDir ? ' WHERE project_dir = ?' : ''} ORDER BY started_at DESC LIMIT 20`
-    ).all(...(projectDir ? [projectDir] : [])) as Record<string, unknown>[];
+      `SELECT id, platform, summary, project_dir, started_at FROM sessions${projectDir ? ` WHERE ${projectKeySql('project_dir')} = ?` : ''} ORDER BY started_at DESC LIMIT 20`
+    ).all(...(projectDir ? [projectKey(projectDir)] : [])) as Record<string, unknown>[];
 
     const lines: string[] = [
       `# Veto Memory Export`,

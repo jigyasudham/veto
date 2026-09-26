@@ -3,13 +3,13 @@
 // composition, and IDE notifications. veto_notify_ide uses the MCP server to
 // push a logging message, so it reads ctx.server.
 
-import { listPlugins } from '../../plugins/loader.js';
+import { listPlugins, PLUGIN_DIR } from '../../plugins/loader.js';
 import { upsertPattern } from '../../memory/local.js';
 import type { HandlerMap } from '../registry.js';
 
 export const devtoolsHandlers: HandlerMap = {
   veto_plugins: () => ({
-    content: [{ type: 'text', text: JSON.stringify({ plugins: listPlugins(), plugin_dir: `${process.env.HOME ?? process.env.USERPROFILE}/.veto/agents/`, instructions: 'Drop a .js file exporting plan(task, context?) to register a custom agent.' }, null, 2) }],
+    content: [{ type: 'text', text: JSON.stringify({ plugins: listPlugins(), plugin_dir: PLUGIN_DIR, instructions: 'Drop a .js file exporting plan(task, context?) to register a custom agent.' }, null, 2) }],
   }),
 
   veto_local_llm: async ({ args }) => {
@@ -52,13 +52,23 @@ export const devtoolsHandlers: HandlerMap = {
 
   veto_notify_ide: async ({ args, server }) => {
     const { action, message, level } = args;
-    // In bidirectional MCP, some clients listen for logging or custom notifications
-    if (action === 'show_message' && message) {
-      await server.sendLoggingMessage({
-        level: level === 'error' ? 'error' : level === 'warning' ? 'warning' : 'info',
-        data: message,
-      });
+    // MCP gives a server exactly one way to reach the client unprompted: a log
+    // message. There is no "open this file" or "set the status bar" request, so
+    // those actions cannot be done. This used to answer "Action open_file sent to
+    // IDE client." for every action while sending nothing at all.
+    if (action === 'show_message' || action === 'set_status') {
+      if (!message) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'message is required.' }, null, 2) }], isError: true };
+      try {
+        await server.sendLoggingMessage({ level: level === 'error' ? 'error' : level === 'warning' ? 'warning' : 'info', data: String(message) });
+      } catch (err) {
+        return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Could not send: ${err instanceof Error ? err.message : String(err)}` }, null, 2) }], isError: true };
+      }
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, action, delivered_as: 'MCP log notification', note: 'Sent. Whether and where it is shown is up to the client; many show log messages only in a debug panel.' }, null, 2) }] };
     }
-    return { content: [{ type: 'text', text: JSON.stringify({ success: true, action, message: `Action ${action} sent to IDE client.` }, null, 2) }] };
+    return { content: [{ type: 'text', text: JSON.stringify({
+      success: false,
+      action,
+      message: `"${action}" is not something an MCP server can make a client do — MCP has no request for it. Nothing was sent. To surface a message, use action "show_message".`,
+    }, null, 2) }], isError: true };
   },
 };

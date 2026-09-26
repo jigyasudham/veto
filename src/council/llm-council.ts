@@ -96,9 +96,10 @@ function parseAgentVote(text: string, agentKey: string, fallbackTask: string): A
       reason: typeof raw.reason === 'string' && raw.reason ? raw.reason : 'No reason provided.',
       concerns: Array.isArray(raw.concerns) ? raw.concerns.filter((c: unknown) => typeof c === 'string') : [],
       recommendation: typeof raw.recommendation === 'string' ? raw.recommendation : undefined,
+      source: 'llm',
     };
   } catch {
-    return FALLBACKS[agentKey](fallbackTask);
+    return { ...FALLBACKS[agentKey](fallbackTask), source: 'rules' };
   }
 }
 
@@ -144,7 +145,7 @@ async function callAgentLlm(
     return parseAgentVote(responseText, agentKey, task);
   } catch {
     // Sampling unavailable or failed for this agent — use deterministic fallback
-    return FALLBACKS[agentKey](task);
+    return { ...FALLBACKS[agentKey](task), source: 'rules' };
   }
 }
 
@@ -205,11 +206,15 @@ export function parseAgentResponses(raw: string, task: string): DebateResult['vo
     const parsed = JSON.parse(match[0]);
     const agents = ['lead_dev', 'pm', 'architect', 'ux', 'devil', 'legal', 'security'] as const;
 
+    // A response that carries none of the seven is not a debate at all. Missing
+    // members are filled from the keyword rules, but tagged so the verdict can
+    // say how much of it an LLM actually wrote (it used to claim all of it).
+    if (!agents.some(k => parsed[k] && typeof parsed[k] === 'object')) return null;
     const votes = {} as DebateResult['votes'];
     for (const key of agents) {
       const raw_vote = parsed[key];
       if (!raw_vote || typeof raw_vote !== 'object') {
-        votes[key] = FALLBACKS[key](task);
+        votes[key] = { ...FALLBACKS[key](task), source: 'rules' };
         continue;
       }
       const verdict = (['approve', 'warn', 'block'] as const).includes(raw_vote.verdict)
@@ -222,6 +227,7 @@ export function parseAgentResponses(raw: string, task: string): DebateResult['vo
           ? raw_vote.concerns.filter((c: unknown) => typeof c === 'string')
           : [],
         recommendation: typeof raw_vote.recommendation === 'string' ? raw_vote.recommendation : undefined,
+        source: 'llm',
       };
     }
     return votes;
@@ -277,5 +283,6 @@ export async function runLlmDebate(server: Server, input: DebateInput): Promise<
     warnings,
     debated_at,
     formatted_output,
+    llm_votes: Object.values(votes).filter(v => v.source === 'llm').length,
   };
 }

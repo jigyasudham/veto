@@ -231,13 +231,17 @@ Several tools overlap by design (different granularity or entry point). Quick gu
 These work standalone in any terminal — no AI client needed. The bare `veto` command comes from the global install (`npm i -g @jigyasudham/veto`, see [Getting Started](#getting-started)); without it, prefix any command with `npx -y @jigyasudham/veto@latest`.
 
 ```bash
-veto init                        # Configure all AI tools + scan project
-veto doctor                      # Check MCP registrations + system health
+veto init                        # Register Veto with every AI app found + scan project
+veto doctor                      # Per app: does it list Veto, does Veto start, has the app started it?
+veto doctor --quick              # Same, without launching the server to test it
 veto doctor --fix                # Also move aside old Veto guides left in Codex/Gemini files
 veto status                      # Version, DB path, session/memory/outcome counts
 veto version                     # Alias for veto status
-veto sessions                    # List last 20 saved sessions ([auto] badge on auto-saves)
+veto sessions [words]            # Newest 20 saved sessions, and how many exist ([auto] = auto-save)
+veto sessions --all | --limit N  # All of them, or N; add --json for machine output
 veto sessions --clean            # Remove auto-saves older than 7 days
+veto continue <id> --as <client> # Restore a session from a terminal (8-character id prefix is enough) —
+                                 #   the same code as veto_continue, for an app that did not load Veto
 veto memory [query]              # Search knowledge base (blank = all entries)
 veto patterns [prefix]           # List learned agent/routing patterns
 veto tools [filter]              # List all 93 MCP tools (--json for machine output)
@@ -263,21 +267,31 @@ veto doctor
 
   Veto Doctor — system health check
   ─────────────────────────────────────────────────────
-  ✓ Node.js v22.13.0
+  ✓ Node.js v22.13.0 (this terminal)
   ✓ ~/.veto exists
   ✓ Database ~/.veto/veto.db
     17 sessions · 12 memories · 3 patterns
 
-  MCP Registrations
+  AI apps — registration · launch test · last start
   ─────────────────────────────────────────────────────
-  ✓ Claude Code — registered
-  ✓ Gemini CLI — registered
-  ✓ Antigravity CLI — registered
-  · Codex CLI — not installed
-  · Zed — not installed
+  ✓ Claude Code — connected
+      source: claude mcp list
+      launch test: answered in 1.2 s — Veto 3.7.0, 93 tools
+      last started by claude-code 2.1.0 3 h ago — Veto 3.7.0, Node v22.13.0
+  ✗ Antigravity — Veto is only in ~/.gemini/antigravity-cli/mcp_config.json, a file Antigravity no longer reads
+      fix: veto init   (then fully restart the app)
+  · Gemini CLI — not installed
 
-  ✓ All checks passed — Veto is healthy!
+  Fallback guidance — what an AI is told when Veto did not load
+  ─────────────────────────────────────────────────────
+  ✓ ~/.claude/skills/veto/SKILL.md
+
+  ⚠  1 issue found. Each has its fix above.
 ```
+
+Every ✓ says what it rests on. **Registration** is what the app's own `mcp list` reports (or the file the app reads, when its CLI is not on PATH). The **launch test** runs the exact configured command and completes the MCP handshake, which catches npx failing to reach the registry and a server that exits on start. **Last started** comes from the server itself: each time an app starts Veto, it records which app, which Node, and whether SQLite loaded in that app's runtime (`~/.veto/host-starts.json`). That is the only check that sees a GUI app launching Veto with a different Node than your terminal. `veto doctor` exits with status 1 when it finds an issue, so scripts can rely on it.
+
+**When an AI's app did not load Veto,** Veto's `veto` skill (written by `veto init` into Claude Code, Codex and Antigravity/Gemini skill folders) tells it to say so and use `veto continue` / `veto sessions` / `veto doctor` instead of reading Veto's database by hand.
 
 Versions of `veto init` before this release wrote Veto's guide over `~/.gemini/GEMINI.md` (Gemini's own memory file) and into `~/.codex/AGENTS.override.md`, which Codex reads *instead of* your `~/.codex/AGENTS.md`. Current versions never write either file. `veto doctor` reports any copy left behind, and `veto doctor --fix` (or `veto init`) renames a copy to `*.veto-backup` — only when the file is exactly a guide Veto shipped. A file with anything else in it, such as memories Gemini saved below the guide, is reported and never touched. What an old init overwrote cannot be recovered.
 
@@ -622,6 +636,20 @@ Before Veto gives any AI a note, it has to show that the notes it would give are
 ---
 
 ## Release Notes
+
+### 3.7.0
+- **Bug fix: Antigravity never loaded Veto.** Antigravity reads its MCP servers from `~/.gemini/config/mcp_config.json`; `veto init` wrote `~/.gemini/antigravity-cli/mcp_config.json`, which it does not read, and `veto doctor` checked that same file and printed ✓. Init now registers through each app's own CLI where it has one (`claude mcp add`, `codex mcp add`, `agy mcp add`), so the app decides where its config lives. Without that CLI it writes only the file the app reads. It handles the empty file Antigravity creates, which the old writer skipped as "unreadable", and never rewrites a file with comments (Zed's) or broken JSON.
+- **`veto doctor` checks that each app really runs Veto,** not that a file mentions it. It reads what the app itself reports (including a disabled entry), launches the configured command to see it answer, and shows when each app last started Veto, with which Node and whether SQLite worked there. It also checks that transcript capture and the lessons trial are still keeping up, and exits 1 on any issue. Its Node check was also wrong: it accepted 22.5–22.12, where persistence does not work.
+- **New: `veto continue <id> --as <client>`, and `veto sessions --all | --limit N | [words]`.** An AI whose app did not load Veto can restore a session from a terminal through the same code as `veto_continue`, without reading Veto's database or importing its files, which is what one did before. `veto_continue` and `veto continue` accept the 8-character id prefix that listings show. `veto sessions` says how many sessions exist, not just the newest 20.
+- **New: the `veto` skill.** Written by `veto init` into Claude Code, Codex and Antigravity/Gemini skill folders. It is the one instruction an AI still sees when Veto did not load: say so, use the CLI, never read the database. It never replaces a `veto` skill you wrote yourself.
+- **Bug fix: tools returned filler as results.** Without an LLM step, generators filled their output with unrelated text: `veto_diagram` returned `"mermaid": "Documentation looks complete."`, and `veto_pr_description`, `veto_release_notes`, `veto_prompt_optimizer`, `veto_rca`, `veto_postmortem` and `veto_onboard` did the same. Each now returns only what it computed (commits, routes, counts, error-budget maths, the code at a stack trace) and marks the rest `generation: "needs_llm"`, with the prompt to finish it. Generated output is checked before it is returned: `veto_doc_gen` refuses a file that lost code, `veto_diagram` refuses text that isn't Mermaid, `veto_openapi_gen` refuses a non-OpenAPI document.
+- **Bug fix: tools dropped their inputs.** `veto_secrets_scan` never received its `text`. `veto_translate` never received its text or languages. `veto_semantic_search` never received its query, and `veto_explain`, `veto_merge_conflict` and `veto_a11y_advisor` never read their file. Every input now reaches the agent, files are read (a missing one is an error), and analysis tools run Veto's own scanner first and return its findings even without an LLM.
+- **Bug fix: scanners that could never find anything.** `veto_dead_code` and `veto_flag_auditor` passed GNU grep options to `git grep` and always reported nothing. Both now scan for real: exports no other file uses, commented-out code, and feature flags with their locations. The security scanner missed the most common SQL injection (`"… id = '" + req.params.id`) and now reports the line. `veto_clone_detector` reported code as a clone of itself and split one copy into several findings. `veto_openapi_gen` only looked at files named `route*`/`api*`.
+- **Bug fix: wrong numbers.** `veto_dep_advisor` asked OSV about `4.0.0` for a `^4.19.2` dependency. It now uses the installed or locked version and returns each advisory's summary, severity and fixed version. `veto_debt_register` gave every item "complexity, 2 hours", and several tools returned hard-coded blanks or zeros as results.
+- **Bug fix: keyword verdicts presented as reviews.** With no LLM available, council votes come from keyword rules. Such a verdict is now labelled as preliminary, is no longer saved as the project's latest verdict or stored in memory as a decision, and can no longer block `veto_new_feature`. `veto_benchmark` no longer picks a "winner" from it. A council answer missing most of its members no longer reports itself as fully LLM-backed.
+- **Other fixes.** `veto_project_map_get` crashed after a map was saved as an object. `veto_git_blame` ignored `project_dir`. `veto_pr_post` sent review comments GitHub rejects (they now go in the review body). `veto_env_setup` could replace an existing `.env.example` with a placeholder. `veto_workflow` ran malformed steps. `veto_notify_ide` said "sent" for actions MCP cannot perform. `veto_code_review` now stores the editor diagnostics its description promised. On Windows, project lookups now match whatever case each app spells the folder in, and `veto memory export --format=markdown` finds your project's entries again.
+- **Bug fix: the Claude Code secrets hook never ran.** The hook `veto init` installed read a file path from an environment variable Claude Code does not set, so it passed every file. It is replaced in place by one that reads Claude Code's hook input and reports findings back to Claude. Two hook files Claude Code never runs are removed, but only when they are exactly what Veto wrote.
+- Windows: Veto's own background commands no longer flash console windows, and a failed update check retries hourly instead of on every start.
 
 ### 3.6.0
 - **The shared-notes trial now measures whether the notes would help.** Before Veto gives any AI a note, it has to show that the notes it would give are real and useful. For 8 weeks or 20 Codex sessions, whichever comes first, Veto reads the first message of each Codex session in your projects from Codex's own session files, works out which notes it *would* have given that session, and records only that choice. It never keeps your message, and it still gives no note to any AI. Sessions are found from Codex's own files rather than from Veto's connection, because the Codex VS Code extension runs many conversations in one process and would otherwise be missed. Only the notes Veto held when a session began count, and subagents are not counted twice. `veto lessons` shows how the trial is going, and warns if sessions stop yielding a request, which would mean Codex changed its format. If transcript capture is on, finished trial sessions are archived so each choice can be checked later. Your record stays on your machine, and nothing judges it; whether delivery ships is decided by the trial on the author's own machine, under rules sealed before it began.
