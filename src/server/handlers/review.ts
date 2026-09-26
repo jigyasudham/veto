@@ -118,7 +118,7 @@ export const reviewHandlers: HandlerMap = {
     // Read diff if not provided
     let diff = diff_input;
     if (!diff) {
-      try { diff = execSync('git diff HEAD', { cwd: project_dir, encoding: 'utf8', timeout: 15000 }); } catch { diff = ''; }
+      try { diff = execSync('git diff HEAD', { windowsHide: true, cwd: project_dir, encoding: 'utf8', timeout: 15000 }); } catch { diff = ''; }
     }
 
     if (!diff?.trim()) {

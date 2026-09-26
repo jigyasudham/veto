@@ -225,7 +225,7 @@ async function initCommand() {
     const npxBin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
     const mcpCmd = `claude mcp add veto -s user -- ${npxBin} -y --package @jigyasudham/veto@latest veto-server`;
     try {
-      execSync(mcpCmd, { stdio: 'pipe', timeout: 15000 });
+      execSync(mcpCmd, { windowsHide: true, stdio: 'pipe', timeout: 15000 });
       console.log(c.green('  ✓ ') + 'Claude Code — registered (user scope: all windows & projects)');
       configured++;
     } catch (err: unknown) {
@@ -266,7 +266,7 @@ async function initCommand() {
     const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
     const codexMcpCmd = `codex mcp add veto -- ${npxCmd} -y --package @jigyasudham/veto@latest veto-server`;
     try {
-      execSync(codexMcpCmd, { stdio: 'pipe', timeout: 15000 });
+      execSync(codexMcpCmd, { windowsHide: true, stdio: 'pipe', timeout: 15000 });
       console.log(c.green('  ✓ ') + 'Codex CLI — registered');
       configured++;
     } catch (err: unknown) {
@@ -584,7 +584,7 @@ async function doctorCommand(fix = false) {
   // latest so an out-of-date install is visible at a glance.
   let latest = '';
   try {
-    latest = execSync('npm view @jigyasudham/veto version', { encoding: 'utf8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    latest = execSync('npm view @jigyasudham/veto version', { windowsHide: true, encoding: 'utf8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
   } catch { /* offline / npm unavailable — skip the comparison */ }
 
   if (latest && latest !== VERSION) {
@@ -602,7 +602,7 @@ async function doctorCommand(fix = false) {
   // flag it when it has fallen behind the registry.
   let globalVersion = '';
   try {
-    const out = execSync('npm ls -g @jigyasudham/veto --depth=0', { encoding: 'utf8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] });
+    const out = execSync('npm ls -g @jigyasudham/veto --depth=0', { windowsHide: true, encoding: 'utf8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] });
     globalVersion = out.match(/@jigyasudham\/veto@([\d.]+)/)?.[1] ?? '';
   } catch { /* not installed globally — CLI still reachable via npx */ }
 
@@ -701,7 +701,7 @@ async function doctorCommand(fix = false) {
     let claudeOk = false;
     let claudeNote = '';
     try {
-      const out = execSync('claude mcp list', { encoding: 'utf8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] });
+      const out = execSync('claude mcp list', { windowsHide: true, encoding: 'utf8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] });
       if (/veto/i.test(out)) { claudeOk = true; }
     } catch { /* claude CLI not in PATH */ }
 
@@ -730,7 +730,7 @@ async function doctorCommand(fix = false) {
   if (existsSync(codexDirD)) {
     let codexOk = false;
     try {
-      const out = execSync('codex mcp list', { encoding: 'utf8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] });
+      const out = execSync('codex mcp list', { windowsHide: true, encoding: 'utf8', timeout: 8000, stdio: ['pipe', 'pipe', 'pipe'] });
       if (/veto/i.test(out)) { codexOk = true; }
     } catch { /* codex CLI not in PATH */ }
 
@@ -1519,7 +1519,7 @@ async function checkCommand() {
 
   let diff = '';
   try {
-    diff = execSync('git diff --cached', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+    diff = execSync('git diff --cached', { windowsHide: true, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
   } catch { /* not a git repo or git not available */ }
 
   if (!diff.trim()) {

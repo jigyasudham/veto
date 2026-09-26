@@ -18,7 +18,7 @@ import { recordOutcome } from '../router/index.js';
  */
 export function readGitDiff(projectDir: string | undefined, stagedOnly = false): string {
   if (!projectDir) return '';
-  const run = (cmd: string) => execSyncTop(cmd, { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+  const run = (cmd: string) => execSyncTop(cmd, { windowsHide: true, cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
   try {
     if (stagedOnly) return run('git diff --cached --no-color');
     const head = run('git diff HEAD --no-color');

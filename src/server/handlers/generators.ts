@@ -24,7 +24,7 @@ export const generatorHandlers: HandlerMap = {
     let gitLog = '';
     try {
       gitLog = execSync('git log --since=90.days --name-only --format="" --no-merges', {
-        cwd: project_dir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true, cwd: project_dir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'],
       }).toString();
     } catch { /* not a git repo */ }
 
@@ -384,7 +384,7 @@ export const generatorHandlers: HandlerMap = {
     let fileTree = '';
     try {
       fileTree = execSync('git ls-files --others --cached --exclude-standard', {
-        cwd: project_dir, timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true, cwd: project_dir, timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'],
       }).toString().split('\n').filter((f: string) => !f.includes('node_modules') && !f.includes('dist/')).slice(0, 60).join('\n');
     } catch { /* not a git repo */ }
 
@@ -425,10 +425,10 @@ export const generatorHandlers: HandlerMap = {
 
     let gitContext = '';
     try {
-      const recent = execSync('git log --oneline -15', { cwd: projectDir || undefined, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
+      const recent = execSync('git log --oneline -15', { windowsHide: true, cwd: projectDir || undefined, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
       gitContext = `Recent commits:\n${recent}`;
       if (fileHint) {
-        const blame = execSync(`git log --oneline -10 -- "${fileHint}"`, { cwd: projectDir || undefined, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
+        const blame = execSync(`git log --oneline -10 -- "${fileHint}"`, { windowsHide: true, cwd: projectDir || undefined, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
         gitContext += `\nRecent changes to ${fileHint}:\n${blame}`;
       }
     } catch { /* not a git repo */ }
@@ -467,13 +467,13 @@ export const generatorHandlers: HandlerMap = {
 
     let fromRef = args?.from_ref ? String(args.from_ref) : '';
     if (!fromRef) {
-      try { fromRef = execSync('git describe --tags --abbrev=0', { cwd: projectDir, timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim(); }
+      try { fromRef = execSync('git describe --tags --abbrev=0', { windowsHide: true, cwd: projectDir, timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim(); }
       catch { fromRef = ''; }
     }
 
     const logCmd = fromRef ? `git log ${fromRef}..HEAD --oneline --no-merges` : 'git log --oneline --no-merges -30';
     let commits = '';
-    try { commits = execSync(logCmd, { cwd: projectDir, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim(); }
+    try { commits = execSync(logCmd, { windowsHide: true, cwd: projectDir, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim(); }
     catch { return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'Could not read git log. Ensure project_dir is a git repository.' }) }], isError: true }; }
 
     if (!commits) return { content: [{ type: 'text', text: JSON.stringify({ success: true, release_notes: 'No changes since last tag.', commits_processed: 0 }) }] };

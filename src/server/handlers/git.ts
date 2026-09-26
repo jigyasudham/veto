@@ -28,7 +28,7 @@ export const gitHandlers: HandlerMap = {
     }
 
     function gitExec(cmd: string, cwd: string): string {
-      try { return execSync(cmd, { cwd, timeout: 5000, stdio: ['pipe','pipe','pipe'] }).toString().trim(); }
+      try { return execSync(cmd, { windowsHide: true, cwd, timeout: 5000, stdio: ['pipe','pipe','pipe'] }).toString().trim(); }
       catch { return ''; }
     }
 
@@ -66,7 +66,7 @@ export const gitHandlers: HandlerMap = {
     }
 
     function gitRun(cmd: string): string {
-      try { return execSync(cmd, { cwd: resolvedDir, timeout: 5000, stdio: ['pipe','pipe','pipe'] }).toString().trim(); }
+      try { return execSync(cmd, { windowsHide: true, cwd: resolvedDir, timeout: 5000, stdio: ['pipe','pipe','pipe'] }).toString().trim(); }
       catch { return ''; }
     }
 
@@ -154,15 +154,15 @@ export const gitHandlers: HandlerMap = {
     let stat = '';
     let commitLog = '';
     try {
-      stat      = execSync(`git diff ${baseBranch}...HEAD --no-color --stat`,  { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
-      commitLog = execSync(`git log ${baseBranch}...HEAD --oneline`,            { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+      stat      = execSync(`git diff ${baseBranch}...HEAD --no-color --stat`,  { windowsHide: true, cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+      commitLog = execSync(`git log ${baseBranch}...HEAD --oneline`,            { windowsHide: true, cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
     } catch (e) {
       if (!stat && !commitLog) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `git diff failed: ${(e as Error).message}` }) }], isError: true };
     }
 
     let fullDiff = '';
     try {
-      fullDiff = execSync(`git diff ${baseBranch}...HEAD --no-color`, { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+      fullDiff = execSync(`git diff ${baseBranch}...HEAD --no-color`, { windowsHide: true, cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
     } catch { /* ignore */ }
 
     const contextParts: string[] = [];

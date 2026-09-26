@@ -434,7 +434,7 @@ const NO_ORIGINAL = '__VETO_NO_ORIGINAL_FILE__';
 function bareVetoOnPath(): boolean {
   try {
     const probe = process.platform === 'win32' ? 'where veto' : 'command -v veto';
-    execSync(probe, { stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 });
+    execSync(probe, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 });
     return true;
   } catch {
     return false;

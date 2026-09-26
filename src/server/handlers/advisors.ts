@@ -200,7 +200,7 @@ export const advisorHandlers: HandlerMap = {
     let findings = '';
     for (const { label, regex } of patterns) {
       try {
-        const out = execSync(`git grep -rn "${regex}" ${includeArgs} -- . ":(exclude)node_modules" ":(exclude)dist"`, { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
+        const out = execSync(`git grep -rn "${regex}" ${includeArgs} -- . ":(exclude)node_modules" ":(exclude)dist"`, { windowsHide: true, cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
         const lines = out.split('\n').filter(Boolean).slice(0, 20);
         if (lines.length > 0) findings += `\n=== ${label} (${lines.length} found) ===\n${lines.join('\n')}`;
       } catch { /* no matches — git grep exits 1 */ }
@@ -283,7 +283,7 @@ export const advisorHandlers: HandlerMap = {
       try {
         const candidates = execSync(
           'git ls-files --cached -- "*.ts" "*.js" "*.py"',
-          { cwd: projectDir, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }
+          { windowsHide: true, cwd: projectDir, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }
         ).toString().split('\n').filter((f: string) => /route|router|api|endpoint|controller/i.test(f) && !f.includes('node_modules') && !f.includes('dist/')).slice(0, 5);
         for (const f of candidates) {
           try { routeContent += `\n// FILE: ${f}\n${readFileSync(join(projectDir, f), 'utf8').slice(0, 3000)}\n`; } catch { /* skip */ }
@@ -345,7 +345,7 @@ export const advisorHandlers: HandlerMap = {
       try {
         const out = execSync(
           `git grep -rn "${regex}" --include="*.ts" --include="*.js" --include="*.py" -- . ":(exclude)node_modules" ":(exclude)dist"`,
-          { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }
+          { windowsHide: true, cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }
         ).toString();
         const lines = out.split('\n').filter(Boolean);
         totalMatches += lines.length;

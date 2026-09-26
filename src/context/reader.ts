@@ -54,7 +54,7 @@ function safeRead(filePath: string): string | null {
 
 function safeExec(cmd: string, cwd: string): string {
   try {
-    return execSync(cmd, { cwd, timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+    return execSync(cmd, { windowsHide: true, cwd, timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
   } catch {
     return '';
   }
