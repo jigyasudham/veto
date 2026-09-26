@@ -129,11 +129,31 @@ const CHECKS: CheckPattern[] = [
 
   // A03 – Injection
   {
-    regex: /['"`]\s*(?:SELECT|INSERT|UPDATE|DELETE)\b[^'"`]*\+\s*(?:req\.|params\.|body\.|query\.)\w+/i,
+    // The SQL string may contain the other quote character — `"... id = '" + req.params.id`
+    // is the textbook case, and the old [^'"`]* stopped at that inner quote and missed it.
+    regex: /(['"`])\s*(?:SELECT\b.*?\bFROM|INSERT\s+INTO|UPDATE\s+[\w."`]+\s+SET|DELETE\s+FROM)\b.*?\1\s*\+\s*(?:req|params|body|query|request)\b[\w.[\]'"]*/i,
     severity: 'critical',
     category: 'A03 Injection',
-    description: 'String concatenation inside SQL query — SQL injection risk.',
+    description: 'Request input concatenated into a SQL query — SQL injection.',
     fix: 'Use parameterised queries: db.query("SELECT ... WHERE id = $1", [id])',
+    cwe: 'CWE-89',
+    owasp: 'A03:2021',
+  },
+  {
+    regex: /`[^`]*\b(?:SELECT\b[^`]*?\bFROM|INSERT\s+INTO|UPDATE\s+[\w."]+\s+SET|DELETE\s+FROM)\b[^`]*\$\{\s*(?:req|params|body|query|request)\b/i,
+    severity: 'critical',
+    category: 'A03 Injection',
+    description: 'Request input interpolated into a SQL template string — SQL injection.',
+    fix: 'Use parameterised queries: db.query("SELECT ... WHERE id = $1", [id])',
+    cwe: 'CWE-89',
+    owasp: 'A03:2021',
+  },
+  {
+    regex: /(['"`])\s*(?:SELECT\b.*?\bFROM|INSERT\s+INTO|UPDATE\s+[\w."`]+\s+SET|DELETE\s+FROM)\b.*?\1\s*\+\s*[A-Za-z_$][\w$.]*\s*\+?/i,
+    severity: 'medium',
+    category: 'A03 Injection',
+    description: 'SQL query built by string concatenation — injectable if any part comes from input.',
+    fix: 'Use parameterised queries instead of concatenating values into SQL.',
     cwe: 'CWE-89',
     owasp: 'A03:2021',
   },
@@ -274,6 +294,7 @@ const CHECKS: CheckPattern[] = [
 export function analyze(code: string, context?: string): AgentAnalysis {
   const findings: AgentFinding[] = [];
 
+  const lines = code.split(/\r?\n/);
   for (const check of CHECKS) {
     if (check.regex.test(code)) {
       const finding: AgentFinding = {
@@ -284,7 +305,18 @@ export function analyze(code: string, context?: string): AgentAnalysis {
         owasp: check.owasp,
       };
       if (check.cwe) finding.cwe = check.cwe;
+      // Where it is: the first line the rule matches on its own (multi-line
+      // matches keep no location rather than a wrong one).
+      const at = lines.findIndex(l => check.regex.test(l));
+      if (at >= 0) finding.location = `line ${at + 1}`;
       findings.push(finding);
+    }
+  }
+  // The generic "SQL built by concatenation" rule is only worth reporting when
+  // the specific request-input rules did not already flag the query.
+  if (findings.some(f => f.cwe === 'CWE-89' && f.severity === 'critical')) {
+    for (let i = findings.length - 1; i >= 0; i--) {
+      if (findings[i].cwe === 'CWE-89' && findings[i].severity === 'medium') findings.splice(i, 1);
     }
   }
 

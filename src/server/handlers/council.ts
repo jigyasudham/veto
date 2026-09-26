@@ -81,8 +81,11 @@ export const councilHandlers: HandlerMap = {
         const invitation = result.final_verdict === 'DEADLOCK'
           ? null
           : offerInvitation({ source_kind: 'council', source_id: outcomeId, project_dir: debateInput.project_dir });
+        const answered = Object.values(parsed).filter(v => v.source === 'llm').length;
         const payload = {
-          outcome_id: outcomeId, llm_backed: true, final_verdict: result.final_verdict, block_reasons: result.block_reasons, warnings: result.warnings, recommended: result.recommended, debated_at: result.debated_at, votes: result.votes,
+          outcome_id: outcomeId, llm_backed: answered === 7,
+          verdict_basis: answered === 7 ? 'all 7 votes from agent_responses' : `${answered} of 7 votes from agent_responses; the missing ${7 - answered} filled by keyword rules`,
+          final_verdict: result.final_verdict, block_reasons: result.block_reasons, warnings: result.warnings, recommended: result.recommended, debated_at: result.debated_at, votes: result.votes,
           ...(invitation ? { constraint_invitation: invitationPayload(invitation.id) } : {}),
         };
         return { content: [{ type: 'text', text: result.formatted_output + '\n\n' + JSON.stringify(payload, null, 2) }] };
@@ -110,7 +113,15 @@ export const councilHandlers: HandlerMap = {
     const debateDuration = Date.now() - debateStart;
 
     const sessionId = args?.session_id ? String(args.session_id) : undefined;
-    const outcomeId = saveCouncilOutcome({
+    // With no MCP Sampling, every vote comes from keyword rules, which react to
+    // words in the task (e.g. "auth" → "what happens when auth fails at 2AM?")
+    // rather than reviewing it. Such a verdict is returned, clearly labelled,
+    // but not recorded as a decision: it used to be saved as the project's
+    // latest council verdict (the status line and HUD showed it), fed to the
+    // router's learning, and — if YELLOW or RED — stored in memory as a decision.
+    const llmVotes = result.llm_votes ?? 0;
+    const rulesOnly = llmVotes === 0;
+    const outcomeId = rulesOnly ? null : saveCouncilOutcome({
       session_id: sessionId,
       task,
       verdict: result.final_verdict,
@@ -127,14 +138,14 @@ export const councilHandlers: HandlerMap = {
     });
 
     // #38: auto-record learning outcome from verdict — no manual veto_record_outcome needed
-    {
+    if (!rulesOnly) {
       const qMap: Record<string, number> = { GREEN: 90, YELLOW: 60, RED: 20, DEADLOCK: 50 };
       const tMap: Record<string, 1|2|3> = { GREEN: 1, YELLOW: 2, RED: 3, DEADLOCK: 2 };
       recordOutcome(task.slice(0, 50), 50, tMap[result.final_verdict] ?? 2, 'council', qMap[result.final_verdict] ?? 50);
     }
 
     // Auto-store RED verdicts so they appear in the Memory panel immediately
-    if (result.final_verdict === 'RED' || (result.final_verdict === 'YELLOW' && (result.warnings.length >= 2 || result.block_reasons.length > 0))) {
+    if (!rulesOnly && (result.final_verdict === 'RED' || (result.final_verdict === 'YELLOW' && (result.warnings.length >= 2 || result.block_reasons.length > 0)))) {
       const isRed = result.final_verdict === 'RED';
       const lines: string[] = [`Task: ${task}`];
       if (result.block_reasons.length > 0) lines.push(`\nBlocked by:\n${result.block_reasons.map(r => `- ${r}`).join('\n')}`);
@@ -169,7 +180,10 @@ export const councilHandlers: HandlerMap = {
 
     const responsePayload = {
       outcome_id: outcomeId,
-      llm_backed: false,
+      llm_backed: llmVotes === 7,
+      verdict_basis: rulesOnly
+        ? 'keyword rules only — not a review of this task, and not recorded. Complete llm_upgrade for the real debate.'
+        : llmVotes === 7 ? 'all 7 votes by LLM (MCP Sampling)' : `${llmVotes} of 7 votes by LLM; the rest by keyword rules`,
       final_verdict: result.final_verdict,
       block_reasons: result.block_reasons,
       warnings: result.warnings,
@@ -191,7 +205,10 @@ export const councilHandlers: HandlerMap = {
       },
     } as Record<string, unknown>;
 
-    const fullText = result.formatted_output + '\n\n' + JSON.stringify(responsePayload, null, 2);
+    const banner = rulesOnly
+      ? '⚠  PRELIMINARY — keyword rules only, no LLM ran. This is not a review of your task and was not recorded.\n   Complete llm_upgrade (reason as the 7 agents, call again with agent_responses) for the real verdict.\n'
+      : '';
+    const fullText = banner + result.formatted_output + '\n\n' + JSON.stringify(responsePayload, null, 2);
 
     if (typeof args?.max_tokens === 'number') {
       const { exceeded, estimated_tokens } = logUsage({
@@ -228,6 +245,21 @@ export const councilHandlers: HandlerMap = {
       runLlmDebate(server, { task: `${task}\n\nApproach A: ${approachA}`, context: ctx, project_dir: projectDir }),
       runLlmDebate(server, { task: `${task}\n\nApproach B: ${approachB}`, context: ctx, project_dir: projectDir }),
     ]);
+
+    // Without an LLM the votes are keyword rules, which react to the words in
+    // each approach (mention "Redis" and a caching warning fires) — counting
+    // those warnings picked a "winner" that meant nothing.
+    if ((debateA.llm_votes ?? 0) === 0 || (debateB.llm_votes ?? 0) === 0) {
+      return { content: [{ type: 'text', text: JSON.stringify({
+        winner: null,
+        confidence: 'none',
+        reasoning: 'No LLM ran (MCP Sampling is unavailable here), and keyword rules cannot compare two approaches, so no winner is declared.',
+        next: 'Run veto_council_debate once per approach, completing each with agent_responses, then compare the two LLM-backed verdicts.',
+        approach_a: { label: 'A', description: approachA.slice(0, 120), council_task: `${task}\n\nApproach A: ${approachA}` },
+        approach_b: { label: 'B', description: approachB.slice(0, 120), council_task: `${task}\n\nApproach B: ${approachB}` },
+        duration_ms: Date.now() - bmStart,
+      }, null, 2) }] };
+    }
 
     // Score: GREEN=3, YELLOW=2, RED=1, DEADLOCK=0
     const verdictScore: Record<string, number> = { GREEN: 3, YELLOW: 2, RED: 1, DEADLOCK: 0 };
@@ -310,13 +342,20 @@ export const councilHandlers: HandlerMap = {
     // Step 1: Governance
     const debateInput = { task: description, context: userContext, project_dir: projectDir, strictness: 'standard' as const };
     let debateResult;
+    let councilRulesOnly = false;
     if (agentResponses?.council) {
-       debateResult = runFromAgentResponses(debateInput, parseAgentResponses(JSON.stringify(agentResponses.council), description)!);
+       const parsedCouncil = parseAgentResponses(typeof agentResponses.council === 'string' ? agentResponses.council : JSON.stringify(agentResponses.council), description);
+       if (!parsedCouncil) {
+         return { content: [{ type: 'text', text: JSON.stringify({ success: false, pipeline: 'new_feature', error: 'agent_responses.council could not be read (expected lead_dev, pm, architect, ux, devil, legal, security — each with verdict and reason).' }, null, 2) }], isError: true };
+       }
+       debateResult = runFromAgentResponses(debateInput, parsedCouncil);
     } else {
        debateResult = await runLlmDebate(server, debateInput);
+       councilRulesOnly = (debateResult.llm_votes ?? 0) === 0;
     }
 
-    if (debateResult.final_verdict === 'RED') {
+    // Only a real review may block a feature; keyword rules cannot.
+    if (debateResult.final_verdict === 'RED' && !councilRulesOnly) {
       return { content: [{ type: 'text', text: JSON.stringify({ pipeline: 'new_feature', verdict: 'blocked', council: debateResult }, null, 2) }] };
     }
 
@@ -328,14 +367,18 @@ export const councilHandlers: HandlerMap = {
        planResult = await executeOne({ id: 'planner', agent: 'task-planner', task: description, project_dir: projectDir, llm_backed: true });
     }
 
-    if (planResult.llm_upgrade || (debateResult as any).llm_upgrade) {
+    if (planResult.llm_upgrade || councilRulesOnly) {
+       const councilPrompt = councilRulesOnly
+         ? { available: true, instruction: 'Reason as all 7 council agents, then call veto_new_feature again with agent_responses.council (and agent_responses.planner).', debate_prompt: buildAgenticDebatePrompt(description, buildContextString(projectDir, userContext) ?? '') }
+         : undefined;
        return {
          content: [{
            type: 'text',
            text: JSON.stringify({
              llm_backed: false,
+             ...(councilRulesOnly ? { preliminary_council: { final_verdict: debateResult.final_verdict, verdict_basis: 'keyword rules only — not a review; it cannot block or approve this feature' } } : {}),
              llm_upgrade: {
-               council: (debateResult as any).llm_upgrade,
+               council: councilPrompt,
                planner: planResult.llm_upgrade,
              }
            }, null, 2)
@@ -343,8 +386,14 @@ export const councilHandlers: HandlerMap = {
        };
     }
 
+    // A planner answer of the wrong shape is a visible error (AGENTS.md rule 5),
+    // not a crash on plan! further down.
+    if (planResult.error || !planResult.plan) {
+      return { content: [{ type: 'text', text: JSON.stringify({ success: false, pipeline: 'new_feature', error: planResult.error ?? 'The planner returned no plan.' }, null, 2) }], isError: true };
+    }
+
     // Step 3: Tasks
-    const tasks = parsePrdIntoTasks(description, planResult.plan!, 10);
+    const tasks = parsePrdIntoTasks(description, planResult.plan, 10);
     return { content: [{ type: 'text', text: JSON.stringify({ success: true, pipeline: 'new_feature', council: debateResult, plan: planResult.plan, tasks }, null, 2) }] };
   },
 };

@@ -7,6 +7,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { getDb } from './local.js';
+import { projectKey } from '../transcripts/project-key.js';
 
 export type ConstraintSeverity = 'block' | 'warn';
 
@@ -151,7 +152,7 @@ export function listConstraints(project_dir?: string, include_inactive = false):
   return rows
     .map(rowToConstraint)
     .filter(c => include_inactive || c.active)
-    .filter(c => !dir || c.project_dir === null || c.project_dir === dir);
+    .filter(c => !dir || c.project_dir === null || projectKey(c.project_dir) === projectKey(dir));
 }
 
 export function setConstraintActive(id: string, active: boolean): boolean {

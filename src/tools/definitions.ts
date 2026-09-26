@@ -870,7 +870,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'veto_env_setup',
-    description: 'Analyzes project config files (package.json, requirements.txt, .env, etc.) and generates a .env.example with all required environment variables, plus a step-by-step setup guide.',
+    description: 'Finds the environment variables the code actually reads and the project\'s config files, then generates a .env.example and a step-by-step setup guide. With write_files it writes .env.example — never over an existing one unless overwrite is true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -879,7 +879,8 @@ export const TOOL_DEFINITIONS = [
           description: 'Phase 2 response from the host AI (JSON). Pass this back when prompted by the server to complete the agentic loop.',
         },
         project_dir:  { type: 'string', description: 'Absolute path to project.' },
-        write_files:  { type: 'boolean', description: 'If true, write .env.example to disk (default false).' },
+        write_files:  { type: 'boolean', description: 'If true, write the generated .env.example to disk (default false). An existing file is kept unless overwrite is true.' },
+        overwrite:    { type: 'boolean', description: 'With write_files, replace an existing .env.example (default false).' },
       },
       required: ['project_dir'],
     },
@@ -920,7 +921,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'veto_pr_post',
-    description: 'Posts veto_pr_review or veto_diff_review findings directly to a GitHub PR as review comments. Requires GITHUB_TOKEN environment variable. Returns the review URL.',
+    description: 'Posts veto_pr_review or veto_diff_review findings to a GitHub PR as one review whose body lists every finding with its location. Requires GITHUB_TOKEN environment variable. Returns the review URL.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -987,7 +988,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'veto_type_coverage',
-    description: "Scans a TypeScript project for `any`, implicit `any`, and `as any` casts. Suggests specific replacement types using surrounding code context. Flags `any` in auth/security paths as high severity.",
+    description: "Counts explicit `any`, `as any`, @ts-ignore and @ts-expect-error in a TypeScript project and reports the tsconfig strict/noImplicitAny settings (computed), then suggests specific replacement types, security-sensitive paths first. Implicit any needs the compiler and is not counted.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -1037,7 +1038,7 @@ export const TOOL_DEFINITIONS = [
   // ── Diagnosis & Release ───────────────────────────────────────────────────────
   {
     name: 'veto_rca',
-    description: 'Stack trace or error description → structured root-cause hypothesis with likely introducing commit. Combines git blame/log with debugger analysis.',
+    description: 'Stack trace or error description → structured root-cause hypothesis with likely introducing commit. Reads the code at the stack trace\'s file:line locations and the recent git log, then runs debugger analysis.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1090,7 +1091,7 @@ export const TOOL_DEFINITIONS = [
   // ── Code Intelligence (Dep / Query / Bundle / Dead-code) ─────────────────────
   {
     name: 'veto_dep_advisor',
-    description: 'Parses package.json/requirements.txt/Cargo.toml lockfile, queries OSV.dev (free, no key) for known vulnerabilities, and returns a risk-ranked upgrade plan with breaking-change flags.',
+    description: 'Reads package.json (using the installed or package-lock version of each dependency) or requirements.txt, queries OSV.dev (free, no key) for known vulnerabilities in those exact versions, and returns a risk-ranked upgrade plan with breaking-change flags.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1136,7 +1137,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'veto_bundle_advisor',
-    description: 'Accepts a webpack/Rollup/Vite stats JSON file → top 10 heaviest modules, duplicate packages, code-split candidates, and CDN externalization suggestions.',
+    description: 'Accepts a webpack-format stats JSON (`webpack --json`) → heaviest assets and modules and duplicated packages (computed), plus code-split and CDN-externalization suggestions.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1152,7 +1153,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'veto_dead_code',
-    description: 'Project-scope dead code detector: unused exports, unreachable branches, stale feature flags (always-true/false constants). Returns council-governed deletion recommendations.',
+    description: 'Project-scope dead code detector: exported symbols no other project file references (package entry points counted as public API), runs of commented-out code, and TODO/FIXME markers — all found deterministically — plus an LLM judgement of which are safe to delete.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1379,7 +1380,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'veto_explain',
-    description: 'Explains a file or raw text using the most appropriate expert agent. Pass file_path to explain a source file, or text to explain an error message, stack trace, or compiler output. Agent is auto-detected from file extension or content.',
+    description: 'Explains a file or raw text. Pass file_path to explain a source file (read by Veto), or text to explain an error message, stack trace, or compiler output. Files go to the coder specialist, raw text to the debugger specialist.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1480,7 +1481,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'veto_lint_rules',
-    description: 'Analyzes project coding style and auto-generates or updates ESLint/Prettier/Ruff configurations to match current conventions.',
+    description: 'Reads the project\'s existing lint/format configs and returns a complete ESLint/Prettier/Ruff/Biome configuration matching its conventions. Returns the file content; it does not write it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1574,7 +1575,7 @@ export const TOOL_DEFINITIONS = [
   // ── Phase 8: Long-Horizon ─────────────────────────────────────────────────
   {
     name: 'veto_semantic_search',
-    description: 'Local vector index codebase search. Answers natural-language queries over code (e.g. "where is user authentication handled?").',
+    description: 'Code search for natural-language questions (e.g. "where is user authentication handled?"). Veto ranks project lines by the query\'s keywords — lexical, not a vector index — and returns the ranked matches; the calling AI reads them to answer.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1607,7 +1608,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'veto_playwright',
-    description: 'Playwright MCP integration. Coordinates browser sessions for testing, a11y review, and security scanning of UI vulnerabilities.',
+    description: 'Writes a runnable Playwright test (TypeScript) for a browser scenario and says how to run it. Veto does not launch or drive a browser itself.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1624,7 +1625,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'veto_notify_ide',
-    description: 'Sends a notification or instruction back to the IDE/client. Useful for opening files, showing alerts, or requesting UI actions in bidirectional MCP setups (JetBrains, Zed).',
+    description: 'Sends a message to the client as an MCP log notification (action show_message or set_status); whether it is shown is up to the client. MCP gives a server no way to open files or change the client\'s UI, so open_file returns an error rather than pretending.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -43,7 +43,7 @@ export const KEY_CONFIG_FILES = [
 
 function safeExec(cmd: string, cwd: string): string {
   try {
-    return execSync(cmd, { cwd, encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+    return execSync(cmd, { windowsHide: true, cwd, encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
   } catch { return ''; }
 }
 

@@ -4,7 +4,7 @@
 // executeOne + recordOutcome shape; blame/changelog are pure git plumbing.
 
 import { statSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, isAbsolute } from 'node:path';
 import { execSync } from 'node:child_process';
 import { recordOutcome } from '../../router/index.js';
 import { readGitDiff, runHandlerAgent, handlerAgentResponse } from '../scan-core.js';
@@ -22,13 +22,15 @@ export const gitHandlers: HandlerMap = {
       return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'Provide project_dir or file_path.' }) }], isError: true };
     }
 
-    const resolvedTarget = resolve(blameTarget);
+    // A relative file_path is relative to project_dir, not to wherever the
+    // server happens to run (it used to resolve against the server's own cwd).
+    const resolvedTarget = blameFile && blameDir && !isAbsolute(blameFile) ? resolve(blameDir, blameFile) : resolve(blameTarget);
     try { statSync(resolvedTarget); } catch {
       return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `Path not found: ${resolvedTarget}` }) }], isError: true };
     }
 
     function gitExec(cmd: string, cwd: string): string {
-      try { return execSync(cmd, { cwd, timeout: 5000, stdio: ['pipe','pipe','pipe'] }).toString().trim(); }
+      try { return execSync(cmd, { windowsHide: true, cwd, timeout: 5000, stdio: ['pipe','pipe','pipe'] }).toString().trim(); }
       catch { return ''; }
     }
 
@@ -66,11 +68,12 @@ export const gitHandlers: HandlerMap = {
     }
 
     function gitRun(cmd: string): string {
-      try { return execSync(cmd, { cwd: resolvedDir, timeout: 5000, stdio: ['pipe','pipe','pipe'] }).toString().trim(); }
+      try { return execSync(cmd, { windowsHide: true, cwd: resolvedDir, timeout: 5000, stdio: ['pipe','pipe','pipe'] }).toString().trim(); }
       catch { return ''; }
     }
 
-    const lastTag = gitRun('git describe --tags --abbrev=0 2>/dev/null') || '';
+    // stderr is already piped; a shell redirect here broke under cmd.exe.
+    const lastTag = gitRun('git describe --tags --abbrev=0') || '';
     const range   = lastTag ? `${lastTag}..HEAD` : 'HEAD';
     const rawLog  = gitRun(`git log ${range} --format="%s|||%H|||%aN|||%ai" --no-merges -n ${maxEntries}`);
 
@@ -121,26 +124,31 @@ export const gitHandlers: HandlerMap = {
     const run = await runHandlerAgent('veto_commit_message', {
       id:      'commit-msg-1',
       agent:   'git-agent' as WorkerAgentType,
-      task:    'Generate a conventional commit message for these staged changes. Follow the Conventional Commits spec: type(scope): subject\n\nbody. Types: feat/fix/docs/chore/refactor/test/perf/ci/build/style. Be concise. Subject ≤ 72 chars.',
+      task:    'Write the commit message for these staged changes.',
       code:    truncatedDiff,
       context: hint,
       project_dir: projectDir,
+      deliverable: {
+        description: 'Write a Conventional Commits message for the staged diff in the material: "type(scope): subject" (types feat/fix/docs/chore/refactor/test/perf/ci/build/style, subject ≤ 72 characters, imperative), then a blank line and a short body saying what changed and why. Describe only what the diff shows.',
+        shape: { message: '"<the full commit message>"' },
+        required: ['message'],
+      },
     }, args?.agent_response);
-    const result = run.result;
 
-    recordOutcome('commit-message', 50, 2, 'git-agent', Math.round(result.output.confidence * 100));
-
-    const message = (result.plan?.approach ?? result.output.recommendation ?? '').trim();
-    const firstLine = message.split('\n')[0] ?? '';
+    const message = typeof run.deliverable?.message === 'string' ? run.deliverable.message.trim() : null;
+    const firstLine = message?.split('\n')[0] ?? '';
     const match = firstLine.match(/^(\w+)(?:\(([^)]+)\))?!?:\s*(.+)/);
+    recordOutcome('commit-message', 50, 2, 'git-agent', message ? (match ? 85 : 60) : 40);
 
     return handlerAgentResponse({
       message,
       type:       match ? match[1] : null,
       scope:      match ? (match[2] ?? null) : null,
       subject:    match ? match[3] : null,
-      confidence: Math.round(result.output.confidence * 100),
-    }, run);
+      conventional: message ? Boolean(match) : null,
+      subject_length: match ? firstLine.length : null,
+      files_staged: [...truncatedDiff.matchAll(/^diff --git a\/.+ b\/(.+)$/gm)].map(m => m[1]),
+    }, run, { generated: ['message', 'type', 'scope', 'subject', 'conventional', 'subject_length'] });
   },
 
   veto_pr_description: async ({ args }) => {
@@ -154,15 +162,15 @@ export const gitHandlers: HandlerMap = {
     let stat = '';
     let commitLog = '';
     try {
-      stat      = execSync(`git diff ${baseBranch}...HEAD --no-color --stat`,  { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
-      commitLog = execSync(`git log ${baseBranch}...HEAD --oneline`,            { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+      stat      = execSync(`git diff ${baseBranch}...HEAD --no-color --stat`,  { windowsHide: true, cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+      commitLog = execSync(`git log ${baseBranch}...HEAD --oneline`,            { windowsHide: true, cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
     } catch (e) {
       if (!stat && !commitLog) return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `git diff failed: ${(e as Error).message}` }) }], isError: true };
     }
 
     let fullDiff = '';
     try {
-      fullDiff = execSync(`git diff ${baseBranch}...HEAD --no-color`, { cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+      fullDiff = execSync(`git diff ${baseBranch}...HEAD --no-color`, { windowsHide: true, cwd: projectDir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
     } catch { /* ignore */ }
 
     const contextParts: string[] = [];
@@ -175,25 +183,28 @@ export const gitHandlers: HandlerMap = {
     const run = await runHandlerAgent('veto_pr_description', {
       id:          'pr-desc-1',
       agent:       'documentation' as WorkerAgentType,
-      task:        "Write a complete GitHub Pull Request description. Include: ## Summary (3–5 bullet points of what changed and why), ## Changes (file-level breakdown from the diff stat), ## Test Plan (bulleted checklist of how to verify the changes), ## Breaking Changes (any API or interface changes; say 'None' if clean). Be specific and developer-facing.",
+      task:        'Write the pull request title and description for this branch.',
       code:        fullDiff.slice(0, 8000),
       context:     builtContext || undefined,
       project_dir: projectDir,
+      deliverable: {
+        description: "Write a GitHub pull request for the diff and commits in the material. Body sections: ## Summary (3-5 bullets: what changed and why), ## Changes (per file, from the diff stat), ## Test Plan (checklist to verify), ## Breaking Changes ('None' if none). Only describe what the diff shows.",
+        shape: { title: '"<≤ 72 characters>"', body: '"<markdown>"' },
+        required: ['title', 'body'],
+      },
     }, args?.agent_response);
-    const result = run.result;
 
-    const quality = Math.round(result.output.confidence * 100);
-    recordOutcome('pr-description', 50, 2, 'documentation', quality);
-
-    const body = (result.plan?.approach ?? result.output.recommendation ?? '').trim();
-    const suggestedTitle = titleHint ?? (commitLog.split('\n')[0]?.replace(/^[a-f0-9]+ /, '') ?? 'Pull Request');
+    const body = typeof run.deliverable?.body === 'string' ? run.deliverable.body.trim() : null;
+    const title = titleHint ?? (typeof run.deliverable?.title === 'string' ? run.deliverable.title.trim() : null);
+    recordOutcome('pr-description', 50, 2, 'documentation', body ? 80 : 40);
 
     return handlerAgentResponse({
-      title:       suggestedTitle,
+      title,
       body,
       base_branch: baseBranch,
-      confidence:  quality,
-    }, run);
+      commits:     commitLog ? commitLog.split('\n').filter(Boolean) : [],
+      diff_stat:   stat || null,
+    }, run, { generated: titleHint ? ['body'] : ['title', 'body'] });
   },
 
   veto_pr_post: async ({ args }) => {
@@ -205,15 +216,20 @@ export const gitHandlers: HandlerMap = {
 
     const findings: Array<{ severity: string; message: string; location?: string }> =
       Array.isArray(args?.findings) ? args.findings : [];
-    const reviewBody = args?.body ? String(args.body) :
-      `Veto review: ${findings.length} finding(s) — ${findings.filter(f => f.severity === 'critical' || f.severity === 'high').length} critical/high`;
     const eventVal = String(args?.event ?? '');
     const event = ['COMMENT', 'APPROVE', 'REQUEST_CHANGES'].includes(eventVal) ? eventVal : 'COMMENT';
 
-    const comments = findings
-      .filter(f => f.severity === 'critical' || f.severity === 'high')
-      .slice(0, 20)
-      .map(f => ({ body: `**[${f.severity.toUpperCase()}]** ${f.message}${f.location ? `\n\n_Location: ${f.location}_` : ''}` }));
+    // Findings go in the review body. They used to be sent as inline review
+    // comments with no `path`/`line`, which GitHub rejects (422) — so any
+    // review with a critical or high finding failed to post at all. Inline
+    // comments also need the line to be part of the diff, which Veto cannot
+    // guarantee, and one bad line fails the whole review.
+    const RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+    const listed = [...findings].sort((a, b) => (RANK[a.severity] ?? 5) - (RANK[b.severity] ?? 5)).slice(0, 50);
+    const summary = `Veto review: ${findings.length} finding(s) — ${findings.filter(f => f.severity === 'critical' || f.severity === 'high').length} critical/high`;
+    const list = listed.map(f => `- **[${String(f.severity).toUpperCase()}]** ${f.message}${f.location ? ` — \`${f.location}\`` : ''}`).join('\n');
+    const reviewBody = [args?.body ? String(args.body) : summary, list].filter(Boolean).join('\n\n')
+      + (findings.length > listed.length ? `\n\n…and ${findings.length - listed.length} more.` : '');
 
     const prPostUrl = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNum}/reviews`;
     const prPostHeaders: Record<string, string> = {
@@ -224,7 +240,7 @@ export const gitHandlers: HandlerMap = {
     const prPostResp = await fetch(prPostUrl, {
       method: 'POST',
       headers: prPostHeaders,
-      body: JSON.stringify({ body: reviewBody, event, comments }),
+      body: JSON.stringify({ body: reviewBody, event }),
     });
     if (!prPostResp.ok) {
       const err = await prPostResp.text();
@@ -237,7 +253,7 @@ export const gitHandlers: HandlerMap = {
       review_id: review.id,
       review_url: review.html_url,
       event,
-      findings_posted: comments.length,
+      findings_posted: listed.length,
       total_findings: findings.length,
     }, null, 2) }] };
   },

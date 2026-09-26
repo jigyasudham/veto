@@ -9,6 +9,8 @@ export interface AgentVote {
   // Non-voting topical guidance. Shown to the user but never counted by the
   // decision engine — only concrete rule matches (concerns) can move the verdict.
   advice?: string;
+  /** Who produced the vote: an LLM, or the keyword rules used when none is available. */
+  source?: 'llm' | 'rules';
 }
 
 export type CouncilStrictness = 'fast' | 'standard' | 'strict';
@@ -37,6 +39,8 @@ export interface DebateResult {
   recommended: string;
   block_reasons: string[];
   warnings: string[];
+  /** How many of the seven votes an LLM actually produced (set by runLlmDebate). */
+  llm_votes?: number;
   debated_at: string;
   formatted_output: string;
 }

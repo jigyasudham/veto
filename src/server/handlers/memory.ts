@@ -16,6 +16,10 @@ import type { HandlerMap } from '../registry.js';
 const jsonText = (payload: unknown, isError = false) =>
   ({ content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }], ...(isError ? { isError: true } : {}) });
 
+function parseOr<T>(text: string, fallback: T): unknown {
+  try { return JSON.parse(text); } catch { return fallback; }
+}
+
 export const memoryHandlers: HandlerMap = {
   veto_decisions: ({ args }) => {
     const action = String(args?.action ?? '').trim();
@@ -182,8 +186,13 @@ export const memoryHandlers: HandlerMap = {
       }
     }
 
-    const structure = String(args?.structure ?? '').trim();
-    if (!structure) {
+    // An object is stored as JSON. String(object) used to store the literal
+    // text "[object Object]" — the map was lost and veto_project_map_get threw.
+    const rawStructure = args?.structure;
+    const structure: Record<string, unknown> | string = rawStructure && typeof rawStructure === 'object'
+      ? rawStructure as Record<string, unknown>
+      : String(rawStructure ?? '').trim();
+    if (!structure || (typeof structure === 'object' && !Object.keys(structure).length)) {
       return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'Provide structure or set auto_compute: true to compute it automatically.' }) }], isError: true };
     }
     const id = updateProjectMap({
@@ -210,9 +219,11 @@ export const memoryHandlers: HandlerMap = {
         text: JSON.stringify({
           found: true,
           project_dir: row.project_dir,
-          structure: JSON.parse(row.structure),
-          key_modules: row.key_modules ? JSON.parse(row.key_modules) : [],
-          tech_stack: row.tech_stack ? JSON.parse(row.tech_stack) : [],
+          // Plain text is valid (a description); rows written by older versions
+          // may even hold "[object Object]". Neither may crash the read.
+          structure: parseOr(row.structure, row.structure),
+          key_modules: row.key_modules ? parseOr(row.key_modules, []) : [],
+          tech_stack: row.tech_stack ? parseOr(row.tech_stack, []) : [],
           updated_at: row.updated_at,
         }, null, 2),
       }],

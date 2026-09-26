@@ -13,10 +13,12 @@
 // `platform` is a parameter so both branches are tested on either OS; the
 // Linux branch was once broken by a change that only a Windows run had seen.
 
-import { normalizeProjectDir } from '../memory/local.js';
+// The drive-letter fold normalizeProjectDir (memory/local.ts) applies, inlined so
+// that module can use this one without an import cycle.
+const foldDrive = (p: string): string => (/^[A-Za-z]:/.test(p) ? p[0].toLowerCase() + p.slice(1) : p);
 
 export function projectKey(dir: string, platform: NodeJS.Platform = process.platform): string {
-  let key = normalizeProjectDir(dir.trim());
+  let key = foldDrive(dir.trim());
   if (platform === 'win32') key = key.replace(/\//g, '\\').replace(/[A-Z]/g, ch => ch.toLowerCase());
   const trimmed = key.replace(/[\\/]+$/, '');
   return trimmed || key;

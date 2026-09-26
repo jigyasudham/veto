@@ -6,7 +6,7 @@ import { statSync } from 'node:fs';
 import {
   getContextUsage, getContextStatus, getHealthStats, getUsageStatus,
   getUsageLogs, getAuditLog, getMetrics, getDbPath, CONTEXT_WINDOWS,
-  listSessions, getPatterns, getLatestCouncilOutcome,
+  listSessions, getPatterns, getLatestCouncilOutcome, sqliteAvailable,
 } from '../../memory/local.js';
 import { getRateStatus } from '../../router/index.js';
 import { getConfig, setConfig } from '../../memory/config.js';
@@ -137,6 +137,9 @@ export const observabilityHandlers: HandlerMap = {
           version: VERSION,
           status: serverHealth.errorCount > 10 ? 'degraded' : 'healthy',
           uptime_seconds: Math.round((Date.now() - serverHealth.startTime) / 1000),
+          // The runtime the HOST launched Veto with — not necessarily the Node in
+          // your terminal (GUI apps often do not see a shell's nvm/fnm Node).
+          runtime: { node_version: process.version, exec_path: process.execPath, sqlite_available: sqliteAvailable() },
           db_path: getDbPath(),
           db_size_bytes,
           db_size_human,

@@ -34,8 +34,8 @@ export function repairBrokenClaudeEntry(claudeJsonPath: string, mcpCmd: string):
       mcpServers?: Record<string, McpEntry>;
     };
     if (!isDeadNodePathEntry(cfg.mcpServers?.veto)) return false;
-    execSync('claude mcp remove veto -s user', { stdio: 'pipe', timeout: 15000 });
-    execSync(mcpCmd, { stdio: 'pipe', timeout: 15000 });
+    execSync('claude mcp remove veto -s user', { windowsHide: true, stdio: 'pipe', timeout: 15000 });
+    execSync(mcpCmd, { windowsHide: true, stdio: 'pipe', timeout: 15000 });
     return true;
   } catch {
     return false;

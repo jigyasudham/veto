@@ -1,7 +1,7 @@
 // Handoff engine — platform detection, session save+switch, continue restore
 
 import { getRateStatus, trackRequest } from '../router/rate-monitor.js';
-import { saveSession, listSessions, restoreSession } from '../memory/local.js';
+import { saveSession, listSessions, restoreSession, resolveSessionId } from '../memory/local.js';
 import type { Platform } from '../router/rate-monitor.js';
 
 export type HandoffResult = {
@@ -94,7 +94,13 @@ export function continueSession(sessionId?: string, active_client?: string): Con
   const now = new Date().toISOString();
 
   if (sessionId) {
-    const result = restoreSession(sessionId, active_client);
+    // A unique prefix is enough (listings show 8 characters).
+    const resolved = resolveSessionId(sessionId);
+    if (resolved.kind === 'ambiguous') {
+      const options = resolved.matches.map(m => `${m.id} (${m.created_at}, ${m.platform})`).join('; ');
+      return { found: false, message: `"${sessionId}" matches more than one session — use more characters: ${options}`, restored_at: now };
+    }
+    const result = resolved.kind === 'found' ? restoreSession(resolved.id, active_client) : { found: false as const };
     if (!result.found || !result.session) {
       return { found: false, message: `No session found with ID: ${sessionId}`, restored_at: now };
     }
@@ -280,7 +286,7 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
 // ── Claude / Gemini / Codex / Antigravity (existing platforms) ─────────────
   const configs: Record<Platform, { configPath: string; configKey: string; installCmd: string; notes: string[] }> = {
     claude: {
-      configPath: '~/.claude/settings.json (managed by `claude mcp add`)',
+      configPath: '~/.claude.json (managed by `claude mcp add`; Claude Code does not read MCP servers from settings.json)',
       configKey:  'mcpServers',
       installCmd: 'claude mcp add veto -s user -- npx -y --package @jigyasudham/veto@latest veto-server',
       notes: [
@@ -301,13 +307,13 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
       ],
     },
     antigravity: {
-      configPath: '~/.gemini/antigravity-cli/mcp_config.json',
+      configPath: '~/.gemini/config/mcp_config.json (managed by `agy mcp add`)',
       configKey:  'mcpServers',
-      installCmd: 'npx @jigyasudham/veto@latest init',
+      installCmd: 'agy mcp add veto -- npx -y --package @jigyasudham/veto@latest veto-server',
       notes: [
-        'Antigravity CLI is the official successor to Gemini CLI.',
-        'It stores MCP config in ~/.gemini/antigravity-cli/mcp_config.json.',
-        'All veto_* tools are supported with agentic reasoning enabled.',
+        'Antigravity reads its global MCP config from ~/.gemini/config/mcp_config.json.',
+        'The older ~/.gemini/antigravity-cli/mcp_config.json is NOT read — a Veto entry there does nothing.',
+        'Verify with `agy mcp list` (veto should show as enabled), then `veto doctor`.',
       ],
     },
     codex: {
@@ -335,11 +341,11 @@ export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string
   ];
 
   const antigravitySteps = [
-    `1. Run: npx @jigyasudham/veto@latest init  (auto-writes ~/.gemini/antigravity-cli/mcp_config.json)`,
-    `2. Or add it manually to ~/.gemini/antigravity-cli/mcp_config.json:`,
-    `   "veto": { "command": "npx", "args": ["-y", "--package", "@jigyasudham/veto@latest", "veto-server"] }`,
-    `3. Fully restart Antigravity CLI (agy)`,
-    `4. Verify: call veto_status — should return { "status": "running" }`,
+    `1. Run: agy mcp add veto -- npx -y --package @jigyasudham/veto@latest veto-server`,
+    `   On Windows use npx.cmd. Or run: npx @jigyasudham/veto@latest init  (does this for you)`,
+    `2. Verify registration: agy mcp list  (veto should show as enabled)`,
+    `3. Fully restart Antigravity`,
+    `4. Verify: call veto_status; \`veto doctor\` shows whether Antigravity has actually started Veto`,
   ];
 
   const codexSteps = [
@@ -411,13 +417,15 @@ function buildInstructions(
     ``,
     `On ${to}:`,
     `  1. Open a new terminal with ${to} CLI`,
-    `  2. Veto is already running — same server, same memory`,
+    `  2. Veto there reads the same local database — every saved session is available`,
     `  3. Call:  veto_continue`,
     `     Veto restores full context automatically.`,
     `     Nothing needs to be re-explained.`,
     ``,
     `Or if you have the session ID:`,
     `  veto_continue { "session_id": "${sessionId}" }`,
+    `If ${to} has no veto_* tools (Veto did not load there), the CLI does the same restore:`,
+    `  veto continue ${sessionId.slice(0, 8)} --as ${to}`,
     ``,
     `Rate resets at: ${rateStatus[from].resets_at.slice(0, 16)} UTC`,
     `─────────────────────────────────────────────────────────`,

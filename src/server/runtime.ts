@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { saveSession, storeKnowledge, resolveContextWindow } from '../memory/local.js';
 import { executeOne } from '../agents/executor.js';
 import type { AgentPlan } from '../agents/types.js';
+import { agentFor } from './task-split.js';
 
 // Package version, read once. Lives here so handler modules can import it without
 // reaching into server.ts.
@@ -76,9 +77,11 @@ export function autoStoreCritical(title: string, issues: string[], projectDir?: 
 // ── Task planning ──
 export function parsePrdIntoTasks(prd: string, plan: AgentPlan, maxTasks: number) {
   const lines = plan.steps;
+  // Each step goes to the agent its words point at ("write tests" → tester);
+  // every step used to be assigned to `coder`.
   const tasks = lines.slice(0, maxTasks).map((line, i) => ({
     id: `task-${i + 1}`,
-    agent: 'coder' as const,
+    agent: agentFor(line),
     task: line,
     dependencies: i > 0 ? [`task-${i}`] : [],
   }));

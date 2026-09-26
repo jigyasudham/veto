@@ -18,6 +18,7 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { getDbPath, getDb, normalizeProjectDir } from '../memory/local.js';
 import { isLessonsSharingEnabled } from '../memory/config.js';
+import { projectKey, projectKeySql } from '../transcripts/project-key.js';
 
 // node:sqlite is unflagged from Node 22.13+/23.4+ — use createRequire so bundlers skip it.
 // Required lazily inside openReadOnly so importing this module (server.ts pulls in
@@ -100,9 +101,9 @@ function queryStatusline(db: DatabaseSync, projectDir?: string): StatuslineData 
     // UUID, so two debates recorded in the same millisecond have no ordering at all
     // and SQLite is free to return either. Tie-break on rowid, which increments per
     // insert, so "newest" always means the row written last.
-    const scoped = projectDir ? normalizeProjectDir(projectDir) : undefined;
+    const scoped = projectDir ? projectKey(projectDir) : undefined;
     const row = (scoped
-      ? db.prepare('SELECT verdict FROM council_outcomes WHERE project_dir = ? ORDER BY debated_at DESC, rowid DESC LIMIT 1').get(scoped)
+      ? db.prepare(`SELECT verdict FROM council_outcomes WHERE ${projectKeySql('project_dir')} = ? ORDER BY debated_at DESC, rowid DESC LIMIT 1`).get(scoped)
       : db.prepare('SELECT verdict FROM council_outcomes ORDER BY debated_at DESC, rowid DESC LIMIT 1').get()
     ) as { verdict?: string } | undefined;
     const v = (row?.verdict ?? '').toUpperCase();
@@ -434,7 +435,7 @@ const NO_ORIGINAL = '__VETO_NO_ORIGINAL_FILE__';
 function bareVetoOnPath(): boolean {
   try {
     const probe = process.platform === 'win32' ? 'where veto' : 'command -v veto';
-    execSync(probe, { stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 });
+    execSync(probe, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], timeout: 5000 });
     return true;
   } catch {
     return false;

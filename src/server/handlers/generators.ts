@@ -10,6 +10,7 @@ import { join, extname } from 'node:path';
 import { execSync } from 'node:child_process';
 import { recordOutcome } from '../../router/index.js';
 import { runHandlerAgent, handlerAgentResponse } from '../scan-core.js';
+import { executeOne } from '../../agents/executor.js';
 import { getAuditLog } from '../../memory/local.js';
 import { offerInvitation, invitationPayload } from '../../memory/decisions.js';
 import { buildContextString } from '../../context/reader.js';
@@ -24,7 +25,7 @@ export const generatorHandlers: HandlerMap = {
     let gitLog = '';
     try {
       gitLog = execSync('git log --since=90.days --name-only --format="" --no-merges', {
-        cwd: project_dir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true, cwd: project_dir, timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'],
       }).toString();
     } catch { /* not a git repo */ }
 
@@ -68,53 +69,38 @@ export const generatorHandlers: HandlerMap = {
     const debtRun = await runHandlerAgent('veto_debt_register', {
       id: `debt-${Date.now()}`,
       agent: 'code-quality',
-      task: 'Analyze these high-churn source files for technical debt. For each file, identify: (1) the primary debt type (complexity/duplication/coupling/coverage/documentation), (2) severity (high/medium/low), (3) estimated fix effort in hours, (4) recommended agent to fix it. Rank by: high-churn × high-severity first.',
+      task: 'Analyze these high-churn source files for technical debt, ranked by churn × severity.',
       code: debtCode,
+      deliverable: {
+        description: 'Build a technical-debt register for the high-churn files shown (each is headed "=== file (N commits) ===").',
+        shape: {
+          items: '[{ "file": "<one of the files shown>", "debt_type": "complexity|duplication|coupling|coverage|documentation|other", "severity": "high|medium|low", "estimated_hours": <number>, "suggested_agent": "<veto agent id>", "description": "<the specific problem in this file>" }, ...]',
+          summary: '"<one paragraph>"',
+        },
+        required: ['items'],
+      },
     }, args?.agent_response);
-    const debtResult = debtRun.result;
 
-    recordOutcome('debt-register', 50, 2, 'code-quality', Math.round(debtResult.output.confidence * 100));
+    recordOutcome('debt-register', 50, 2, 'code-quality', debtRun.deliverable ? 80 : 50);
 
-    const steps = debtResult.plan?.steps ?? [];
-    let debtItems: Array<{
-      file: string;
-      churn_commits: number;
-      priority: string;
-      debt_type: string;
-      suggested_agent: string;
-      estimated_hours: number;
-    }>;
-
-    if (steps.length > 0) {
-      debtItems = steps.map((step: string, i: number) => {
-        const matchedFile = fileContents[i] ?? fileContents[0];
-        return {
-          file: matchedFile.file,
-          churn_commits: matchedFile?.commits ?? 0,
-          priority: i < Math.ceil(steps.length / 3) ? 'high' : i < Math.ceil(steps.length * 2 / 3) ? 'medium' : 'low',
-          debt_type: 'complexity',
-          suggested_agent: 'refactor',
-          estimated_hours: 2,
-          description: step,
-        };
-      });
-    } else {
-      debtItems = fileContents.map(f => ({
-        file: f.file,
-        churn_commits: f.commits,
-        priority: f.commits > 20 ? 'high' : f.commits > 10 ? 'medium' : 'low',
-        debt_type: 'complexity',
-        suggested_agent: 'refactor',
-        estimated_hours: 2,
-      }));
-    }
+    // Churn is measured; everything about the debt itself comes from the LLM.
+    // Before 3.7.0 every item got debt_type "complexity" and estimated_hours 2,
+    // and plan steps were matched to files by list position.
+    const churn = fileContents.map(f => ({ file: f.file, churn_commits: f.commits }));
+    const items = Array.isArray(debtRun.deliverable?.items)
+      ? (debtRun.deliverable!.items as Array<Record<string, unknown>>).map(it => ({
+        ...it,
+        churn_commits: churn.find(c => c.file === it.file)?.churn_commits ?? null,
+      }))
+      : null;
 
     return handlerAgentResponse({
       total_files_analyzed: fileContents.length,
       date_range: 'last 90 days',
-      debt_items: debtItems,
-      summary: (debtResult.plan?.approach ?? debtResult.output.recommendation ?? '').trim(),
-    }, debtRun);
+      high_churn_files: churn,
+      debt_items: items,
+      summary: debtRun.deliverable?.summary ?? null,
+    }, debtRun, { generated: ['debt_items', 'summary'] });
   },
 
   veto_adr: ({ args }) => {
@@ -246,26 +232,55 @@ export const generatorHandlers: HandlerMap = {
 
     const projectSummary = summaryParts.join('\n') || 'No configuration files found.';
     const enrichedCtx    = buildContextString(projectDir, projectSummary);
-    const agentTask      = 'Generate a .env.example file for this project. List every environment variable needed with a placeholder value and a one-line comment explaining what it is. Then write a numbered setup guide (5-10 steps) for a developer setting up this project from scratch.';
-    const envRun         = await runHandlerAgent('veto_env_setup', { id: 'env-setup-1', agent: 'devops', task: agentTask, context: enrichedCtx || undefined, project_dir: projectDir }, args?.agent_response);
-    const envResult      = envRun.result;
+    // Env vars the code actually reads — a fact, and the LLM's starting point.
+    const referenced = new Set<string>();
+    try {
+      const { listProjectFiles } = await import('../worker-evidence.js');
+      for (const rel of listProjectFiles(projectDir, ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rb'], 1500)) {
+        let text = '';
+        try { text = readFileSync(join(projectDir, rel), 'utf8'); } catch { continue; }
+        for (const m of text.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)|process\.env\[['"]([A-Z][A-Z0-9_]*)['"]\]|os\.environ(?:\.get)?\(?\[?['"]([A-Z][A-Z0-9_]*)['"]|os\.Getenv\("([A-Z][A-Z0-9_]*)"\)|ENV\[['"]([A-Z][A-Z0-9_]*)['"]\]/g)) {
+          referenced.add(m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5]);
+        }
+      }
+    } catch { /* evidence is best-effort */ }
+    const envRun = await runHandlerAgent('veto_env_setup', {
+      id: 'env-setup-1',
+      agent: 'devops',
+      task: 'Write the .env.example and a from-scratch setup guide for this project.',
+      context: [enrichedCtx, referenced.size ? `Environment variables the code reads: ${[...referenced].join(', ')}` : 'The code reads no environment variables that could be found.'].filter(Boolean).join('\n\n') || undefined,
+      project_dir: projectDir,
+      deliverable: {
+        description: 'Write a .env.example covering every environment variable the project needs (at least those the code reads), and a numbered setup guide for a new developer.',
+        shape: {
+          env_example: '"<file content: one KEY=placeholder per line, each preceded by a # comment explaining it>"',
+          setup_steps: '["<step>", ...] 5-10 steps, specific to this project',
+        },
+        required: ['env_example', 'setup_steps'],
+      },
+    }, args?.agent_response);
 
-    const rawOutput  = envResult.output.recommendation ?? envResult.plan?.approach ?? '';
-    const envLines   = rawOutput.split('\n').filter((l: string) => /^[A-Z_]+=/.test(l));
-    const envExample = envLines.length > 0 ? envLines.join('\n') : '# Add your environment variables here\n';
-
+    const envExample = typeof envRun.deliverable?.env_example === 'string' ? envRun.deliverable.env_example : null;
+    const examplePath = join(projectDir, '.env.example');
+    // Only real content is written, and an existing file is never replaced
+    // unless overwrite is asked for. Before 3.7.0, write_files with no LLM wrote
+    // the placeholder "# Add your environment variables here" over whatever was there.
     let written = false;
+    let write_skipped: string | null = null;
     if (writeFiles) {
-      writeFileSync(join(projectDir, '.env.example'), envExample, 'utf8');
-      written = true;
+      if (!envExample) write_skipped = 'nothing generated yet — complete the llm_upgrade step first';
+      else if (existsSync(examplePath) && args?.overwrite !== true) write_skipped = '.env.example already exists — pass overwrite: true to replace it';
+      else { writeFileSync(examplePath, envExample.endsWith('\n') ? envExample : envExample + '\n', 'utf8'); written = true; }
     }
 
     return handlerAgentResponse({
       env_example: envExample,
-      setup_guide: rawOutput,
+      setup_steps: envRun.deliverable?.setup_steps ?? null,
+      env_vars_referenced: [...referenced].sort(),
       written,
+      ...(write_skipped ? { write_skipped } : {}),
       detected:    [...new Set(detected)],
-    }, envRun);
+    }, envRun, { generated: ['env_example', 'setup_steps'] });
   },
 
   veto_prompt_optimizer: async ({ args }) => {
@@ -295,29 +310,31 @@ export const generatorHandlers: HandlerMap = {
     const promptRun = await runHandlerAgent('veto_prompt_optimizer', {
       id:      'prompt-optimizer-1',
       agent:   'documentation' as WorkerAgentType,
-      task:    'You are a prompt engineering expert. Analyze this prompt for failure modes: vague instructions, missing context, ambiguous outputs, injection risks, lack of examples, poor role definition. Then rewrite it to be clearer, more specific, and safer. Return: 1) A numbered list of issues found, 2) A complete rewritten version of the prompt.',
+      task:    'Rewrite this prompt to be clearer, more specific and safer.',
       code:    prompt,
-      context: goal ? `Goal: ${goal}` : undefined,
+      context: [goal ? `Goal: ${goal}` : '', args?.role ? `Role the prompt is for: ${String(args.role)}` : '', issues.length ? `Deterministic checks found:\n${issues.map(i => `- [${i.severity}] ${i.finding}`).join('\n')}` : ''].filter(Boolean).join('\n\n') || undefined,
+      deliverable: {
+        description: 'Find the failure modes of the prompt in the material (vague instructions, missing context, ambiguous output, injection risk, no examples, weak role) and rewrite it.',
+        shape: {
+          rewritten_prompt: '"<the complete improved prompt>"',
+          improvements: '["<what changed and why>", ...]',
+        },
+        required: ['rewritten_prompt'],
+      },
     }, args?.agent_response);
-    const result = promptRun.result;
-
-    const quality = result.analysis?.score ?? Math.round(result.output.confidence * 100);
-    recordOutcome('prompt-optimizer', 50, 2, 'documentation', quality);
 
     const highCount   = issues.filter(i => i.severity === 'high').length;
     const mediumCount = issues.filter(i => i.severity === 'medium').length;
     const lowCount    = issues.filter(i => i.severity === 'low').length;
     const score = Math.min(100, Math.max(0, 100 - highCount * 20 - mediumCount * 10 - lowCount * 5));
-
-    const rewritten_prompt    = result.plan?.approach ?? result.output.recommendation ?? '';
-    const improvement_summary = result.analysis?.summary ?? result.plan?.steps?.join('; ') ?? '';
+    recordOutcome('prompt-optimizer', 50, 2, 'documentation', score);
 
     return handlerAgentResponse({
       score,
       issues,
-      rewritten_prompt,
-      improvement_summary,
-    }, promptRun);
+      rewritten_prompt:    promptRun.deliverable?.rewritten_prompt ?? null,
+      improvements:        promptRun.deliverable?.improvements ?? null,
+    }, promptRun, { generated: ['rewritten_prompt', 'improvements'] });
   },
 
   veto_sre_advisor: async ({ args }) => {
@@ -351,12 +368,19 @@ export const generatorHandlers: HandlerMap = {
     const sreRun = await runHandlerAgent('veto_sre_advisor', {
       id:      'sre-advisor-1',
       agent:   'performance' as WorkerAgentType,
-      task:    'You are an SRE advisor. Given this service\'s error budget status, suggest: 1) Top 3 reliability improvements ranked by error budget recovery potential, 2) Whether to freeze non-critical deployments, 3) Specific monitoring improvements. Be concrete and actionable.',
+      task:    'Advise on this service\'s reliability given its error budget.',
       context: `Service: ${service_name || 'unknown'}\nSLO: ${slo_target}%\nWindow: ${window_days} days\nBudget remaining: ${remainingPct}% (${remainingMinutes.toFixed(1)} min)\nStatus: ${status}\n${incidentSummary}`,
+      deliverable: {
+        description: 'Given the error-budget numbers and incidents in the context, recommend what to do next.',
+        shape: {
+          improvements: '["<reliability improvement, ranked by budget recovered>", ...] top 3',
+          freeze_non_critical_deploys: 'true|false',
+          freeze_reason: '"<why>"',
+          monitoring: '["<specific alert or dashboard to add>", ...]',
+        },
+        required: ['improvements'],
+      },
     }, args?.agent_response);
-    const sreResult = sreRun.result;
-
-    const recommendations = sreResult.plan?.approach ?? sreResult.output.recommendation ?? '';
 
     return handlerAgentResponse({
       slo_target_pct:       slo_target,
@@ -367,9 +391,13 @@ export const generatorHandlers: HandlerMap = {
       remaining_pct:        remainingPct,
       status,
       projected_exhaustion: exhaustedAt,
-      recommendations,
-      freeze_recommended:   remainingPct < 20,
-    }, sreRun);
+      // A fixed rule on the numbers above, not advice: under 20% left.
+      budget_rule_says_freeze: remainingPct < 20,
+      improvements:         sreRun.deliverable?.improvements ?? null,
+      freeze_non_critical_deploys: sreRun.deliverable?.freeze_non_critical_deploys ?? null,
+      freeze_reason:        sreRun.deliverable?.freeze_reason ?? null,
+      monitoring:           sreRun.deliverable?.monitoring ?? null,
+    }, sreRun, { generated: ['improvements', 'freeze_non_critical_deploys', 'freeze_reason', 'monitoring'] });
   },
 
   veto_diagram: async ({ args }) => {
@@ -384,34 +412,39 @@ export const generatorHandlers: HandlerMap = {
     let fileTree = '';
     try {
       fileTree = execSync('git ls-files --others --cached --exclude-standard', {
-        cwd: project_dir, timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true, cwd: project_dir, timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'],
       }).toString().split('\n').filter((f: string) => !f.includes('node_modules') && !f.includes('dist/')).slice(0, 60).join('\n');
     } catch { /* not a git repo */ }
+
+    if (!fileTree) {
+      try { const { listProjectFiles } = await import('../worker-evidence.js'); fileTree = listProjectFiles(project_dir).slice(0, 80).join('\n'); } catch { /* none */ }
+    }
 
     const diagramRun = await runHandlerAgent('veto_diagram', {
       id:      'diagram-1',
       agent:   'documentation' as WorkerAgentType,
-      task:    `Generate a ${diagramType} Mermaid diagram of this project's architecture. Output ONLY the raw Mermaid diagram code (starting with 'flowchart TD' or similar — no markdown fences, no explanation text). Focus on: ${focus || 'overall system architecture, main modules, and data flow'}. Keep it under 30 nodes for readability.`,
+      task:    `Draw a ${diagramType} Mermaid diagram of this project. Focus on: ${focus || 'overall system architecture, main modules, and data flow'}.`,
       code:    fileTree.slice(0, 4000),
       context: ctx || undefined,
+      deliverable: {
+        description: `Draw a Mermaid ${diagramType} diagram of the project whose file list is the material. Under 30 nodes. Use only modules that exist in the file list.`,
+        shape: { mermaid: '"<raw Mermaid source starting with the diagram keyword, e.g. flowchart TD — no ``` fences>"' },
+        required: ['mermaid'],
+      },
     }, args?.agent_response);
-    const diagramResult = diagramRun.result;
 
-    const diagramQuality = diagramResult.analysis?.score ?? Math.round(diagramResult.output.confidence * 100);
-    recordOutcome('diagram', 50, 2, 'documentation', diagramQuality);
-
-    const rawOutput = diagramResult.plan?.approach ?? diagramResult.output.recommendation ?? '';
-
-    // Extract Mermaid block — find first line matching a known diagram type keyword
-    const lines = rawOutput.split('\n');
-    const startIdx = lines.findIndex((l: string) => /^(flowchart|graph|classDiagram|sequenceDiagram|C4Context|erDiagram)/.test(l.trim()));
-    const mermaid = startIdx >= 0 ? lines.slice(startIdx).join('\n').trim() : rawOutput.trim();
+    let mermaid = typeof diagramRun.deliverable?.mermaid === 'string' ? diagramRun.deliverable.mermaid.replace(/^```(?:mermaid)?\s*|```\s*$/g, '').trim() : null;
+    const MERMAID_START = /^(flowchart|graph|classDiagram|sequenceDiagram|stateDiagram(-v2)?|erDiagram|C4Context|C4Container|C4Component|journey|gantt|mindmap|timeline|gitGraph|pie|quadrantChart|block-beta|architecture-beta)\b/;
+    const mermaid_valid = mermaid ? MERMAID_START.test(mermaid) : null;
+    if (mermaid && !mermaid_valid) mermaid = null;
+    recordOutcome('diagram', 50, 2, 'documentation', mermaid ? 80 : 40);
 
     return handlerAgentResponse({
       diagram_type: diagramType,
       mermaid,
+      ...(mermaid_valid === false ? { problem: 'The generated text did not start with a Mermaid diagram keyword, so it was not returned as a diagram. Ask again.' } : {}),
       render_hint: 'Paste into https://mermaid.live or a GitHub markdown code block with ```mermaid',
-    }, diagramRun);
+    }, diagramRun, { generated: ['mermaid'] });
   },
 
   veto_rca: async ({ args }) => {
@@ -425,38 +458,68 @@ export const generatorHandlers: HandlerMap = {
 
     let gitContext = '';
     try {
-      const recent = execSync('git log --oneline -15', { cwd: projectDir || undefined, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
+      const recent = execSync('git log --oneline -15', { windowsHide: true, cwd: projectDir || undefined, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
       gitContext = `Recent commits:\n${recent}`;
       if (fileHint) {
-        const blame = execSync(`git log --oneline -10 -- "${fileHint}"`, { cwd: projectDir || undefined, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
+        const blame = execSync(`git log --oneline -10 -- "${fileHint}"`, { windowsHide: true, cwd: projectDir || undefined, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
         gitContext += `\nRecent changes to ${fileHint}:\n${blame}`;
       }
     } catch { /* not a git repo */ }
 
+    // The lines the stack trace points at, read from disk — the most useful
+    // evidence there is, and never gathered before 3.7.0.
+    const locations: Array<{ file: string; line: number; snippet: string }> = [];
+    if (projectDir) {
+      const seen = new Set<string>();
+      for (const m of error.matchAll(/([\w./\\-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rb|java|kt|rs|php|cs)):(\d+)/g)) {
+        const key = `${m[1]}:${m[2]}`;
+        if (seen.has(key) || locations.length >= 5) continue;
+        seen.add(key);
+        const lineNo = Number(m[2]);
+        for (const candidate of [join(projectDir, m[1]), m[1]]) {
+          try {
+            const lines = readFileSync(candidate, 'utf8').split(/\r?\n/);
+            const from = Math.max(0, lineNo - 6);
+            const snippet = lines.slice(from, lineNo + 5).map((l, i) => `${from + i + 1}${from + i + 1 === lineNo ? '>' : ' '} ${l}`).join('\n');
+            locations.push({ file: m[1], line: lineNo, snippet });
+            break;
+          } catch { /* try the next spelling */ }
+        }
+      }
+    }
+
     const rcaRun = await runHandlerAgent('veto_rca', {
       id:      'rca-1',
       agent:   'debugger' as WorkerAgentType,
-      task:    'Perform a structured root-cause analysis. Identify: (1) the most likely root cause, (2) the probable introducing commit or change, (3) immediate fix steps, (4) prevention recommendations.',
+      task:    'Perform a structured root-cause analysis of this error.',
       code:    error.slice(0, 6000),
-      context: [gitContext, userContext].filter(Boolean).join('\n') || undefined,
+      context: [gitContext, locations.length ? `Code at the stack-trace locations:\n${locations.map(l => `=== ${l.file}:${l.line} ===\n${l.snippet}`).join('\n\n')}` : '', userContext].filter(Boolean).join('\n\n') || undefined,
+      deliverable: {
+        description: 'Find the root cause of the error in the material, using the code at the stack-trace locations and the recent commits in the context.',
+        shape: {
+          root_cause: '"<the specific cause, naming the file/line/variable>"',
+          hypothesis: '"<how the failure happens, step by step>"',
+          suspect_commits: '["<hash — why>", ...] from the commits listed, or []',
+          fix_steps: '["<concrete step>", ...]',
+          prevention: '["<test, type or check that stops it recurring>", ...]',
+          confidence: '<0-100: how sure you are, given the evidence>',
+        },
+        required: ['root_cause', 'fix_steps'],
+      },
     }, args?.agent_response);
-    const result = rcaRun.result;
 
-    const quality = Math.round(result.output.confidence * 100);
-    recordOutcome('rca', 50, 2, 'debugger', quality);
-
-    const root_cause = result.plan?.approach?.slice(0, 200) ?? result.output.recommendation.slice(0, 200);
-    const fix_steps  = result.plan?.steps?.slice(0, 5) ?? [];
-    const hypothesis = result.output.recommendation;
+    const d = rcaRun.deliverable;
+    recordOutcome('rca', 50, 2, 'debugger', typeof d?.confidence === 'number' ? d.confidence : 50);
 
     return handlerAgentResponse({
-      root_cause,
-      hypothesis,
-      suspect_commits: [],
-      fix_steps,
-      prevention:  [],
-      confidence:  quality,
-    }, rcaRun);
+      stack_locations: locations.map(l => ({ file: l.file, line: l.line })),
+      root_cause:      d?.root_cause ?? null,
+      hypothesis:      d?.hypothesis ?? null,
+      suspect_commits: d?.suspect_commits ?? null,
+      fix_steps:       d?.fix_steps ?? null,
+      prevention:      d?.prevention ?? null,
+      confidence:      d?.confidence ?? null,
+    }, rcaRun, { generated: ['root_cause', 'hypothesis', 'suspect_commits', 'fix_steps', 'prevention', 'confidence'] });
   },
 
   veto_release_notes: async ({ args }) => {
@@ -467,13 +530,13 @@ export const generatorHandlers: HandlerMap = {
 
     let fromRef = args?.from_ref ? String(args.from_ref) : '';
     if (!fromRef) {
-      try { fromRef = execSync('git describe --tags --abbrev=0', { cwd: projectDir, timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim(); }
+      try { fromRef = execSync('git describe --tags --abbrev=0', { windowsHide: true, cwd: projectDir, timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim(); }
       catch { fromRef = ''; }
     }
 
     const logCmd = fromRef ? `git log ${fromRef}..HEAD --oneline --no-merges` : 'git log --oneline --no-merges -30';
     let commits = '';
-    try { commits = execSync(logCmd, { cwd: projectDir, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim(); }
+    try { commits = execSync(logCmd, { windowsHide: true, cwd: projectDir, timeout: 4000, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim(); }
     catch { return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'Could not read git log. Ensure project_dir is a git repository.' }) }], isError: true }; }
 
     if (!commits) return { content: [{ type: 'text', text: JSON.stringify({ success: true, release_notes: 'No changes since last tag.', commits_processed: 0 }) }] };
@@ -483,19 +546,22 @@ export const generatorHandlers: HandlerMap = {
     const relnotesRun = await runHandlerAgent('veto_release_notes', {
       id:    'relnotes-1',
       agent: 'documentation' as WorkerAgentType,
-      task:  `Generate ${audience === 'developer' ? 'developer-facing' : 'user-facing'} release notes from these git commits. Rewrite technical commit messages into clear benefit-focused language. Group by: New Features, Improvements, Bug Fixes, Other. Each line should be one sentence describing the user benefit.`,
+      task:  `Write ${audience === 'developer' ? 'developer-facing' : 'user-facing'} release notes from these commits.`,
       code:  commits.slice(0, 4000),
+      deliverable: {
+        description: `Write ${audience === 'developer' ? 'developer-facing' : 'user-facing'} release notes from the commits in the material. Group under New Features, Improvements, Bug Fixes, Other (omit empty groups). One sentence per line describing the benefit. Mention only what the commits show.`,
+        shape: { release_notes: '"<markdown>"' },
+        required: ['release_notes'],
+      },
     }, args?.agent_response);
-    const result = relnotesRun.result;
-
-    const release_notes = result.plan?.approach ?? result.output.recommendation;
 
     return handlerAgentResponse({
-      release_notes,
-      from_ref:          fromRef || 'HEAD~30',
+      release_notes:     relnotesRun.deliverable?.release_notes ?? null,
+      range:             fromRef ? `${fromRef}..HEAD` : 'last 30 commits (no tag found)',
       commits_processed: commitsCount,
+      commits:           commits.split('\n').filter(Boolean),
       audience,
-    }, relnotesRun);
+    }, relnotesRun, { generated: ['release_notes'] });
   },
 
   veto_postmortem: async ({ args }) => {
@@ -525,22 +591,28 @@ export const generatorHandlers: HandlerMap = {
     const pmRun = await runHandlerAgent('veto_postmortem', {
       id:      'pm-1',
       agent:   'debugger' as WorkerAgentType,
-      task:    'Write a blameless postmortem. Include: (1) Incident summary (2) Root cause (five-whys analysis) (3) Impact (4) Timeline of detection/response/resolution (5) Action items with owner and deadline (6) What went well (7) Prevention measures. Use a constructive tone — blame systems not people.',
+      task:    'Write a blameless postmortem for this incident.',
       code:    incident.slice(0, 4000),
       context,
+      deliverable: {
+        description: 'Write a blameless postmortem of the incident in the material: summary, root cause (five whys), impact, timeline of detection/response/resolution, what went well, prevention. Blame systems, not people. Use only facts given; mark anything assumed.',
+        shape: {
+          postmortem: '"<markdown document>"',
+          root_cause: '"<one sentence>"',
+          action_items: '[{ "action": "...", "owner": "<role>", "due": "<relative deadline>" }, ...]',
+        },
+        required: ['postmortem', 'root_cause'],
+      },
     }, args?.agent_response);
-    const result = pmRun.result;
-
-    const postmortem  = result.plan?.approach ?? result.output.recommendation;
-    const root_cause  = result.output.recommendation.split(/[.!?]/)[0]?.trim() ?? '';
-    const action_items = result.plan?.steps?.slice(0, 10) ?? [];
 
     return handlerAgentResponse({
-      postmortem,
-      root_cause,
-      action_items,
-      correlated_red_verdicts: correlatedRedVerdicts,
-    }, pmRun);
+      postmortem:   pmRun.deliverable?.postmortem ?? null,
+      root_cause:   pmRun.deliverable?.root_cause ?? null,
+      action_items: pmRun.deliverable?.action_items ?? null,
+      // The latest RED council verdicts, shown to the LLM as context. A count,
+      // not a correlation — the old name "correlated_red_verdicts" overstated it.
+      recent_red_council_verdicts: correlatedRedVerdicts,
+    }, pmRun, { generated: ['postmortem', 'root_cause', 'action_items'] });
   },
 
   veto_doc_gen: async ({ args }) => {
@@ -564,26 +636,51 @@ export const generatorHandlers: HandlerMap = {
       else detectedStyle = 'jsdoc';
     }
 
+    // The whole file goes back to the caller, so it must go in whole: a file cut
+    // short here would come back cut short, and writing it would lose the rest.
+    const DOC_GEN_MAX = 60_000;
+    if (content.length > DOC_GEN_MAX) {
+      return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: `File is ${content.length} characters; veto_doc_gen rewrites whole files up to ${DOC_GEN_MAX}. Split it, or document it in parts.` }) }], isError: true };
+    }
+
+    // Which symbols lack docs — a deterministic fact, with or without an LLM.
+    const gaps = await executeOne({ id: 'docgen-gaps', agent: 'documentation' as WorkerAgentType, task: 'Find undocumented public symbols.', code: content, llm_backed: false });
+
     const docGenRun = await runHandlerAgent('veto_doc_gen', {
       id:    'docgen-1',
       agent: 'documentation' as WorkerAgentType,
-      task:  `Add ${detectedStyle} documentation comments to all public functions, classes, interfaces, and exported constants in this file. For each, add: (1) a one-line summary, (2) @param descriptions, (3) @returns description, (4) @throws if applicable. Return the COMPLETE file content with documentation added — do not truncate.`,
-      code:  content.slice(0, 10000),
+      task:  `Add ${detectedStyle} documentation comments to this file.`,
+      code:  content,
+      deliverable: {
+        description: `Add ${detectedStyle} documentation comments to every public function, class, interface and exported constant in the file: a one-line summary, @param for each parameter, @returns, and @throws where it can throw. Change nothing else — not code, not formatting.`,
+        shape: { annotated_content: '"<the COMPLETE file with documentation added, nothing removed>"' },
+        required: ['annotated_content'],
+        max_tokens: 16000,
+      },
     }, args?.agent_response);
-    const docGenResult = docGenRun.result;
 
-    const docQuality = docGenResult.analysis?.score ?? Math.round(docGenResult.output.confidence * 100);
-    recordOutcome('doc-gen', 50, 2, 'documentation', docQuality);
-
-    const annotatedContent = docGenResult.plan?.approach ?? docGenResult.output.recommendation ?? '';
-    const symbolsDocumented = (annotatedContent.match(/@param\b/g) ?? []).length;
+    let annotated = typeof docGenRun.deliverable?.annotated_content === 'string' ? docGenRun.deliverable.annotated_content : null;
+    // A result that lost code is worse than none: every original non-blank
+    // line must still be there.
+    let problem: string | null = null;
+    if (annotated) {
+      const keep = new Set(annotated.split(/\r?\n/).map(l => l.trim()));
+      const lost = content.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('//') && !l.startsWith('*') && !l.startsWith('/*') && !keep.has(l));
+      if (lost.length) {
+        problem = `The generated file dropped or changed ${lost.length} line(s) of the original (first: "${lost[0].slice(0, 80)}"), so it was not returned.`;
+        annotated = null;
+      }
+    }
+    recordOutcome('doc-gen', 50, 2, 'documentation', annotated ? 80 : 40);
 
     return handlerAgentResponse({
       file_path:          filePath,
       style:              detectedStyle,
-      annotated_content:  annotatedContent,
-      symbols_documented: symbolsDocumented,
-    }, docGenRun);
+      documentation_gaps: gaps.analysis?.findings ?? [],
+      annotated_content:  annotated,
+      symbols_documented: annotated ? (annotated.match(/@param\b|@returns?\b/g) ?? []).length : null,
+      ...(problem ? { problem } : {}),
+    }, docGenRun, { generated: ['annotated_content', 'symbols_documented'] });
   },
 
   veto_onboard: async ({ args }) => {
@@ -597,22 +694,25 @@ export const generatorHandlers: HandlerMap = {
       try { readme = readFileSync(join(projectDir, name), 'utf8').slice(0, 3000); break; } catch { /* skip */ }
     }
 
+    const { projectDigest } = await import('../worker-evidence.js');
     const onboardRun = await runHandlerAgent('veto_onboard', {
       id:          'onboard-1',
       agent:       'documentation' as WorkerAgentType,
-      task:        `Write a complete onboarding guide for a new ${role || 'fullstack'} developer joining this project. Include: (1) Setup steps (clone, install, env vars, first run), (2) Architecture overview (key directories and their purpose), (3) Key files to understand first, (4) How to run tests, (5) Development workflow, (6) First PR checklist (what to check before submitting). Be specific to this codebase.`,
-      context:     [buildContextString(projectDir), readme ? `README:\n${readme}` : ''].filter(Boolean).join('\n\n') || undefined,
+      task:        `Write an onboarding guide for a new ${role || 'fullstack'} developer joining this project.`,
+      context:     [buildContextString(projectDir), projectDigest(projectDir), readme ? `README:\n${readme}` : ''].filter(Boolean).join('\n\n') || undefined,
       project_dir: projectDir,
+      deliverable: {
+        description: `Write an onboarding guide for a new ${role || 'fullstack'} developer, specific to this codebase: setup (clone, install, env vars, first run), architecture (key directories and their purpose), key files to read first, running tests, development workflow, first-PR checklist. Use only commands, files and scripts that appear in the context.`,
+        shape: { guide: '"<markdown with one ## section per topic>"' },
+        required: ['guide'],
+      },
     }, args?.agent_response);
-    const onboardResult = onboardRun.result;
-
-    const onboardQuality = onboardResult.analysis?.score ?? Math.round(onboardResult.output.confidence * 100);
-    recordOutcome('onboard', 50, 2, 'documentation', onboardQuality);
+    recordOutcome('onboard', 50, 2, 'documentation', onboardRun.deliverable ? 80 : 40);
 
     return handlerAgentResponse({
-      guide:    onboardResult.plan?.approach ?? onboardResult.output.recommendation ?? '',
+      guide:    onboardRun.deliverable?.guide ?? null,
       role:     role || 'fullstack',
-      sections: ['Setup', 'Architecture', 'Key Files', 'Testing', 'Workflow', 'First PR'],
-    }, onboardRun);
+      readme_found: Boolean(readme),
+    }, onboardRun, { generated: ['guide'] });
   },
 };
