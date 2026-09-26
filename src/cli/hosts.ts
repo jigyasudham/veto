@@ -103,8 +103,11 @@ export function hostSpecs(home: string = homedir(), platform: NodeJS.Platform = 
       // only this file is read; the antigravity-cli copy is ignored.
       config: { path: join(home, '.gemini', 'config', 'mcp_config.json'), key: 'mcpServers', format: 'json' },
       legacyConfigs: [join(home, '.gemini', 'antigravity-cli', 'mcp_config.json')],
-      // The skill roots Antigravity listed in a real session's system prompt.
-      skillDirs: [join(home, '.gemini', 'skills')],
+      // Antigravity's global customization root is ~/.gemini/config/ (its own
+      // guide says so). Verified 2026-09-26: a skill in ~/.gemini/skills was
+      // never listed to the model; the same file in ~/.gemini/config/skills was
+      // read, and the model ran `veto continue` as the skill says.
+      skillDirs: [join(home, '.gemini', 'config', 'skills')],
     },
     {
       id: 'gemini',

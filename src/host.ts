@@ -35,6 +35,42 @@ const MARKERS: Array<[string, HostPlatform]> = [
   ['gemini', 'gemini'],
 ];
 
+/**
+ * Which app is hosting Veto, for labelling (who saved, who resumed). Wider than
+ * HostPlatform, which is only the hosts whose transcripts capture can read.
+ *
+ * Antigravity reports itself as "antigravity-client" (seen 2026-09-26 in
+ * ~/.veto/host-starts.json). It matched none of the markers above, so its
+ * saves were labelled "claude" by default, its resumes went unrecorded, and a
+ * model inside it that declared "gemini" pointed transcript capture at Gemini
+ * CLI's files — another app's chat.
+ */
+export type HostApp = HostPlatform | 'antigravity';
+
+const APP_MARKERS: Array<[string, HostApp]> = [
+  ['antigravity', 'antigravity'],
+  ['jetski', 'antigravity'],
+];
+
+/** The app, by name. Antigravity markers are checked first: it is Gemini-powered but is not Gemini CLI. */
+export function classifyHostApp(name: string | null | undefined): HostApp | null {
+  if (!name) return null;
+  const n = name.toLowerCase();
+  for (const [marker, app] of APP_MARKERS) if (n.includes(marker)) return app;
+  return classifyHost(name);
+}
+
+/** The hosting app, or null when it cannot be told. */
+export function detectHostApp(server?: { getClientVersion?: () => unknown }): HostApp | null {
+  detectHostPlatform(server); // populates the cached identity
+  return classifyHostApp(observed?.name) ?? classifyHostApp(observed?.title);
+}
+
+/** True when the hosting app is known and has no transcript Veto can read. */
+export function hostHasNoTranscript(server?: { getClientVersion?: () => unknown }): boolean {
+  return detectHostApp(server) === 'antigravity';
+}
+
 let observed: HostClient | null = null;
 
 /** Record the client identity from the MCP initialize handshake. Never throws. */

@@ -43,6 +43,8 @@ export const CONTEXT_WINDOWS: Record<string, number> = {
   claude: 200_000,
   gemini: 1_000_000,
   codex: 128_000,
+  // Antigravity runs Gemini models by default; a model id, when given, refines this.
+  antigravity: 1_000_000,
 };
 
 // Per-model context windows — resolved at call time when model is provided.

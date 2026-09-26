@@ -33,6 +33,8 @@ describe('host table', () => {
     expect(ag.config?.path).toBe(join(home, '.gemini', 'config', 'mcp_config.json'));
     expect(ag.legacyConfigs).toEqual([join(home, '.gemini', 'antigravity-cli', 'mcp_config.json')]);
     expect(ag.cli?.add('npx.cmd', ['-y'])).toEqual(['mcp', 'add', 'veto', '--', 'npx.cmd', '-y']);
+    // Where Antigravity actually lists skills to the model (not ~/.gemini/skills).
+    expect(ag.skillDirs).toEqual([join(home, '.gemini', 'config', 'skills')]);
   });
 
   it('never treats ~/.gemini alone as Gemini CLI being installed (Antigravity creates it too)', () => {
