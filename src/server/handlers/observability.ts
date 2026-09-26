@@ -10,7 +10,7 @@ import {
 } from '../../memory/local.js';
 import { getRateStatus } from '../../router/index.js';
 import { getConfig, setConfig } from '../../memory/config.js';
-import { hostClient, detectHostPlatform } from '../../host.js';
+import { hostClient, detectHostPlatform, detectHostApp } from '../../host.js';
 import { autoSave, serverHealth, VERSION } from '../runtime.js';
 import type { HandlerMap } from '../registry.js';
 
@@ -121,6 +121,8 @@ export const observabilityHandlers: HandlerMap = {
       client: client?.name ?? null,
       client_version: client?.version ?? null,
       resolved_platform: resolved,
+      // The app, even when it has no transcript capture support (e.g. antigravity).
+      app: detectHostApp(server),
       transcript_capture_supported: resolved !== null,
     };
     let db_size_bytes = 0;

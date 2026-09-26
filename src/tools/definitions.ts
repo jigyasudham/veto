@@ -16,7 +16,7 @@ export const TOOL_DEFINITIONS = [
         platform: {
           type: 'string',
           description: 'AI platform (claude, gemini, codex). Used to select the correct context window for threshold calculation. Defaults to "claude".',
-          enum: ['claude', 'gemini', 'codex'],
+          enum: ['claude', 'gemini', 'codex', 'antigravity'],
         },
         model: {
           type: 'string',
@@ -94,7 +94,7 @@ export const TOOL_DEFINITIONS = [
         platform: {
           type: 'string',
           description: 'The AI CLI you are running in right now — claude, gemini or codex. Selects the correct context window for threshold calculation. Defaults to the CLI Veto detects from the MCP handshake, so pass it only if you know better.',
-          enum: ['claude', 'gemini', 'codex'],
+          enum: ['claude', 'gemini', 'codex', 'antigravity'],
         },
         project_dir: {
           type: 'string',
@@ -140,7 +140,7 @@ export const TOOL_DEFINITIONS = [
         resuming_as: {
           type: 'string',
           description: 'The AI client resuming this session (e.g. "claude", "gemini", "codex"). Recorded as active_client.',
-          enum: ['claude', 'gemini', 'codex'],
+          enum: ['claude', 'gemini', 'codex', 'antigravity'],
         },
       },
       required: ['session_id'],
@@ -173,8 +173,8 @@ export const TOOL_DEFINITIONS = [
         summary: { type: 'string', description: 'What was accomplished this session — one or two sentences.' },
         context: { type: 'string', description: 'Key context the next platform needs: active decisions, file paths, constraints.' },
         task_state: { type: 'string', description: 'Current task state — what is done, what is in progress, what is next.' },
-        from_platform: { type: 'string', enum: ['claude', 'gemini', 'codex'], description: 'Platform handing off (default: claude).' },
-        to_platform: { type: 'string', enum: ['gemini', 'codex', 'claude'], description: 'Target platform. If omitted, Veto picks the platform with the most headroom.' },
+        from_platform: { type: 'string', enum: ['claude', 'gemini', 'codex', 'antigravity'], description: 'Platform handing off (default: claude).' },
+        to_platform: { type: 'string', enum: ['gemini', 'codex', 'claude', 'antigravity'], description: 'Target platform. If omitted, Veto picks the platform with the most headroom.' },
         project_dir: { type: 'string', description: 'Absolute path to the current project directory.' },
         token_count: { type: 'number', description: 'Approximate tokens used this session.' },
       },
@@ -188,7 +188,7 @@ export const TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         session_id: { type: 'string', description: 'Optional. Session ID from veto_handoff. If omitted, the most recent saved session is restored.' },
-        resuming_as: { type: 'string', description: 'The AI client resuming this session (e.g. "gemini"). Recorded as active_client so you can track which tool is currently working on it.', enum: ['claude', 'gemini', 'codex'] },
+        resuming_as: { type: 'string', description: 'The AI client resuming this session (e.g. "gemini"). Recorded as active_client so you can track which tool is currently working on it.', enum: ['claude', 'gemini', 'codex', 'antigravity'] },
       },
       required: [],
     },

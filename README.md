@@ -637,6 +637,9 @@ Before Veto gives any AI a note, it has to show that the notes it would give are
 
 ## Release Notes
 
+### 3.7.1
+- **Bug fix: Veto did not know it was running in Antigravity.** Antigravity names itself `antigravity-client` when it starts Veto, which Veto did not recognise. A session saved there was labelled `claude` unless the model said otherwise, a session resumed there was not recorded as resumed by Antigravity, and a model that described itself as `gemini` made transcript capture archive a Gemini CLI chat, which is another app's conversation. Antigravity is now recognised as its own app. Saves and resumes are labelled `antigravity`, capture skips it (Veto cannot read Antigravity's chats), and `antigravity` is an accepted value wherever a tool asks which app you are in. `veto_health` reports the app too.
+
 ### 3.7.0
 - **Bug fix: Antigravity never loaded Veto.** Antigravity reads its MCP servers from `~/.gemini/config/mcp_config.json`; `veto init` wrote `~/.gemini/antigravity-cli/mcp_config.json`, which it does not read, and `veto doctor` checked that same file and printed ✓. Init now registers through each app's own CLI where it has one (`claude mcp add`, `codex mcp add`, `agy mcp add`), so the app decides where its config lives. Without that CLI it writes only the file the app reads. It handles the empty file Antigravity creates, which the old writer skipped as "unreadable", and never rewrites a file with comments (Zed's) or broken JSON.
 - **`veto doctor` checks that each app really runs Veto,** not that a file mentions it. It reads what the app itself reports (including a disabled entry), launches the configured command to see it answer, and shows when each app last started Veto, with which Node and whether SQLite worked there. It also checks that transcript capture and the lessons trial are still keeping up, and exits 1 on any issue. Its Node check was also wrong: it accepted 22.5–22.12, where persistence does not work.

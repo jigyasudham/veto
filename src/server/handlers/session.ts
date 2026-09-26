@@ -14,7 +14,7 @@ import type { Platform } from '../../router/index.js';
 import { handoff, continueSession } from '../../adapters/index.js';
 import { autoSummarizeSession } from '../../council/session-summarizer.js';
 import { autoSave, getActiveProjectDir, setActiveProjectDir } from '../runtime.js';
-import { detectHostPlatform } from '../../host.js';
+import { detectHostPlatform, detectHostApp, hostHasNoTranscript } from '../../host.js';
 import type { HandlerMap } from '../registry.js';
 
 /**
@@ -46,10 +46,12 @@ export const sessionHandlers: HandlerMap = {
     // The handshake wins: a model in Codex that declared "claude" labelled the
     // session claude, and veto_continue then said "restored from claude".
     const hostPlatform = detectHostPlatform(server);
+    // The app label (Antigravity included) — wider than the capture platforms.
+    const hostApp = detectHostApp(server);
     const declaredPlatform = args?.platform ? String(args.platform) : undefined;
-    const savePlatform = hostPlatform ?? declaredPlatform ?? 'claude';
-    const platformNote = hostPlatform && declaredPlatform && declaredPlatform.toLowerCase() !== hostPlatform
-      ? `platform: "${declaredPlatform}" was declared, but this save came through ${hostPlatform}; recorded ${hostPlatform}`
+    const savePlatform = hostApp ?? declaredPlatform ?? 'claude';
+    const platformNote = hostApp && declaredPlatform && declaredPlatform.toLowerCase() !== hostApp
+      ? `platform: "${declaredPlatform}" was declared, but this save came through ${hostApp}; recorded ${hostApp}`
       : undefined;
     const shouldAutoSummarize = args?.auto_summarize === true;
 
@@ -135,7 +137,10 @@ export const sessionHandlers: HandlerMap = {
       transcriptOnSave = await captureOnSave({
         projectDir: sessionProjectDir ?? process.cwd(),
         vetoSessionId: result.session_id,
-        platform: captureSourceFor(hostPlatform, declaredPlatform),
+        // A host with no transcript Veto can read (Antigravity) captures nothing,
+        // rather than falling back to the declared platform — "gemini" there
+        // would archive a Gemini CLI chat, which is another app's conversation.
+        platform: hostHasNoTranscript(server) ? null : captureSourceFor(hostPlatform, declaredPlatform),
       });
     } catch { /* transcript capture is best-effort; never breaks save */ }
 
@@ -193,7 +198,7 @@ export const sessionHandlers: HandlerMap = {
 
   veto_session_restore: async ({ args, server }) => {
     const session_id = String(args?.session_id ?? '');
-    const resuming_as = detectHostPlatform(server) ?? (args?.resuming_as ? String(args.resuming_as) : undefined);
+    const resuming_as = detectHostApp(server) ?? (args?.resuming_as ? String(args.resuming_as) : undefined);
     const result = restoreSession(session_id, resuming_as);
 
     if (!result.found) {
@@ -292,7 +297,7 @@ export const sessionHandlers: HandlerMap = {
     if (!summary || !context) {
       return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: 'summary and context are required.' }) }], isError: true };
     }
-    const handoffPlatform = detectHostPlatform(server) ?? (args?.from_platform ? String(args.from_platform) : 'claude');
+    const handoffPlatform = detectHostApp(server) ?? (args?.from_platform ? String(args.from_platform) : 'claude');
     const handoffTaskState = args?.task_state ? String(args.task_state) : undefined;
     const handoffProjectDir = args?.project_dir ? String(args.project_dir) : undefined;
     const result = handoff({
@@ -317,7 +322,7 @@ export const sessionHandlers: HandlerMap = {
   },
 
   veto_continue: async ({ args, server }) => {
-    const resuming_as = detectHostPlatform(server) ?? (args?.resuming_as ? String(args.resuming_as) : undefined);
+    const resuming_as = detectHostApp(server) ?? (args?.resuming_as ? String(args.resuming_as) : undefined);
     const result = continueSession(args?.session_id ? String(args.session_id) : undefined, resuming_as);
     if (!result.found) {
       return { content: [{ type: 'text', text: JSON.stringify({ success: false, message: result.message }, null, 2) }], isError: true };

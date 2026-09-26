@@ -10,7 +10,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema, ListResourcesRequestSche
 import { TOOL_DEFINITIONS } from './tools/definitions.js';
 import { isCompactMode, getCompactToolList, findTools } from './tools/compact.js';
 import { log, errMsg } from './log.js';
-import { recordHostClient, detectHostPlatform } from './host.js';
+import { recordHostClient, detectHostPlatform, detectHostApp } from './host.js';
 import type { HandlerMap } from './server/registry.js';
 import { workerHandlers } from './server/handlers/workers.js';
 import { memoryHandlers } from './server/handlers/memory.js';
@@ -91,7 +91,7 @@ server.oninitialized = () => {
     recordHostStart({
       client: impl?.name ?? '(unnamed client)',
       client_version: impl?.version ?? null,
-      platform: detectHostPlatform(),
+      platform: detectHostApp(),
       veto_version: VERSION,
       sqlite_ok: sqliteAvailable(),
     });
