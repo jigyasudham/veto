@@ -1,7 +1,7 @@
 {
   "name": "@jigyasudham/veto",
   "mcpName": "io.github.jigyasudham/veto",
-  "version": "3.7.1",
+  "version": "3.8.0",
   "description": "93 agentic tools. 49 specialists. Every major AI CLI. Self-learning. Zero extra cost on subscriptions.",
   "keywords": [
     "mcp",
@@ -42,12 +42,14 @@
   },
   "files": [
     "dist",
+    "contracts/api-v1",
     "server.json"
   ],
   "main": "./dist/server.js",
   "exports": {
     ".": "./dist/server.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./contracts/api-v1/*": "./contracts/api-v1/*"
   },
   "scripts": {
     "build": "tsc",

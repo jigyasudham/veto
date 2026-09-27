@@ -1,0 +1,242 @@
+{
+  "$id": "https://github.com/jigyasudham/veto/contracts/api-v1/snapshot.data.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "project": {
+      "type": "object",
+      "properties": {
+        "dir": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "dir",
+        "key"
+      ],
+      "additionalProperties": false
+    },
+    "database": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "unavailable",
+            "error"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "number"
+        },
+        "expected_schema_version": {
+          "type": "number"
+        },
+        "newer_than_backend": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "transcripts": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "unavailable",
+            "error"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "capture": {
+          "type": "string",
+          "enum": [
+            "enabled",
+            "disabled",
+            "reconsent_required"
+          ]
+        },
+        "recall_permitted": {
+          "type": "boolean"
+        },
+        "archives_in_project": {
+          "type": "number"
+        },
+        "archives_all_projects": {
+          "type": "number"
+        },
+        "by_source_in_project": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "last_archived_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "lessons": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "unavailable",
+            "error"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "sharing": {
+          "type": "string",
+          "enum": [
+            "on",
+            "off",
+            "reconsent_required"
+          ]
+        },
+        "scope": {
+          "type": "string",
+          "const": "all_projects"
+        },
+        "notes": {
+          "type": "number"
+        },
+        "by_host": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "any_project": {
+          "type": "number"
+        },
+        "held": {
+          "type": "number"
+        },
+        "unresolved_folders": {
+          "type": "number"
+        },
+        "excluded_projects": {
+          "type": "number"
+        },
+        "disabled_hosts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "host",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "trial": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "unavailable",
+            "error"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string",
+          "const": "shadow"
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "ends_at": {
+          "type": "string"
+        },
+        "qualifying": {
+          "type": "number"
+        },
+        "target": {
+          "type": "number"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "outcomes": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "drift": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "project",
+    "database",
+    "transcripts",
+    "lessons",
+    "trial"
+  ],
+  "additionalProperties": false
+}

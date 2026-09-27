@@ -1,0 +1,50 @@
+{
+  "$id": "https://github.com/jigyasudham/veto/contracts/api-v1/envelope.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "contract": {
+      "type": "number",
+      "const": 1
+    },
+    "command": {
+      "type": "string"
+    },
+    "backend_version": {
+      "type": "string"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "invalid_request",
+        "unknown_command",
+        "db_mismatch",
+        "db_missing",
+        "sqlite_unavailable",
+        "no_archive",
+        "no_match",
+        "not_found",
+        "error"
+      ]
+    },
+    "message": {
+      "type": "string"
+    },
+    "next_action": {
+      "type": "string"
+    },
+    "data": {}
+  },
+  "required": [
+    "contract",
+    "command",
+    "backend_version",
+    "generated_at",
+    "state"
+  ],
+  "additionalProperties": false
+}

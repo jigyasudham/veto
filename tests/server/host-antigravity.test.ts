@@ -3,7 +3,8 @@
 // and a model that declared "gemini" sent capture to Gemini CLI's files.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { classifyHost, classifyHostApp, detectHostApp, detectHostPlatform, hostHasNoTranscript, recordHostClient, resetHostClient } from '../../src/host.js';
+import { classifyHost, classifyHostApp, detectHostApp, detectHostPlatform, recordHostClient, resetHostClient } from '../../src/host.js';
+import { captureSourceFor } from '../../src/transcripts/on-save.js';
 import { callTool } from '../../src/server.js';
 import { getDb } from '../../src/memory/local.js';
 
@@ -13,15 +14,17 @@ afterEach(() => resetHostClient());
 const json = (res: any) => { const t = res.content[0].text as string; return JSON.parse(t.slice(t.indexOf('{'))); };
 
 describe('Antigravity is its own app', () => {
-  it('is recognised by name, is not Gemini CLI, and has no capturable transcript', () => {
+  it('is recognised by name, is not Gemini CLI, and captures its own chats', () => {
     expect(classifyHostApp('antigravity-client')).toBe('antigravity');
-    expect(classifyHost('antigravity-client')).toBeNull(); // not a capture platform
+    expect(classifyHost('antigravity-client')).toBeNull(); // not matched as a Gemini CLI marker
     expect(classifyHostApp('gemini-cli-mcp-client')).toBe('gemini');
     expect(classifyHostApp('claude-code')).toBe('claude');
     recordHostClient({ name: 'antigravity-client', version: '1.2.2' });
     expect(detectHostApp()).toBe('antigravity');
     expect(detectHostPlatform()).toBeNull();
-    expect(hostHasNoTranscript()).toBe(true);
+    // The app is the capture source, so a model that declares "gemini" there
+    // still archives Antigravity's chat, never Gemini CLI's.
+    expect(captureSourceFor(detectHostApp(), 'gemini')).toBe('antigravity');
   });
 
   it('labels a save made through Antigravity "antigravity", even when the model says "gemini"', async () => {

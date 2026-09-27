@@ -100,35 +100,75 @@ export function resetDb(): void {
   if (_db) { _db.close(); _db = null; }
 }
 
+/**
+ * True when an error means the database could not be WRITTEN — the file is
+ * readable but this process may not change it. Codex's default sandbox is the
+ * case that matters: a command it runs may write only inside the workspace, so
+ * SQLite opens ~/.veto/veto.db read-only and the first write fails with
+ * "attempt to write a readonly database". getDb() writes on every open (WAL,
+ * table creation, migrations), so even a pure read fails there.
+ */
+export function isWriteBlocked(err: unknown): boolean {
+  const text = err instanceof Error ? `${err.message} ${(err as { code?: unknown }).code ?? ''}` : String(err);
+  return /readonly database|read-only|SQLITE_READONLY|SQLITE_CANTOPEN|unable to open database|EACCES|EPERM/i.test(text);
+}
+
+/**
+ * Switch this process to a read-only connection: no pragmas, no migrations, no
+ * writes. For CLI commands that only read, run where writing is not allowed. Any
+ * write after this throws, so a caller uses it only for reads.
+ */
+export function useReadOnlyDb(): void {
+  const DbSync = requireDbSync();
+  try { _db?.close(); } catch { /* a half-opened connection */ }
+  _db = null;
+  const db = new DbSync(DB_PATH, { readOnly: true });
+  // Not a write: a reader can still wait out a checkpoint instead of failing.
+  db.exec('PRAGMA busy_timeout = 5000');
+  _db = db;
+}
+
 export function getDb(): DatabaseSync {
   if (_db) return _db;
   const DbSync = requireDbSync();
   if (DB_PATH !== ':memory:') mkdirSync(dirname(DB_PATH), { recursive: true });
-  _db = new DbSync(DB_PATH);
-  _db.exec('PRAGMA journal_mode = WAL');
-  _db.exec('PRAGMA foreign_keys = ON');
-  _db.exec(CREATE_TABLES);
-  migrateCouncilOutcomes(_db);
-  migrateCouncilColumns(_db);
-  migrateSessionColumns(_db);
-  migrateCouncilDuration(_db);
-  migrateCouncilProjectDir(_db);
-  migrateRateUsageTokens(_db);
-  migrateUsageLog(_db);
-  migrateSessionSaveType(_db);
-  migrateScanDiagnostics(_db);
-  migrateSessionTags(_db);
-  migrateContextUsage(_db);
-  migrateRoutingFeedback(_db);
-  migrateToolTraceLog(_db);
-  migrateProjectDirCase(_db);
-  migrateSessionCreatedAtIso(_db);
-  migrateLessonColumns(_db);
-  migrateDropShadowLog(_db);
+  const db = new DbSync(DB_PATH);
+  try {
+    initDb(db);
+  } catch (err) {
+    // Never keep a half-initialized connection: the next call would get it,
+    // unmigrated, instead of the same error.
+    try { db.close(); } catch { /* ignore */ }
+    throw err;
+  }
+  _db = db;
+  return _db;
+}
+
+function initDb(db: DatabaseSync): void {
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec('PRAGMA foreign_keys = ON');
+  db.exec(CREATE_TABLES);
+  migrateCouncilOutcomes(db);
+  migrateCouncilColumns(db);
+  migrateSessionColumns(db);
+  migrateCouncilDuration(db);
+  migrateCouncilProjectDir(db);
+  migrateRateUsageTokens(db);
+  migrateUsageLog(db);
+  migrateSessionSaveType(db);
+  migrateScanDiagnostics(db);
+  migrateSessionTags(db);
+  migrateContextUsage(db);
+  migrateRoutingFeedback(db);
+  migrateToolTraceLog(db);
+  migrateProjectDirCase(db);
+  migrateSessionCreatedAtIso(db);
+  migrateLessonColumns(db);
+  migrateDropShadowLog(db);
   // Stamp the read-contract version so external readers (veto-vscode, statusline)
   // can detect drift via `PRAGMA user_version`. See VETO_DB_SCHEMA_VERSION.
-  _db.exec(`PRAGMA user_version = ${VETO_DB_SCHEMA_VERSION}`);
-  return _db;
+  db.exec(`PRAGMA user_version = ${VETO_DB_SCHEMA_VERSION}`);
 }
 
 // Canonicalize drive-letter case on existing project_dir values so the VS Code

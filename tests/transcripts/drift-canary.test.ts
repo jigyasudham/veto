@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { parseClaudeTranscript } from '../../src/transcripts/adapters/claude.js';
 import { parseCodexTranscript } from '../../src/transcripts/adapters/codex.js';
 import { parseGeminiTranscript } from '../../src/transcripts/adapters/gemini.js';
+import { parseAntigravityTranscript } from '../../src/transcripts/adapters/antigravity.js';
 
 // Pinned real-format Claude fixture (all 11 observed line types + one malformed
 // line). This is the drift canary: if a future adapter change stops recognizing a
@@ -14,6 +15,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = readFileSync(join(__dirname, 'fixtures', 'claude-sample.jsonl'), 'utf8');
 const CODEX_FIXTURE = readFileSync(join(__dirname, 'fixtures', 'codex-sample.jsonl'));
 const GEMINI_FIXTURE = readFileSync(join(__dirname, 'fixtures', 'gemini-sample.jsonl'));
+const ANTIGRAVITY_FIXTURE = readFileSync(join(__dirname, 'fixtures', 'antigravity-sample.jsonl'));
 
 describe('drift canary — pinned Claude fixture', () => {
   const { events, sessionIds } = parseClaudeTranscript(Buffer.from(FIXTURE, 'utf8'));
@@ -112,5 +114,23 @@ describe('drift canary — pinned Gemini fixture', () => {
   it('DRIFT ALARM: only the malformed and future-type lines are unknown-kind', () => {
     const unknown = events.filter(e => e.kind === 'unknown');
     expect(unknown.map(e => e.sourceType).sort()).toEqual(['(unparsed)', 'brand-new-future-type']);
+  });
+});
+
+describe('drift canary — pinned Antigravity fixture', () => {
+  const { events } = parseAntigravityTranscript(ANTIGRAVITY_FIXTURE);
+
+  it('classifies every step type seen on real conversations', () => {
+    for (const t of ['USER_INPUT', 'PLANNER_RESPONSE', 'GENERIC', 'VIEW_FILE', 'LIST_DIRECTORY', 'GREP_SEARCH', 'CODE_ACTION',
+      'RUN_COMMAND', 'SYSTEM_MESSAGE', 'ERROR_MESSAGE', 'CHECKPOINT', 'CONVERSATION_HISTORY']) {
+      const rows = events.filter(e => e.sourceType === t);
+      expect(rows.length, `type ${t} should produce an event`).toBeGreaterThan(0);
+      expect(rows.every(e => e.kind !== 'unknown'), `type ${t} should not be unknown`).toBe(true);
+    }
+  });
+
+  it('DRIFT ALARM: only the malformed and future-type lines are unknown-kind', () => {
+    const unknown = events.filter(e => e.kind === 'unknown');
+    expect(unknown.map(e => e.sourceType).sort()).toEqual(['(unparsed)', 'BRAND_NEW_TYPE']);
   });
 });

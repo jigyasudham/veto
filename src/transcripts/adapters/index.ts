@@ -9,13 +9,14 @@
 import { parseClaudeTranscript } from './claude.js';
 import { parseCodexTranscript } from './codex.js';
 import { parseGeminiTranscript } from './gemini.js';
+import { parseAntigravityTranscript } from './antigravity.js';
 import type { ParseResult } from './jsonl.js';
 
 export type { NormalizedEvent, ParseResult } from './jsonl.js';
-export { parseClaudeTranscript, parseCodexTranscript, parseGeminiTranscript };
+export { parseClaudeTranscript, parseCodexTranscript, parseGeminiTranscript, parseAntigravityTranscript };
 
 /** Host CLIs Veto can capture transcripts from. */
-export const TRANSCRIPT_SOURCES = ['claude', 'codex', 'gemini'] as const;
+export const TRANSCRIPT_SOURCES = ['claude', 'codex', 'gemini', 'antigravity'] as const;
 export type TranscriptSource = (typeof TRANSCRIPT_SOURCES)[number];
 
 export function isTranscriptSource(s: string): s is TranscriptSource {
@@ -27,6 +28,7 @@ export const FORMAT_HINTS: Record<TranscriptSource, string> = {
   claude: 'claude-jsonl',
   codex: 'codex-rollout-jsonl',
   gemini: 'gemini-chat-jsonl',
+  antigravity: 'antigravity-transcript-jsonl',
 };
 
 export function formatHint(source: string): string {
@@ -37,6 +39,7 @@ const PARSERS: Record<TranscriptSource, (buf: Buffer) => ParseResult> = {
   claude: parseClaudeTranscript,
   codex: parseCodexTranscript,
   gemini: parseGeminiTranscript,
+  antigravity: parseAntigravityTranscript,
 };
 
 /** Parse an L0 buffer with the parser that owns `source`. */

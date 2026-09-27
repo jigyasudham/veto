@@ -1,0 +1,24 @@
+{
+  "$id": "https://github.com/jigyasudham/veto/contracts/api-v1/diagnostics.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "checks": {
+      "default": [],
+      "maxItems": 2,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "host_cli",
+          "probe"
+        ]
+      }
+    },
+    "db": {
+      "type": "string",
+      "maxLength": 1024
+    }
+  },
+  "additionalProperties": false
+}

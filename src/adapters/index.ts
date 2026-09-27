@@ -170,6 +170,23 @@ function buildContinueResult(session: ReturnType<typeof listSessions>[0], now: s
   };
 }
 
+/** A restored session as veto_continue returns it: the message, then the session as JSON. `extra` is appended. */
+export function continueText(result: ContinueResult, extra: Record<string, unknown> = {}): string {
+  return result.message + '\n\n' + JSON.stringify({
+    session_id: result.session_id,
+    saved_by: result.platform,
+    active_client: result.active_client ?? result.platform,
+    summary: result.summary,
+    context: result.context,
+    task_state: result.task_state,
+    next_action: result.next_action,
+    project_dir: result.project_dir,
+    token_count: result.token_count,
+    restored_at: result.restored_at,
+    ...extra,
+  }, null, 2);
+}
+
 // ─── Platform Setup ───────────────────────────────────────────────────────────
 
 export function getPlatformSetup(platform: SetupPlatform, vetoServerPath: string): PlatformSetupResult {

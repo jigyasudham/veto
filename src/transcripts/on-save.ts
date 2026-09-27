@@ -6,8 +6,9 @@
 //
 // The source is the platform the save declares (`veto_session_save`'s `platform`
 // arg), because that is the CLI whose transcript the user is actually in. Claude
-// Code publishes its own mapping from the statusline; Codex and Gemini have no
-// such hook, so their mapping is discovered from disk first (see discover.ts).
+// Code publishes its own mapping from the statusline; Codex, Gemini and
+// Antigravity have no such hook, so their mapping is discovered from disk first
+// (see discover.ts).
 
 import { isCaptureEnabled, firstCaptureNote, effectiveTranscriptsDir } from './config.js';
 import { captureSession } from './archive.js';
@@ -30,7 +31,7 @@ export type OnSaveTranscript = {
   reason?: string;
 };
 
-const HOST_NAMES: Record<TranscriptSource, string> = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini' };
+const HOST_NAMES: Record<TranscriptSource, string> = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity' };
 
 /** Capture used to return nothing at all when it skipped; a save now says why. */
 function skipReason(reason: string | undefined, source: TranscriptSource, projectDir: string): string {
@@ -88,7 +89,7 @@ export async function captureOnSave(opts: {
   if (!isCaptureEnabled()) return null;
 
   if (opts.platform === null) {
-    return { status: 'skipped', reason: 'this AI client is not one Veto can capture from (Claude Code, Codex or Gemini)' };
+    return { status: 'skipped', reason: 'this AI client is not one Veto can capture from (Claude Code, Codex, Gemini or Antigravity)' };
   }
   const source = sourceForPlatform(opts.platform);
   if (!opts.projectDir) {

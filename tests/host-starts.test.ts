@@ -17,6 +17,16 @@ describe('host-start ledger', () => {
     expect(s).toMatchObject({ client: 'claude-code', client_version: '2.1.1', starts: 2, sqlite_ok: false, first_seen: '2026-09-26T10:00:00.000Z', last_seen: '2026-09-26T11:00:00.000Z', node_version: process.version });
   });
 
+  it('remembers since when a client has run its current Veto version', () => {
+    const path = ledger();
+    const at = (t: string, veto_version: string) =>
+      recordHostStart({ client: 'antigravity-client', veto_version, sqlite_ok: true }, { path, now: new Date(t) });
+    at('2026-09-26T10:00:00Z', '3.7.1');
+    at('2026-09-27T09:00:00Z', '3.8.0');
+    at('2026-09-27T11:00:00Z', '3.8.0');
+    expect(readHostStarts(path)[0]).toMatchObject({ veto_version: '3.8.0', version_since: '2026-09-27T09:00:00.000Z', first_seen: '2026-09-26T10:00:00.000Z' });
+  });
+
   it("does not count doctor's own launch test as a host start", () => {
     const path = ledger();
     recordHostStart({ client: PROBE_CLIENT, veto_version: '3.7.0', sqlite_ok: true }, { path });

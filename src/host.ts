@@ -36,14 +36,14 @@ const MARKERS: Array<[string, HostPlatform]> = [
 ];
 
 /**
- * Which app is hosting Veto, for labelling (who saved, who resumed). Wider than
- * HostPlatform, which is only the hosts whose transcripts capture can read.
+ * Which app is hosting Veto: who saved, who resumed, and whose chat capture
+ * archives. Wider than HostPlatform, the CLIs matched by marker alone.
  *
  * Antigravity reports itself as "antigravity-client" (seen 2026-09-26 in
  * ~/.veto/host-starts.json). It matched none of the markers above, so its
  * saves were labelled "claude" by default, its resumes went unrecorded, and a
  * model inside it that declared "gemini" pointed transcript capture at Gemini
- * CLI's files — another app's chat.
+ * CLI's files — another app's chat. Capture now reads Antigravity's own.
  */
 export type HostApp = HostPlatform | 'antigravity';
 
@@ -64,11 +64,6 @@ export function classifyHostApp(name: string | null | undefined): HostApp | null
 export function detectHostApp(server?: { getClientVersion?: () => unknown }): HostApp | null {
   detectHostPlatform(server); // populates the cached identity
   return classifyHostApp(observed?.name) ?? classifyHostApp(observed?.title);
-}
-
-/** True when the hosting app is known and has no transcript Veto can read. */
-export function hostHasNoTranscript(server?: { getClientVersion?: () => unknown }): boolean {
-  return detectHostApp(server) === 'antigravity';
 }
 
 let observed: HostClient | null = null;
