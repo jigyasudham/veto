@@ -1,0 +1,9 @@
+{
+  "contract": 1,
+  "command": "recall search",
+  "backend_version": "3.8.0",
+  "generated_at": "2026-09-27T00:00:00.000Z",
+  "state": "invalid_request",
+  "message": "project: Invalid input: expected string, received undefined",
+  "next_action": "See the request schema in contracts/api-v1 of the @jigyasudham/veto package."
+}

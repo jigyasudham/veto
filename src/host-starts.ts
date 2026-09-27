@@ -28,6 +28,8 @@ export type HostStart = {
   first_seen: string;
   last_seen: string;
   starts: number;
+  /** When this client first started the Veto version it runs now. Absent in ledgers written before 3.8.0. */
+  version_since?: string;
 };
 
 type Ledger = { version: 1; clients: Record<string, HostStart> };
@@ -83,6 +85,7 @@ export function recordHostStart(
       first_seen: prev?.first_seen ?? now,
       last_seen: now,
       starts: (prev?.starts ?? 0) + 1,
+      version_since: prev && prev.veto_version === input.veto_version ? (prev.version_since ?? prev.first_seen) : now,
     };
     // Bounded: keep the most recently seen clients.
     const entries = Object.values(ledger.clients).sort((a, b) => b.last_seen.localeCompare(a.last_seen)).slice(0, MAX_CLIENTS);

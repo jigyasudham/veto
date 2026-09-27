@@ -1,0 +1,50 @@
+{
+  "contract": 1,
+  "command": "snapshot",
+  "backend_version": "3.8.0",
+  "generated_at": "2026-09-27T00:00:00.000Z",
+  "state": "ok",
+  "data": {
+    "project": {
+      "dir": "d:\\Api Codex",
+      "key": "d:\\api codex"
+    },
+    "database": {
+      "state": "ok",
+      "schema_version": 1,
+      "expected_schema_version": 1,
+      "newer_than_backend": false
+    },
+    "transcripts": {
+      "state": "ok",
+      "capture": "enabled",
+      "recall_permitted": true,
+      "archives_in_project": 1,
+      "archives_all_projects": 2,
+      "by_source_in_project": {
+        "codex": 1
+      },
+      "last_archived_at": "2026-09-26T12:00:00.000Z"
+    },
+    "lessons": {
+      "state": "ok",
+      "sharing": "off",
+      "scope": "all_projects",
+      "notes": 0,
+      "by_host": {
+        "claude": 0,
+        "codex": 0,
+        "gemini": 0
+      },
+      "any_project": 0,
+      "held": 0,
+      "unresolved_folders": 0,
+      "excluded_projects": 0,
+      "disabled_hosts": []
+    },
+    "trial": {
+      "state": "unavailable",
+      "message": "No trial is running — it starts when lessons sharing is accepted."
+    }
+  }
+}

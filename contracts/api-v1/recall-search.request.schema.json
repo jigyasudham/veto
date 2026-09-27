@@ -1,0 +1,41 @@
+{
+  "$id": "https://github.com/jigyasudham/veto/contracts/api-v1/recall-search.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "project": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "limit": {
+      "default": 10,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "claude",
+        "codex",
+        "gemini",
+        "antigravity"
+      ]
+    },
+    "db": {
+      "type": "string",
+      "maxLength": 1024
+    }
+  },
+  "required": [
+    "project",
+    "query"
+  ],
+  "additionalProperties": false
+}

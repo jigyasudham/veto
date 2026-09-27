@@ -1,0 +1,165 @@
+{
+  "$id": "https://github.com/jigyasudham/veto/contracts/api-v1/recall-search.data.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "capture": {
+      "type": "string",
+      "enum": [
+        "enabled",
+        "disabled",
+        "reconsent_required"
+      ]
+    },
+    "disclaimer": {
+      "type": "string"
+    },
+    "retrieval": {
+      "type": "object",
+      "properties": {
+        "lexical": {
+          "type": "boolean",
+          "const": true
+        },
+        "semantic": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "lexical",
+        "semantic"
+      ],
+      "additionalProperties": false
+    },
+    "archives_searched": {
+      "type": "number"
+    },
+    "elapsed_ms": {
+      "type": "number"
+    },
+    "hits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "archive_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_session_id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "number"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "snippet": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "event_id",
+          "archive_id",
+          "source",
+          "source_session_id",
+          "seq",
+          "kind",
+          "ts",
+          "snippet",
+          "score"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "archive_id": {
+            "type": "string"
+          },
+          "index": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          },
+          "first_ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "user_messages": {
+            "type": "number"
+          },
+          "tool_calls": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "archive_id",
+          "index",
+          "title",
+          "first_ts",
+          "last_ts",
+          "user_messages",
+          "tool_calls"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "capture",
+    "disclaimer",
+    "retrieval",
+    "archives_searched",
+    "elapsed_ms",
+    "hits",
+    "segments"
+  ],
+  "additionalProperties": false
+}

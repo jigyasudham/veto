@@ -548,11 +548,16 @@ async function doctorCommand(fix = false, quick = false) {
     if (!cs.effective) {
       console.log(c.dim('  · transcript capture is off'));
     } else {
-      const { captureFreshness } = await import('./transcripts/freshness.js');
-      const installedSources = (['claude', 'codex', 'gemini'] as const)
+      const { captureFreshness, CAPTURED_SINCE } = await import('./transcripts/freshness.js');
+      const installedSources = (['claude', 'codex', 'gemini', 'antigravity'] as const)
         .filter(id => diagnoses.some(d => d.report.spec.id === id && d.level !== 'absent'));
       for (const f of captureFreshness({ captureSince: cs.consent_at ?? null, sources: installedSources })) {
         if (!f.lastSaveFromHost && !f.newestArchive) continue;
+        if (f.awaitingUpgrade) {
+          const app = f.source[0].toUpperCase() + f.source.slice(1);
+          console.log(c.dim(`  · ${f.source} capture starts once ${app} runs Veto ${CAPTURED_SINCE[f.source]} or later — restart ${app}`));
+          continue;
+        }
         if (f.stalled) {
           console.log(`  ${c.yellow('⚠')} ${f.source} capture looks stalled — last archive ${f.newestArchive ?? 'never'}, yet a save came from ${f.source} at ${f.lastSaveFromHost}`);
           console.log(c.dim(`      ${f.source} may have changed its session file format; see: veto transcripts sources`));
@@ -560,9 +565,6 @@ async function doctorCommand(fix = false, quick = false) {
         } else {
           console.log(`  ${c.green('✓')} ${f.source} capture ${c.dim(`last archive ${f.newestArchive ?? '—'}`)}`);
         }
-      }
-      if (diagnoses.some(d => d.report.spec.id === 'antigravity' && d.level !== 'absent')) {
-        console.log(c.dim('  · Antigravity chats are not captured — Veto reads Claude Code, Codex and Gemini CLI session files only'));
       }
     }
   } catch { console.log(c.dim('  · transcript freshness unavailable')); }
@@ -636,7 +638,7 @@ async function statusCommand() {
 }
 
 async function sessionsCommand() {
-  const { listSessions, countSessions, getDb } = await import('./memory/local.js');
+  const { listSessions, countSessions, getDb, isWriteBlocked, useReadOnlyDb } = await import('./memory/local.js');
 
   const args = process.argv.slice(3);
 
@@ -667,6 +669,13 @@ async function sessionsCommand() {
   }
   if (!Number.isFinite(limit) || limit < 1) { console.error(c.red('  --limit needs a positive number')); process.exit(1); }
   const query = words.join(' ') || undefined;
+  try {
+    getDb();
+  } catch (err) {
+    // Listing only reads; where the database cannot be written (an AI's sandbox), open it read-only.
+    if (!isWriteBlocked(err)) throw err;
+    useReadOnlyDb();
+  }
   const sessions = listSessions(Math.floor(limit), query);
   const total = countSessions();
 
@@ -941,7 +950,7 @@ async function transcriptsCommand() {
   }
 
   if (sub === 'sources') {
-    const { discoverCodexSessions, discoverGeminiSessions, codexSessionsDir, geminiTmpDir } =
+    const { discoverCodexSessions, discoverGeminiSessions, discoverAntigravitySessions, codexSessionsDir, geminiTmpDir, antigravityDir } =
       await import('./transcripts/discover.js');
     const projFlag = args.find(a => a.startsWith('--project='))?.split('=')[1];
     // projectKey, not normalizeProjectDir: Gemini records `d:\veto` for D:\Veto.
@@ -954,6 +963,7 @@ async function transcriptsCommand() {
     for (const [name, find, dir] of [
       ['codex', discoverCodexSessions, codexSessionsDir()],
       ['gemini', discoverGeminiSessions, geminiTmpDir()],
+      ['antigravity', discoverAntigravitySessions, antigravityDir()],
     ] as const) {
       let rows: { sourceSessionId: string; projectDir: string | null; mtimeMs: number }[] = [];
       try { rows = find(); } catch { rows = []; }
@@ -1533,6 +1543,17 @@ switch (command) {
         process.exit(1);
       })
       // The server module this reuses can hold timers open; the answer is already out.
+      .finally(() => process.exit(process.exitCode ?? 0));
+    break;
+
+  case 'api':
+    import('./api/index.js')
+      .then(async ({ runApiCommand }) => { process.exitCode = await runApiCommand(process.argv.slice(3), VERSION); })
+      .catch((err) => {
+        console.error(c.red(`Error: ${err.message}`));
+        process.exit(1);
+      })
+      // Recall's modules can hold timers open; the answer is already out.
       .finally(() => process.exit(process.exitCode ?? 0));
     break;
 

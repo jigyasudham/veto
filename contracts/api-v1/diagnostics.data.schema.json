@@ -1,0 +1,241 @@
+{
+  "$id": "https://github.com/jigyasudham/veto/contracts/api-v1/diagnostics.data.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "backend": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "contract": {
+          "type": "number",
+          "const": 1
+        },
+        "node_version": {
+          "type": "string"
+        },
+        "sqlite_ok": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "version",
+        "contract",
+        "node_version",
+        "sqlite_ok"
+      ],
+      "additionalProperties": false
+    },
+    "database": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "unavailable",
+            "error"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "number"
+        },
+        "expected_schema_version": {
+          "type": "number"
+        },
+        "newer_than_backend": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "checked": {
+      "type": "object",
+      "properties": {
+        "host_cli": {
+          "type": "boolean"
+        },
+        "probe": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "host_cli",
+        "probe"
+      ],
+      "additionalProperties": false
+    },
+    "authentication": {
+      "type": "string",
+      "const": "not_checked"
+    },
+    "hosts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "installed": {
+            "type": "boolean"
+          },
+          "registration": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warn",
+              "fail",
+              "absent"
+            ]
+          },
+          "headline": {
+            "type": "string"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "fix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "probe": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "ok": {
+                    "type": "boolean"
+                  },
+                  "ms": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "server_version": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "tools": {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "ok",
+                  "ms",
+                  "server_version",
+                  "tools"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_start": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "client": {
+                    "type": "string"
+                  },
+                  "at": {
+                    "type": "string"
+                  },
+                  "veto_version": {
+                    "type": "string"
+                  },
+                  "node_version": {
+                    "type": "string"
+                  },
+                  "sqlite_ok": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "client",
+                  "at",
+                  "veto_version",
+                  "node_version",
+                  "sqlite_ok"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "installed",
+          "registration",
+          "source",
+          "level",
+          "headline",
+          "details",
+          "fix",
+          "probe",
+          "last_start"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "backend",
+    "database",
+    "checked",
+    "authentication",
+    "hosts"
+  ],
+  "additionalProperties": false
+}

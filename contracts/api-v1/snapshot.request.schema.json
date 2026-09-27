@@ -1,0 +1,20 @@
+{
+  "$id": "https://github.com/jigyasudham/veto/contracts/api-v1/snapshot.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "project": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "db": {
+      "type": "string",
+      "maxLength": 1024
+    }
+  },
+  "required": [
+    "project"
+  ],
+  "additionalProperties": false
+}

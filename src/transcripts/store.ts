@@ -9,7 +9,7 @@
 import { createRequire } from 'node:module';
 import type { DatabaseSync } from 'node:sqlite';
 import { join, dirname } from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { effectiveTranscriptsDir } from './config.js';
 import { MIGRATIONS, TRANSCRIPTS_SCHEMA_VERSION } from './schema.js';
 
@@ -68,6 +68,23 @@ export function getTranscriptsDb(): DatabaseSync {
   _db = db;
   _openedPath = path;
   return db;
+}
+
+/**
+ * Switch this process to a read-only connection to the index: no pragmas that
+ * write, no migrations. For reads that must leave every file as it was (`veto
+ * api snapshot` and `expand`). False when there is no index yet, which a caller
+ * reports as "nothing archived" rather than creating one.
+ */
+export function useReadOnlyTranscriptsDb(): boolean {
+  const path = transcriptsDbPath();
+  if (path === ':memory:' || !existsSync(path)) return false;
+  resetTranscriptsDb();
+  const db = new (requireDbSync())(path, { readOnly: true });
+  db.exec('PRAGMA busy_timeout = 5000');
+  _db = db;
+  _openedPath = path;
+  return true;
 }
 
 /**

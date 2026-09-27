@@ -109,9 +109,10 @@ export function diagnoseHost(report: HostReport, probe: ProbeResult | null, allS
 }
 
 /** Inspect every host, launch each distinct configured command once, and diagnose. */
-export async function diagnoseHosts(options: { probe?: boolean; latestVersion?: string | null; specs?: HostSpec[] } = {}): Promise<HostDiagnosis[]> {
+export async function diagnoseHosts(options: { probe?: boolean; useCli?: boolean; latestVersion?: string | null; specs?: HostSpec[] } = {}): Promise<HostDiagnosis[]> {
   const specs = options.specs ?? hostSpecs();
-  const reports = specs.map(spec => inspectHost(spec));
+  // useCli: false reads each app's config file only, instead of running its `mcp list`.
+  const reports = specs.map(spec => inspectHost(spec, { useCli: options.useCli }));
   const probes = new Map<string, Promise<ProbeResult>>();
   if (options.probe !== false) {
     for (const r of reports) {

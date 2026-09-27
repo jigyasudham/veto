@@ -253,6 +253,8 @@ veto lessons <sub>               # Opt-in note sharing between your AIs (off by 
                                  #   on|status|list|why|forget|flows|off|exclude|include|alias|recheck
 veto statusline <sub>            # Veto line under the Claude Code prompt, or beside
                                  #   Codex/Gemini — install|status|print|watch|uninstall
+veto api <command>               # JSON for editor extensions — version|snapshot|recall search|
+                                 #   recall expand|diagnostics (see "For editor extensions" below)
 veto hook install                # Install pre-commit secrets scan hook
 veto hook remove                 # Remove the veto pre-commit hook
 veto check                       # Scan staged changes for secrets (used by hook)
@@ -294,6 +296,20 @@ Every ✓ says what it rests on. **Registration** is what the app's own `mcp lis
 **When an AI's app did not load Veto,** Veto's `veto` skill (written by `veto init` into Claude Code, Codex and Antigravity/Gemini skill folders) tells it to say so and use `veto continue` / `veto sessions` / `veto doctor` instead of reading Veto's database by hand.
 
 Versions of `veto init` before this release wrote Veto's guide over `~/.gemini/GEMINI.md` (Gemini's own memory file) and into `~/.codex/AGENTS.override.md`, which Codex reads *instead of* your `~/.codex/AGENTS.md`. Current versions never write either file. `veto doctor` reports any copy left behind, and `veto doctor --fix` (or `veto init`) renames a copy to `*.veto-backup` — only when the file is exactly a guide Veto shipped. A file with anything else in it, such as memories Gemini saved below the guide, is reported and never touched. What an old init overwrote cannot be recovered.
+
+### For editor extensions: `veto api`
+
+An extension that shows Veto's state reads it through `veto api`, not by opening Veto's databases. Every response is one JSON envelope on stdout (`contract`, `command`, `backend_version`, `state`, and `message` / `next_action` whenever `state` is not `ok`). Its shape is versioned apart from Veto. Within contract 1, fields are only added, so ignore fields you do not know.
+
+| Command | Request | Returns |
+|---|---|---|
+| `version` | — | contract version, commands, the CLI's path, whether SQLite loads |
+| `snapshot` | `{ project, db? }` | capture state, archive counts for the project, lesson sharing and counts, the trial's progress. Read-only, and returns counts rather than paths |
+| `recall search` | `{ project, query, limit?, source?, db? }` | masked hits from that project's archived chats, and the matching chats' segments |
+| `recall expand` | `{ project, event_id }` or `{ project, archive_id, segment_index }` | masked text of one turn or segment, only if it belongs to that project |
+| `diagnostics` | `{ checks?: ["host_cli", "probe"], db? }` | `veto doctor`'s per-app checks. The slow ones run only when named |
+
+Send the request as JSON on stdin, and start the CLI with an argument array and no shell: `execFile(process.execPath, [cliPath, 'api', 'recall', 'search', '--stdin'])`, where `cliPath` comes from `veto api version`. On Windows, `veto` is a `.cmd` shim that only a shell can start, and passing a search query through a shell turns it into a command line. A `project` is always required, and a `db` other than the one Veto uses is refused with `db_mismatch` rather than answered from the wrong database. Archives kept after capture is turned off can still be searched, and each response says what state capture is in. `veto transcripts purge` is what deletes them. The JSON Schemas and example responses ship in the package under `contracts/api-v1/`.
 
 ### `veto statusline`
 
@@ -505,14 +521,16 @@ veto transcripts purge <id>      # Delete an archive (also --project=<dir> | --a
 veto transcripts disable         # Stop capturing (existing archives are kept)
 ```
 
-### Works in Claude Code, Codex CLI and Gemini CLI
+### Works in Claude Code, Codex CLI, Gemini CLI and Antigravity CLI
 
-All three are captured and recalled through the same pipeline, each with its own
+All four are captured and recalled through the same pipeline, each with its own
 format adapter, and **Veto works out which one it is running in by itself** — the
 MCP handshake names the host, so nothing depends on the AI reporting it correctly.
 Veto finds each host's session files on disk at save time (Claude Code's statusline,
 when installed, also reports its session live). A project folder matches however a
 host spells it — Gemini records `d:\veto` for the folder a save calls `D:\Veto`.
+Antigravity's conversations are matched to a project through Antigravity's own
+conversation index, which Veto opens read-only.
 `veto transcripts sources` shows exactly what it can see for each, and when a save
 archives nothing, its response says why.
 
@@ -636,6 +654,11 @@ Before Veto gives any AI a note, it has to show that the notes it would give are
 ---
 
 ## Release Notes
+
+### 3.8.0
+- **New: `veto api`, JSON for editor extensions.** The VS Code extension could show Veto's database but not whether transcript capture was on, what the notes trial had found, or anything from past chats, so it had to say "unknown". `veto api snapshot` reports capture, lessons and trial state for a project. It reads without changing anything: it uses read-only connections, runs no migration, harvest or trial pass, and returns counts rather than your folders. `veto api recall search` and `recall expand` give the same search as `veto_session_replay`, with the scope an editor needs checked by Veto. A project is required, an event or segment from another project is refused, text is masked, and raw source is never returned. `veto api diagnostics` returns `veto doctor`'s per-app checks as data. Requests go in as JSON on stdin, so search text never passes through a shell. The contract is versioned apart from Veto, and its JSON Schemas and examples ship under `contracts/api-v1/`. See [For editor extensions](#for-editor-extensions-veto-api).
+- **Bug fix: `veto continue` and `veto sessions` failed inside Codex's sandbox.** When Veto's tools did not load in Codex, the `veto` skill correctly sent Codex to `veto continue`, but Codex's default sandbox lets a command write only inside the workspace, and Veto wrote to its database every time it opened it, even to read. Both commands stopped with `attempt to write a readonly database`. They now fall back to reading the database without writing. `veto continue` still returns the whole saved session and says what it could not do: record who resumed it, and add past-session excerpts. Tested in Codex's own sandbox (`codex sandbox`), where 3.7.1 fails and 3.8.0 restores the session.
+- **Bug fix: Antigravity chats were not captured.** With transcript capture on, a save made in Antigravity archived nothing, because Veto could not read Antigravity's chats. It now reads them from `~/.gemini/antigravity-cli/brain/<conversation>/`, finds each conversation's project in Antigravity's own conversation index (opened read-only), and skips conversations started by another conversation and those from the Antigravity editor. Antigravity chats are searched and expanded like the others, `veto transcripts sources` lists them, and `veto doctor` checks that their capture keeps up. This is covered by the capture consent you already gave, which never named particular apps.
 
 ### 3.7.1
 - **Bug fix: Veto did not know it was running in Antigravity.** Antigravity names itself `antigravity-client` when it starts Veto, which Veto did not recognise. A session saved there was labelled `claude` unless the model said otherwise, a session resumed there was not recorded as resumed by Antigravity, and a model that described itself as `gemini` made transcript capture archive a Gemini CLI chat, which is another app's conversation. Antigravity is now recognised as its own app. Saves and resumes are labelled `antigravity`, capture skips it (Veto cannot read Antigravity's chats), and `antigravity` is an accepted value wherever a tool asks which app you are in. `veto_health` reports the app too.

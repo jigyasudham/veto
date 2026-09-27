@@ -4,7 +4,7 @@ import { diagnoseHost } from '../../src/cli/doctor-hosts.js';
 import type { HostReport } from '../../src/cli/register.js';
 import type { ProbeResult } from '../../src/cli/probe.js';
 import type { HostStart } from '../../src/host-starts.js';
-import { isStalled } from '../../src/transcripts/freshness.js';
+import { capturedSinceFor, isStalled } from '../../src/transcripts/freshness.js';
 
 const spec = (id: string) => hostSpecs('/home/u', 'linux', {}).find(s => s.id === id)!;
 const report = (id: string, over: Partial<HostReport> = {}): HostReport => ({
@@ -73,5 +73,25 @@ describe('isStalled — capture that quietly stopped', () => {
   it('flags a host never archived only for saves made after capture was on', () => {
     expect(isStalled({ ...base, newestArchive: null, lastSave: '2026-08-01T00:00:00Z', newestOnDisk: '2026-09-20T00:00:00Z' })).toBe(false);
     expect(isStalled({ ...base, newestArchive: null, lastSave: '2026-09-15T00:00:00Z', newestOnDisk: '2026-09-20T00:00:00Z' })).toBe(true);
+  });
+});
+
+// Antigravity capture arrived in 3.8.0. Every earlier Antigravity save skipped
+// capture on purpose, so without this each 3.7.1 install saw a false stall.
+describe('capturedSinceFor — saves from before a host could be captured', () => {
+  it('needs no version for the sources capture always had', () => {
+    expect(capturedSinceFor('codex', [])).toBeUndefined();
+  });
+
+  it('is null until the host runs a Veto that captures it', () => {
+    expect(capturedSinceFor('antigravity', [])).toBeNull();
+    expect(capturedSinceFor('antigravity', [start({ client: 'antigravity-client', veto_version: '3.7.1' })])).toBeNull();
+  });
+
+  it('is when the host first ran that version', () => {
+    const s = start({ client: 'antigravity-client', veto_version: '3.10.0', version_since: '2026-09-27T09:00:00Z' });
+    expect(capturedSinceFor('antigravity', [s])).toBe('2026-09-27T09:00:00Z');
+    // A Gemini CLI start says nothing about Antigravity.
+    expect(capturedSinceFor('antigravity', [start({ client: 'gemini-cli', veto_version: '3.8.0' })])).toBeNull();
   });
 });

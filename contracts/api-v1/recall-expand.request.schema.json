@@ -1,0 +1,60 @@
+{
+  "$id": "https://github.com/jigyasudham/veto/contracts/api-v1/recall-expand.request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "db": {
+          "type": "string",
+          "maxLength": 1024
+        }
+      },
+      "required": [
+        "project",
+        "event_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "archive_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "segment_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "db": {
+          "type": "string",
+          "maxLength": 1024
+        }
+      },
+      "required": [
+        "project",
+        "archive_id",
+        "segment_index"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

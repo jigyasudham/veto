@@ -1,0 +1,12 @@
+{
+  "contract": 1,
+  "command": "recall search",
+  "backend_version": "3.8.0",
+  "generated_at": "2026-09-27T00:00:00.000Z",
+  "state": "no_archive",
+  "message": "Nothing is archived for this project yet. A chat is archived when a session is saved from it.",
+  "next_action": "Save a session with veto_session_save in your AI app.",
+  "data": {
+    "capture": "enabled"
+  }
+}

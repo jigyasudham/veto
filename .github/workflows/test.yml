@@ -139,7 +139,8 @@ jobs:
             const pack = Array.isArray(raw) ? raw : Object.values(raw);
             const files = pack[0].files.map(f => f.path.split("\\").join("/"));
             const allowed = new Set(["README.md", "LICENSE", "package.json", "server.json"]);
-            const bad = files.filter(f => !f.startsWith("dist/") && !allowed.has(f));
+            // contracts/api-v1/: the `veto api` JSON Schemas an editor extension validates against.
+            const bad = files.filter(f => !f.startsWith("dist/") && !f.startsWith("contracts/api-v1/") && !allowed.has(f));
             if (bad.length) {
               console.error("Unexpected files in the npm tarball:\n  " + bad.join("\n  "));
               process.exit(1);

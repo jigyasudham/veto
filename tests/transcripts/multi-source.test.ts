@@ -53,10 +53,11 @@ afterAll(() => {
 });
 
 describe('adapter registry', () => {
-  it('recognizes exactly the three supported sources', () => {
+  it('recognizes exactly the four supported sources', () => {
     expect(isTranscriptSource('claude')).toBe(true);
     expect(isTranscriptSource('codex')).toBe(true);
     expect(isTranscriptSource('gemini')).toBe(true);
+    expect(isTranscriptSource('antigravity')).toBe(true);
     expect(isTranscriptSource('cursor')).toBe(false);
   });
 
@@ -64,6 +65,7 @@ describe('adapter registry', () => {
     expect(formatHint('codex')).toBe('codex-rollout-jsonl');
     expect(formatHint('gemini')).toBe('gemini-chat-jsonl');
     expect(formatHint('claude')).toBe('claude-jsonl');
+    expect(formatHint('antigravity')).toBe('antigravity-transcript-jsonl');
   });
 
   it('routes each buffer to the parser that owns its source', () => {
@@ -94,6 +96,7 @@ describe('captureSourceFor — the MCP handshake outranks the self-report', () =
   it('falls back to the declared platform when the host is unrecognized', () => {
     expect(captureSourceFor(null, 'codex')).toBe('codex');
     expect(captureSourceFor(null, 'GEMINI')).toBe('gemini');
+    expect(captureSourceFor(null, 'antigravity')).toBe('antigravity');
   });
 
   // Skipping beats guessing: capturing the wrong CLI's transcript is worse than

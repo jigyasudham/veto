@@ -1,0 +1,31 @@
+{
+  "contract": 1,
+  "command": "version",
+  "backend_version": "3.8.0",
+  "generated_at": "2026-09-27T00:00:00.000Z",
+  "state": "ok",
+  "data": {
+    "contract": 1,
+    "backend_version": "3.8.0",
+    "commands": [
+      "version",
+      "snapshot",
+      "recall search",
+      "recall expand",
+      "diagnostics"
+    ],
+    "request_via": [
+      "stdin",
+      "flags"
+    ],
+    "transcript_sources": [
+      "claude",
+      "codex",
+      "gemini",
+      "antigravity"
+    ],
+    "node_version": "v24.0.0",
+    "sqlite_ok": true,
+    "cli_path": "/usr/local/lib/node_modules/@jigyasudham/veto/dist/cli.js"
+  }
+}

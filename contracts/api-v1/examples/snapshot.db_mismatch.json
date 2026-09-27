@@ -1,0 +1,9 @@
+{
+  "contract": 1,
+  "command": "snapshot",
+  "backend_version": "3.8.0",
+  "generated_at": "2026-09-27T00:00:00.000Z",
+  "state": "db_mismatch",
+  "message": "This Veto uses a different database from the one named in the request, so it did not answer from either.",
+  "next_action": "Point the extension at the database Veto uses, or leave its database path at the default."
+}

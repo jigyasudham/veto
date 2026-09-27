@@ -11,10 +11,10 @@ import {
 } from '../../memory/local.js';
 import { trackTokens } from '../../router/index.js';
 import type { Platform } from '../../router/index.js';
-import { handoff, continueSession } from '../../adapters/index.js';
+import { handoff, continueSession, continueText } from '../../adapters/index.js';
 import { autoSummarizeSession } from '../../council/session-summarizer.js';
 import { autoSave, getActiveProjectDir, setActiveProjectDir } from '../runtime.js';
-import { detectHostPlatform, detectHostApp, hostHasNoTranscript } from '../../host.js';
+import { detectHostApp } from '../../host.js';
 import type { HandlerMap } from '../registry.js';
 
 /**
@@ -45,8 +45,6 @@ export const sessionHandlers: HandlerMap = {
     // The MCP handshake knows which CLI is hosting us; the arg is a self-report.
     // The handshake wins: a model in Codex that declared "claude" labelled the
     // session claude, and veto_continue then said "restored from claude".
-    const hostPlatform = detectHostPlatform(server);
-    // The app label (Antigravity included) — wider than the capture platforms.
     const hostApp = detectHostApp(server);
     const declaredPlatform = args?.platform ? String(args.platform) : undefined;
     const savePlatform = hostApp ?? declaredPlatform ?? 'claude';
@@ -137,10 +135,10 @@ export const sessionHandlers: HandlerMap = {
       transcriptOnSave = await captureOnSave({
         projectDir: sessionProjectDir ?? process.cwd(),
         vetoSessionId: result.session_id,
-        // A host with no transcript Veto can read (Antigravity) captures nothing,
-        // rather than falling back to the declared platform — "gemini" there
-        // would archive a Gemini CLI chat, which is another app's conversation.
-        platform: hostHasNoTranscript(server) ? null : captureSourceFor(hostPlatform, declaredPlatform),
+        // The app, not the capture platform: Antigravity is Gemini-powered, and
+        // falling back to a declared "gemini" there would archive a Gemini CLI
+        // chat, which is another app's conversation.
+        platform: captureSourceFor(hostApp, declaredPlatform),
       });
     } catch { /* transcript capture is best-effort; never breaks save */ }
 
@@ -329,24 +327,7 @@ export const sessionHandlers: HandlerMap = {
     }
     if (result.project_dir) setActiveProjectDir(result.project_dir);
     const history = await resumeHistory(result.session_id, result.project_dir, result.next_action ?? result.task_state ?? result.summary);
-    return {
-      content: [{
-        type: 'text',
-        text: result.message + '\n\n' + JSON.stringify({
-          session_id: result.session_id,
-          saved_by: result.platform,
-          active_client: result.active_client ?? result.platform,
-          summary: result.summary,
-          context: result.context,
-          task_state: result.task_state,
-          next_action: result.next_action,
-          project_dir: result.project_dir,
-          token_count: result.token_count,
-          restored_at: result.restored_at,
-          ...(history ? { past_sessions: history } : {}),
-        }, null, 2),
-      }],
-    };
+    return { content: [{ type: 'text', text: continueText(result, history ? { past_sessions: history } : {}) }] };
   },
 
   veto_session_replay: async ({ args }) => {
