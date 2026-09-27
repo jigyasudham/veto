@@ -5,7 +5,7 @@
 // reproduces the same condition on every OS.
 
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,9 +23,13 @@ const id = local.saveSession({
 local.resetDb();
 chmodSync(DB, 0o444);
 
+// On Linux SQLite creates the -wal/-shm sidecars with the database file's mode,
+// so restoring write access has to cover them too.
+const makeWritable = () => { for (const p of [DB, `${DB}-wal`, `${DB}-shm`]) if (existsSync(p)) chmodSync(p, 0o644); };
+
 afterAll(() => {
   local.resetDb();
-  try { chmodSync(DB, 0o644); } catch { /* ignore */ }
+  try { makeWritable(); } catch { /* ignore */ }
   rmSync(DIR, { recursive: true, force: true });
 });
 
@@ -65,7 +69,7 @@ describe('a database that cannot be written', () => {
 
   it('wrote nothing: the resume is not recorded', () => {
     local.resetDb();
-    chmodSync(DB, 0o644);
+    makeWritable();
     const row = local.getDb().prepare('SELECT active_client, last_resumed_at FROM sessions WHERE id = ?').get(id) as Record<string, unknown>;
     expect(row).toMatchObject({ active_client: null, last_resumed_at: null });
   });
