@@ -102,6 +102,15 @@ describe('veto api version', () => {
   });
 });
 
+describe('maskHome', () => {
+  it('masks the home folder written with either slash, in any case on Windows', async () => {
+    const { maskHome } = await import('../../src/api/common.js');
+    expect(maskHome('at C:\\Users\\Me\\x and c:/users/me/y', 'C:\\Users\\Me', 'win32')).toBe('at ~\\x and ~/y');
+    expect(maskHome('/home/me/p', '/home/me', 'linux')).toBe('~/p');
+    expect(maskHome('/home/Me/p', '/home/me', 'linux')).toBe('/home/Me/p');
+  });
+});
+
 describe('veto api snapshot', () => {
   it('reports the cards\' state for one project', async () => {
     const env = valid(await call(['snapshot'], { project: PROJECT_A }), contract.snapshotDataSchema);

@@ -96,6 +96,10 @@ export async function handleApi(argv: string[], options: { version: string; stdi
     }
 
     let request: unknown = parsed.flags;
+    // A terminal never ends stdin, so --stdin typed by hand would wait forever.
+    if (parsed.stdin && !options.stdinText && process.stdin.isTTY) {
+      return invalid(ctx, '--stdin needs the request piped in; at a terminal, use flags such as --project=… instead');
+    }
     if (parsed.stdin) {
       const text = await (options.stdinText ?? readStdin)();
       try { request = text.trim() ? JSON.parse(text) : {}; } catch { return invalid(ctx, 'stdin is not valid JSON'); }

@@ -19,10 +19,11 @@ export function envelope(ctx: ApiContext, state: ApiState, extra: { message?: st
 }
 
 /** The user's home folder as `~`, so a message or detail never carries it verbatim. */
-export function maskHome(text: string, home = homedir()): string {
+export function maskHome(text: string, home = homedir(), platform: NodeJS.Platform = process.platform): string {
   if (!home) return text;
-  const escaped = home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return text.replace(new RegExp(escaped, process.platform === 'win32' ? 'gi' : 'g'), '~');
+  // Either slash direction matches: Windows paths are written both ways (C:\Users\x, C:/Users/x).
+  const pattern = home.split(/[\\/]+/).map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[\\\\/]+');
+  return text.replace(new RegExp(pattern, platform === 'win32' ? 'gi' : 'g'), '~');
 }
 
 function samePath(a: string, b: string): boolean {
