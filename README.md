@@ -608,12 +608,14 @@ Claude, Codex and Gemini each keep notes in their own memory: Claude's per-proje
 > - **Between AIs:** a note Claude wrote can reach Codex and Gemini, and the other way round. A note given to an AI goes to that AI's company as part of your conversation, like anything else you send it.
 > - **Read-only.** Veto never changes or deletes an AI's memory files. It keeps a copy of each note in its own local database, with email addresses, your home folder and anything that looks like a password or key removed first. Veto itself uploads nothing.
 > - **Off until you say so, and only you can say so.** `veto lessons on` shows this disclosure and asks you to type `yes` in a terminal of your own. When an AI runs the command, it is refused, so no AI can switch sharing on for you. No upgrade ever turns it on, and if what sharing does materially changes, you are asked again.
-> - **A trial for now.** Veto gives none of the notes to any AI yet. To find out whether they would help, it reads the first message of each Codex session in your projects, from Codex's own session files, even when Veto took no part in the session. It works out which notes it *would* have given, and keeps only that choice. It never keeps your message and sends nothing anywhere. This runs for 8 weeks or 20 Codex sessions, whichever comes first; see [The trial](#the-trial). Before it starts giving notes to your AIs, Veto will ask you again.
+> - **A trial for now.** Veto gives none of the notes to any AI yet. Turning sharing on starts nothing else: a separate trial, which you start yourself with `veto lessons trial`, can record which notes Veto *would* have given your Codex sessions, and it asks you first; see [The trial](#the-trial). Before Veto starts giving notes to your AIs, it will ask you again.
 
 Most notes never leave their project. A note stays home if it is about that project, or if it contains a command, a web address, a credential or an instruction to fetch, send or run something; notes about secrets or personal details never leave their project at all. Only a note about *you* (Claude's `user` and `feedback` notes, a CLI's global instructions) or about *this computer* (its shell, console or network) may travel. A shared note arrives marked as information from another AI session, never as an instruction.
 
 ```bash
 veto lessons on                  # Read the disclosure; type yes to accept (your own terminal only)
+veto lessons trial               # The trial: its lists and progress; starts it when you type yes (your own terminal only)
+veto lessons trial ignore [dir]  # Before it starts: record sessions in this project as skipped (also: use [dir], clear)
 veto lessons                     # Status: notes found, how many may travel, anything switched off, and the trial so far
 veto lessons list                # Every note Veto has read, by project (--shared, --held, --scope=, --source=, --json)
 veto lessons why <id>            # One note: who wrote it, when, why it stays or travels, where it may go
@@ -632,20 +634,26 @@ With sharing on, every `veto_session_save` also re-reads each AI's memory and re
 
 ### The trial
 
-Before Veto gives any AI a note, it has to show that the notes it would give are real and useful. The trial is how: it records what Veto *would* have given, and gives nothing.
+Before Veto gives any AI a note, it has to show that the notes it would give are real and useful. The trial is how: it records what Veto *would* have given, and gives nothing. It is opt-in on its own: turning sharing on does not start it.
 
-- **When it runs:** from the moment you accept, for 8 weeks or 20 Codex sessions, whichever comes first.
-- **What counts:** Codex sessions in a project that has notes to choose from. A session's first request is matched against the notes Veto held when that session began, so a note that arrived or changed later does not count. A subagent is not counted twice. Claude Code sessions are not part of this trial: Claude already loads its own project's notes, which leaves almost nothing to add.
+- **Choosing projects (optional):** before you start, `veto lessons trial ignore <dir>` records that project's sessions as skipped, and `veto lessons trial use <dir>` makes only the projects you list count. `veto lessons trial clear` empties both lists. A project is matched by its git history, so every checkout of it counts the same; a folder without git is matched by its path. Anyone, your AI included, can set the lists, and they are kept only in your `~/.veto/config.json`.
+- **Starting:** `veto lessons trial` shows what the trial records and both lists, and starts when you type `yes` in a terminal of your own. An AI cannot start it for you. Once it runs, the lists cannot change.
+- **When it stops:** after 10 weeks, or once 12 notes have been chosen, whichever comes first.
+- **What counts:** Codex sessions in a project that has notes to choose from. A session's first request is matched against the notes Veto held when that session began, so a note that arrived or changed later does not count. A subagent is not counted twice. A session in an ignored project is recorded as skipped: its message is not used, and no note is chosen for it. Claude Code sessions are not part of this trial: Claude already loads its own project's notes, which leaves almost nothing to add.
 - **What you do:** use Codex for real work in a project that has notes, and start each session with a proper description of the task, since that is what notes are matched against.
-- **What you see:** `veto lessons` shows the trial as it goes. It also warns if several sessions in a row yield no request at all, which most likely means Codex changed its format rather than that no note fitted.
+- **What you see:** `veto lessons` and `veto lessons trial` show the trial as it goes. It also warns if several sessions in a row yield no request at all, which most likely means Codex changed its format rather than that no note fitted.
 
   ```
-  Trial:        day 12 of 56 · 7 of 20 Codex sessions counted
-                4 with notes chosen · 3 with none that fitted · 2 in projects with no notes to give
+  Trial:        day 18 of 70 · 4 of 12 notes chosen
+                23 Codex sessions counted · 3 with notes chosen · 20 with none that fitted · 9 skipped
   ```
 
-- **Your record stays yours:** it stays on your machine, and Veto collects nothing from it. This release has no command that judges it, so nothing looks at it but you. If transcript capture is on, finished trial sessions are archived too, including Codex sessions you never saved with Veto, so the evidence behind each choice is kept.
+- **Your record stays yours:** it stays on your machine, and Veto collects nothing from it. `veto lessons off` deletes it. If transcript capture is on, finished trial sessions that count are archived too, including Codex sessions you never saved with Veto, so the evidence behind each choice is kept.
 - **What decides delivery:** the trial on the Veto author's own machine, under rules written and sealed before it recorded anything. When it ends, an independent AI judge scores each chosen note against what its session went on to do, once. If the notes are not clearly real and useful, delivery does not ship. If they are, delivery can be designed, and Veto will ask every user for consent again before any note reaches an AI.
+
+### Upgrading from 3.6.0–3.8.0
+
+Sharing stays on, and you are not asked again. Those versions started a trial automatically when you accepted sharing; 3.9.0 stops it on upgrade and records nothing more unless you start the new trial yourself with `veto lessons trial`. What the old trial recorded is kept, shown as "Trial 1: ended" in `veto lessons`, and `veto lessons off` still deletes it.
 
 ### Upgrading from 3.5.0
 
@@ -654,6 +662,12 @@ Before Veto gives any AI a note, it has to show that the notes it would give are
 ---
 
 ## Release Notes
+
+### 3.9.0
+- **The notes trial is now something you start yourself.** Accepting sharing used to start a trial automatically, on every computer that turned sharing on, although nothing from those trials ever leaves the computer. Now `veto lessons trial` shows what the trial records and starts it only when you type `yes` in your own terminal; an AI cannot start it for you. Before starting, `veto lessons trial ignore <dir>` and `use <dir>` choose which projects count. A session in an ignored project is recorded as skipped and nothing is chosen for it. The trial stops after 10 weeks or 12 chosen notes. See [The trial](#the-trial).
+- **If you turned sharing on in 3.6.0–3.8.0:** sharing stays on, with no new question, because the consent text only lost its promise of an automatic trial. That trial stops on upgrade. Its records are kept, shown as "Trial 1: ended", and `veto lessons off` still deletes them.
+- **Bug fix: `veto doctor` said Codex sessions would be examined on the next save after the trial had already finished.** A finished trial examines nothing, and doctor no longer says it will. It now also warns when trial records exist but no trial is running, which means Veto's config was damaged or edited by hand.
+- **`veto api snapshot`** reports the trial's `trial_id`, `stop_on`, `notes_chosen`, `notes_target` and `skipped` count. These fields are added to contract v1, nothing is removed, and the lists of folders are never returned.
 
 ### 3.8.0
 - **New: `veto api`, JSON for editor extensions.** The VS Code extension could show Veto's database but not whether transcript capture was on, what the notes trial had found, or anything from past chats, so it had to say "unknown". `veto api snapshot` reports capture, lessons and trial state for a project. It reads without changing anything: it uses read-only connections, runs no migration, harvest or trial pass, and returns counts rather than your folders. `veto api recall search` and `recall expand` give the same search as `veto_session_replay`, with the scope an editor needs checked by Veto. A project is required, an event or segment from another project is refused, text is masked, and raw source is never returned. `veto api diagnostics` returns `veto doctor`'s per-app checks as data. Requests go in as JSON on stdin, so search text never passes through a shell. The contract is versioned apart from Veto, and its JSON Schemas and examples ship under `contracts/api-v1/`. See [For editor extensions](#for-editor-extensions-veto-api).
