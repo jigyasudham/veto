@@ -17,7 +17,7 @@
 
 import { closeSync, openSync, readdirSync, readSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { getConfig, isLessonsSharingEnabled, type LessonsConfig } from '../memory/config.js';
+import { getConfig, isLessonsSharingEnabled, type LessonsConfig, type TrialConfig } from '../memory/config.js';
 import { getDb } from '../memory/local.js';
 import { isCaptureEnabled } from '../transcripts/config.js';
 import { codexSessionsDir } from '../transcripts/discover.js';
@@ -25,9 +25,16 @@ import { resolvesOutsideRoot } from './harvest.js';
 import { resolveProjectIdentity } from './identity.js';
 import { selectLessonsForShadow } from './select.js';
 
-/** The trial stops after this many days or this many qualifying sessions, whichever comes first (owner, 2026-09-22). */
-export const TRIAL_DAYS = 56;
-export const TRIAL_QUALIFYING_SESSIONS = 20;
+/**
+ * The trial these rules belong to. A new id means new rules in this file AND a
+ * new sealed pre-registration (council a085b10e); it is never a re-run.
+ */
+export const TRIAL_ID = 2;
+/** The trial disclosure (consent.ts trialDisclosure). Adding to what it promises means bumping this. */
+export const TRIAL_CONSENT_VERSION = 1;
+/** Trial 2 stops after this many days or this many chosen notes, whichever comes first (owner, 2026-10-04). */
+export const TRIAL_DAYS = 70;
+export const TRIAL_NOTE_TARGET = 12;
 
 /** The first real request was found within 73 KB in every real rollout measured; this is a hard read limit. */
 const HEAD_BYTES = 256 * 1024;
@@ -41,9 +48,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type TrialOutcome =
   | 'selected' | 'no_match' | 'no_request' | 'no_notes' | 'no_project' | 'project_excluded'
-  | 'subagent' | 'before_trial';
+  | 'subagent' | 'before_trial' | 'trial_skipped';
 
-/** Outcomes that count toward the timebox: a request was found, in a project with notes to choose from. */
+/** Sessions that counted: a request was found, in a project with notes to choose from. The denominator for yield. */
 const QUALIFYING: TrialOutcome[] = ['selected', 'no_match'];
 
 // Codex writes the context it injects as role=user messages. Measured on 13
@@ -122,10 +129,11 @@ function readHead(path: string): string {
 
 export type TrialWindow = { startedAt: number; endsAt: number };
 
-/** The trial runs from the moment consent to it was accepted, for TRIAL_DAYS. Null while sharing is off. */
+/** The trial runs from when the user started it (`veto lessons trial`), for TRIAL_DAYS. Sharing consent alone never opens it. */
 export function trialWindow(config: LessonsConfig = getConfig().lessons): TrialWindow | null {
-  if (!isLessonsSharingEnabled(config) || !config.consent_at) return null;
-  const startedAt = Date.parse(config.consent_at);
+  const trial = config.trial;
+  if (!isLessonsSharingEnabled(config) || !trial || trial.id !== TRIAL_ID || trial.consent_version !== TRIAL_CONSENT_VERSION || !trial.started_at) return null;
+  const startedAt = Date.parse(trial.started_at);
   if (!Number.isFinite(startedAt)) return null;
   return { startedAt, endsAt: startedAt + TRIAL_DAYS * DAY_MS };
 }
@@ -148,9 +156,45 @@ function rolloutFiles(root: string, from: number, to: number): string[] {
   return out;
 }
 
-const qualifyingCount = (): number =>
-  (getDb().prepare(`SELECT COUNT(*) AS n FROM lesson_trial_sessions WHERE outcome IN (${QUALIFYING.map(() => '?').join(', ')})`)
-    .get(...QUALIFYING) as { n: number }).n;
+// `veto api snapshot` reads a database without migrating it, so a 3.8.0 table
+// may have no trial_id yet; every row in it is trial 1.
+function hasTrialId(): boolean {
+  return (getDb().prepare('PRAGMA table_info(lesson_trial_sessions)').all() as Array<{ name: string }>).some(c => c.name === 'trial_id');
+}
+const thisTrial = (): string => (hasTrialId() ? `trial_id = ${TRIAL_ID}` : '0');
+
+/** Chosen notes so far: each note in each selected session, counted when the session was recorded. */
+export function chosenNoteCount(): number {
+  return (getDb().prepare(`SELECT lesson_ids FROM lesson_trial_sessions WHERE ${thisTrial()} AND outcome = 'selected'`).all() as Array<{ lesson_ids: string }>)
+    .reduce((sum, row) => sum + (JSON.parse(row.lesson_ids) as string[]).length, 0);
+}
+
+/** The notes the judge scores: the first TRIAL_NOTE_TARGET, by session start, then session id, then rank (pre-registration §2). */
+export function scoredTrialNotes(): Array<{ sessionId: string; lessonId: string; rank: number }> {
+  const sessions = getDb().prepare(`SELECT source_session_id, lesson_ids FROM lesson_trial_sessions WHERE ${thisTrial()} AND outcome = 'selected'
+    ORDER BY started_at, source_session_id`).all() as Array<{ source_session_id: string; lesson_ids: string }>;
+  return sessions
+    .flatMap(s => (JSON.parse(s.lesson_ids) as string[]).map((lessonId, rank) => ({ sessionId: s.source_session_id, lessonId, rank })))
+    .slice(0, TRIAL_NOTE_TARGET);
+}
+
+/** Sessions recorded by trial 1, the automatic trial of 3.6.0–3.8.0. */
+export function trialOneSessions(): number {
+  const where = hasTrialId() ? 'trial_id = 1' : '1';
+  return (getDb().prepare(`SELECT COUNT(*) AS n FROM lesson_trial_sessions WHERE ${where} AND outcome NOT IN ('subagent', 'before_trial')`).get() as { n: number }).n;
+}
+
+/** Trial-2 records exist but no trial is running: the config was damaged or edited (council a085b10e, K8). */
+export function trialStalled(): boolean {
+  if (trialWindow()) return false;
+  return (getDb().prepare(`SELECT COUNT(*) AS n FROM lesson_trial_sessions WHERE ${thisTrial()}`).get() as { n: number }).n > 0;
+}
+
+function skippedBy(trial: TrialConfig | null, identity: string): boolean {
+  if (!trial) return false;
+  if (trial.ignore.some(p => p.identity === identity)) return true;
+  return trial.use.length > 0 && !trial.use.some(p => p.identity === identity);
+}
 
 type Recorded = {
   head: RolloutHead; path: string; outcome: TrialOutcome; identity?: string | null; lessonIds?: string[];
@@ -160,11 +204,11 @@ type Recorded = {
 function record(r: Recorded): void {
   getDb().prepare(`INSERT OR IGNORE INTO lesson_trial_sessions
       (source_session_id, source_cli, rollout_path, project_identity, project_label, started_at, outcome, lesson_ids,
-       estimated_tokens, pool_size, changed_since_start, archive_state, logged_at)
-    VALUES (?, 'codex', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+       estimated_tokens, pool_size, changed_since_start, archive_state, logged_at, trial_id)
+    VALUES (?, 'codex', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(r.head.sessionId, r.path, r.identity ?? null, r.head.cwd ? basename(r.head.cwd.replace(/[\\/]+$/, '')) || r.head.cwd : null,
       new Date(r.head.startedAt).toISOString(), r.outcome, JSON.stringify(r.lessonIds ?? []), r.tokens ?? 0, r.pool ?? 0, r.changed ?? 0,
-      r.captureOn ? 'pending' : 'capture_off', new Date().toISOString());
+      r.captureOn ? 'pending' : 'capture_off', new Date().toISOString(), TRIAL_ID);
 }
 
 export type TrialPassReport = { logged: number; waiting: number; notReached: number };
@@ -186,11 +230,13 @@ export function runLessonsTrial(options: { budgetMs?: number; now?: number; capt
   const db = getDb();
   const seen = new Set((db.prepare('SELECT rollout_path FROM lesson_trial_sessions').all() as Array<{ rollout_path: string }>).map(r => r.rollout_path));
   const files = rolloutFiles(root, window.startedAt, Math.min(now, window.endsAt)).filter(path => !seen.has(path));
-  let qualifying = qualifyingCount();
+  const trial = getConfig().lessons.trial;
+  let chosen = chosenNoteCount();
 
   for (let i = 0; i < files.length; i++) {
     if (options.budgetMs !== undefined && Date.now() - began >= options.budgetMs) { report.notReached = files.length - i; break; }
-    if (qualifying >= TRIAL_QUALIFYING_SESSIONS) break;
+    // Checked before every session, so one pass stops at the session that reached the target (council a085b10e, K2).
+    if (chosen >= TRIAL_NOTE_TARGET) break;
     const path = files[i];
     if (resolvesOutsideRoot(path, root)) continue;
     const head = readRolloutHead(readHead(path));
@@ -201,9 +247,12 @@ export function runLessonsTrial(options: { budgetMs?: number; now?: number; capt
     if (head.forked) { record({ ...base, outcome: 'subagent' }); report.logged++; continue; }
     if (head.startedAt < window.startedAt) { record({ ...base, outcome: 'before_trial' }); report.logged++; continue; }
     if (!head.cwd) { record({ ...base, outcome: 'no_project' }); report.logged++; continue; }
+    const identity = resolveProjectIdentity(head.cwd);
+    // An ignored project is recorded and never chosen for; its request is not used (pre-registration §2).
+    if (skippedBy(trial, identity)) { record({ ...base, outcome: 'trial_skipped', identity }); report.logged++; continue; }
     if (!head.request) {
       if (now - head.startedAt < NO_REQUEST_AFTER_MS) { report.waiting++; continue; }
-      record({ ...base, outcome: 'no_request', identity: resolveProjectIdentity(head.cwd) });
+      record({ ...base, outcome: 'no_request', identity });
       report.logged++;
       continue;
     }
@@ -218,7 +267,7 @@ export function runLessonsTrial(options: { budgetMs?: number; now?: number; capt
       tokens: choice.estimatedTokens, pool: choice.poolSize, changed: choice.changedSinceStart,
     });
     report.logged++;
-    if (QUALIFYING.includes(outcome)) qualifying++;
+    if (outcome === 'selected') chosen += choice.lessonIds.length;
   }
   return report;
 }
@@ -234,7 +283,7 @@ export async function archiveTrialSessions(options: { now?: number } = {}): Prom
     if (!trialWindow()) return 0;
     const db = getDb();
     const rows = db.prepare(`SELECT source_session_id, rollout_path, archive_state FROM lesson_trial_sessions
-      WHERE archive_state IN ('pending', 'capture_off') AND outcome NOT IN ('subagent', 'before_trial')`).all() as Array<{ source_session_id: string; rollout_path: string; archive_state: string }>;
+      WHERE ${thisTrial()} AND archive_state IN ('pending', 'capture_off') AND outcome NOT IN ('subagent', 'before_trial', 'trial_skipped')`).all() as Array<{ source_session_id: string; rollout_path: string; archive_state: string }>;
     if (!rows.length) return 0;
     const set = db.prepare('UPDATE lesson_trial_sessions SET archive_state = ? WHERE source_session_id = ?');
     const captureOn = isCaptureEnabled();
@@ -259,11 +308,17 @@ export async function archiveTrialSessions(options: { now?: number } = {}): Prom
 }
 
 export type TrialStatus = {
+  trialId: number;
   startedAt: string;
   endsAt: string;
   complete: boolean;
+  /** Sessions that counted (selected or no_match): the denominator for yield. */
   qualifying: number;
+  /** Where the trial stops, in the unit stopOn names. */
   target: number;
+  stopOn: 'notes';
+  notesChosen: number;
+  skipped: number;
   byOutcome: Partial<Record<TrialOutcome, number>>;
   archived: number;
   /** Several sessions in a row with no request found: probably a Codex format change, not chance. */
@@ -275,20 +330,26 @@ export function trialStatus(now = Date.now()): TrialStatus | null {
   if (!window) return null;
   const db = getDb();
   const byOutcome: Partial<Record<TrialOutcome, number>> = {};
-  for (const row of db.prepare('SELECT outcome, COUNT(*) AS n FROM lesson_trial_sessions GROUP BY outcome').all() as Array<{ outcome: TrialOutcome; n: number }>) {
+  const scope = thisTrial();
+  for (const row of db.prepare(`SELECT outcome, COUNT(*) AS n FROM lesson_trial_sessions WHERE ${scope} GROUP BY outcome`).all() as Array<{ outcome: TrialOutcome; n: number }>) {
     byOutcome[row.outcome] = row.n;
   }
   const qualifying = QUALIFYING.reduce((sum, outcome) => sum + (byOutcome[outcome] ?? 0), 0);
-  const recent = (db.prepare(`SELECT outcome FROM lesson_trial_sessions WHERE outcome NOT IN ('subagent', 'before_trial')
+  const recent = (db.prepare(`SELECT outcome FROM lesson_trial_sessions WHERE ${scope} AND outcome NOT IN ('subagent', 'before_trial', 'trial_skipped')
     ORDER BY started_at DESC LIMIT ?`).all(DRIFT_RUN) as Array<{ outcome: TrialOutcome }>).map(r => r.outcome);
+  const notesChosen = chosenNoteCount();
   return {
+    trialId: TRIAL_ID,
     startedAt: new Date(window.startedAt).toISOString(),
     endsAt: new Date(window.endsAt).toISOString(),
-    complete: qualifying >= TRIAL_QUALIFYING_SESSIONS || now > window.endsAt,
+    complete: notesChosen >= TRIAL_NOTE_TARGET || now > window.endsAt,
     qualifying,
-    target: TRIAL_QUALIFYING_SESSIONS,
+    target: TRIAL_NOTE_TARGET,
+    stopOn: 'notes',
+    notesChosen,
+    skipped: byOutcome.trial_skipped ?? 0,
     byOutcome,
-    archived: (db.prepare("SELECT COUNT(*) AS n FROM lesson_trial_sessions WHERE archive_state = 'archived'").get() as { n: number }).n,
+    archived: (db.prepare(`SELECT COUNT(*) AS n FROM lesson_trial_sessions WHERE ${scope} AND archive_state = 'archived'`).get() as { n: number }).n,
     drift: recent.length === DRIFT_RUN && recent.every(outcome => outcome === 'no_request'),
   };
 }

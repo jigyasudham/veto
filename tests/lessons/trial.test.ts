@@ -2,7 +2,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { enableLessonsSharing, getConfig } from '../../src/memory/config.js';
+import { enableLessonsSharing, getConfig, setConfig } from '../../src/memory/config.js';
 import { getDb, resetDb } from '../../src/memory/local.js';
 import { syncLessonSources } from '../../src/lessons/harvest.js';
 import { harvestOnSave } from '../../src/lessons/on-save.js';
@@ -10,7 +10,8 @@ import { claudeProjectSlug } from '../../src/lessons/source-project.js';
 import { disableLessonSource } from '../../src/lessons/store.js';
 import { runLessonsCommand } from '../../src/cli/lessons.js';
 import {
-  TRIAL_DAYS, TRIAL_QUALIFYING_SESSIONS, archiveTrialSessions, readRolloutHead, runLessonsTrial, trialStatus,
+  TRIAL_CONSENT_VERSION, TRIAL_DAYS, TRIAL_ID, TRIAL_NOTE_TARGET, archiveTrialSessions, chosenNoteCount, readRolloutHead,
+  runLessonsTrial, scoredTrialNotes, trialOneSessions, trialStalled, trialStatus,
 } from '../../src/lessons/trial.js';
 
 const FIXTURES = join(__dirname, 'fixtures', 'claude');
@@ -55,6 +56,12 @@ function rollout(opts: { start: number; cwd?: string | null; messages?: string[]
   return { id, path };
 }
 
+function startTrial(lists: { use?: Array<{ identity: string; label: string }>; ignore?: Array<{ identity: string; label: string }> } = {}): number {
+  const startedAt = new Date().toISOString();
+  setConfig({ lessons: { ...getConfig().lessons, trial: { id: TRIAL_ID, consent_version: TRIAL_CONSENT_VERSION, started_at: startedAt, use: lists.use ?? [], ignore: lists.ignore ?? [] } } });
+  return Date.parse(startedAt);
+}
+
 beforeEach(() => {
   resetDb();
   home = root();
@@ -69,7 +76,7 @@ beforeEach(() => {
   for (const name of ['feedback_quoting_rule.md', 'feedback_server_config.md', 'project_release_gotchas.md']) copyFileSync(join(FIXTURES, name), join(memory, name));
   enableLessonsSharing();
   syncLessonSources(home);
-  trialStart = Date.parse(getConfig().lessons.consent_at!);
+  trialStart = startTrial();
 });
 afterEach(() => {
   delete process.env.VETO_CONFIG_PATH;
@@ -177,11 +184,85 @@ describe('the shadow trial', () => {
     expect(rows()).toHaveLength(2);
   });
 
-  it(`stops at ${TRIAL_QUALIFYING_SESSIONS} counted sessions`, () => {
-    for (let i = 0; i <= TRIAL_QUALIFYING_SESSIONS; i++) rollout({ start: trialStart + (i + 1) * 60_000, messages: ['inline script backslashes'] });
+  it('does not start because sharing was accepted', () => {
+    setConfig({ lessons: { ...getConfig().lessons, trial: null } });
+    rollout({ start: Date.now() + 60_000, messages: ['inline script backslashes'] });
+    expect(runLessonsTrial({ now: Date.now() + 2 * 60_000 })).toEqual({ logged: 0, waiting: 0, notReached: 0 });
+    expect(trialStatus()).toBeNull();
+  });
+
+  it('records a session in an ignored project as skipped, without choosing notes for it', async () => {
+    const { resolveProjectIdentity } = await import('../../src/lessons/identity.js');
+    trialStart = startTrial({ ignore: [{ identity: resolveProjectIdentity(projectA), label: 'alpha' }] });
+    rollout({ start: trialStart + 60_000, messages: ['inline script backslashes'] });
+    rollout({ start: trialStart + 120_000 }); // no request yet: still skipped at once, never waited on
+    runLessonsTrial({ now: trialStart + 3 * 60_000 });
+    expect(outcomes()).toEqual(['trial_skipped', 'trial_skipped']);
+    expect(rows().every(r => r.lesson_ids === '[]' && r.pool_size === 0)).toBe(true);
+    expect(trialStatus()).toMatchObject({ qualifying: 0, notesChosen: 0, skipped: 2 });
+  });
+
+  it('with a use list, skips sessions in any other project', () => {
+    trialStart = startTrial({ use: [{ identity: 'git:0000000000000000', label: 'other' }] });
+    rollout({ start: trialStart + 60_000, messages: ['inline script backslashes'] });
     runLessonsTrial();
-    expect(rows()).toHaveLength(TRIAL_QUALIFYING_SESSIONS);
-    expect(trialStatus()).toMatchObject({ qualifying: TRIAL_QUALIFYING_SESSIONS, complete: true });
+    expect(outcomes()).toEqual(['trial_skipped']);
+  });
+
+  it('skips a session started in a subfolder of an ignored git repository', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const git = (...args: string[]) => execFileSync('git', ['-C', projectA, ...args], { stdio: 'ignore' });
+    git('init', '-q');
+    git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'root');
+    const { resolveProjectIdentity } = await import('../../src/lessons/identity.js');
+    const ignored = resolveProjectIdentity(projectA);
+    expect(ignored).toMatch(/^git:/);
+    const sub = join(projectA, 'src');
+    mkdirSync(sub, { recursive: true });
+    trialStart = startTrial({ ignore: [{ identity: ignored, label: 'alpha' }] });
+    rollout({ start: trialStart + 60_000, cwd: sub, messages: ['inline script backslashes'] });
+    runLessonsTrial();
+    expect(outcomes()).toEqual(['trial_skipped']);
+  });
+
+  it(`stops after the session that brings the chosen notes to ${TRIAL_NOTE_TARGET}`, () => {
+    for (let i = 0; i < TRIAL_NOTE_TARGET + 3; i++) rollout({ start: trialStart + (i + 1) * 60_000, messages: ['inline script backslashes'] });
+    runLessonsTrial();
+    expect(chosenNoteCount()).toBe(TRIAL_NOTE_TARGET);
+    expect(rows()).toHaveLength(TRIAL_NOTE_TARGET);
+    expect(trialStatus()).toMatchObject({ notesChosen: TRIAL_NOTE_TARGET, target: TRIAL_NOTE_TARGET, stopOn: 'notes', complete: true });
+    expect(runLessonsTrial()).toMatchObject({ logged: 0 });
+  });
+
+  it('scores only the first 12 notes: by session start, then session id, then rank', () => {
+    const db = getDb();
+    const insert = db.prepare(`INSERT INTO lesson_trial_sessions (source_session_id, source_cli, rollout_path, started_at, outcome, lesson_ids,
+      estimated_tokens, pool_size, changed_since_start, archive_state, logged_at, trial_id) VALUES (?, 'codex', ?, ?, ?, ?, 0, 9, 0, 'pending', ?, ?)`);
+    const at = (m: number) => new Date(trialStart + m * 60_000).toISOString();
+    insert.run('b', 'pb', at(1), 'selected', JSON.stringify(['b1', 'b2', 'b3', 'b4', 'b5']), at(1), TRIAL_ID);
+    insert.run('a', 'pa', at(1), 'selected', JSON.stringify(['a1', 'a2', 'a3', 'a4', 'a5']), at(1), TRIAL_ID);
+    insert.run('c', 'pc', at(2), 'selected', JSON.stringify(['c1', 'c2', 'c3']), at(2), TRIAL_ID);
+    insert.run('old', 'po', at(0), 'selected', JSON.stringify(['o1']), at(0), 1);
+    expect(scoredTrialNotes().map(n => n.lessonId)).toEqual(['a1', 'a2', 'a3', 'a4', 'a5', 'b1', 'b2', 'b3', 'b4', 'b5', 'c1', 'c2']);
+    expect(scoredTrialNotes()[11]).toEqual({ sessionId: 'c', lessonId: 'c2', rank: 1 });
+  });
+
+  it("never counts trial 1's rows, and reports them apart", () => {
+    const long = new Date(trialStart - 9e8).toISOString();
+    getDb().prepare(`INSERT INTO lesson_trial_sessions (source_session_id, source_cli, rollout_path, started_at, outcome, lesson_ids,
+      estimated_tokens, pool_size, changed_since_start, archive_state, logged_at, trial_id) VALUES ('t1', 'codex', 'p1', ?, 'selected', '["x"]', 0, 3, 0, 'pending', ?, 1)`)
+      .run(long, long);
+    expect(trialStatus()).toMatchObject({ qualifying: 0, notesChosen: 0 });
+    expect(trialOneSessions()).toBe(1);
+  });
+
+  it('notices trial-2 records with no trial running (a damaged config)', () => {
+    rollout({ start: trialStart + 60_000, messages: ['inline script backslashes'] });
+    runLessonsTrial();
+    expect(trialStalled()).toBe(false);
+    writeFileSync(process.env.VETO_CONFIG_PATH!, '{ not json');
+    expect(trialStalled()).toBe(true);
+    expect(() => runLessonsTrial()).not.toThrow();
   });
 
   it(`stops at ${TRIAL_DAYS} days, even for a session in a folder it still reads`, () => {
@@ -235,7 +316,7 @@ describe('what the trial shows', () => {
     const lines: string[] = [];
     runLessonsCommand(['status'], { out: (line = '') => lines.push(line), color: false, home, cwd: projectA });
     const text = lines.join('\n');
-    expect(text).toContain(`Trial:        day 1 of ${TRIAL_DAYS} · 2 of ${TRIAL_QUALIFYING_SESSIONS} Codex sessions counted`);
+    expect(text).toContain(`Trial:        day 1 of ${TRIAL_DAYS} · 1 of ${TRIAL_NOTE_TARGET} notes chosen`);
     expect(text).toContain('1 with notes chosen · 1 with none that fitted');
   });
 
@@ -289,5 +370,31 @@ describe("keeping the judge's evidence", () => {
       resetTranscriptsDb();
       delete process.env.VETO_TRANSCRIPTS_DIR;
     }
+  });
+});
+
+describe('a database from before trial 2', () => {
+  const recreateOldTable = () => {
+    const db = getDb();
+    db.exec('DROP TABLE lesson_trial_sessions');
+    db.exec(`CREATE TABLE lesson_trial_sessions (source_session_id TEXT PRIMARY KEY, source_cli TEXT NOT NULL, rollout_path TEXT NOT NULL,
+      project_identity TEXT, project_label TEXT, started_at TEXT NOT NULL, outcome TEXT NOT NULL, lesson_ids TEXT NOT NULL,
+      estimated_tokens INTEGER NOT NULL, pool_size INTEGER NOT NULL, changed_since_start INTEGER NOT NULL, archive_state TEXT NOT NULL, logged_at TEXT NOT NULL)`);
+    db.exec(`INSERT INTO lesson_trial_sessions VALUES ('s', 'codex', 'p', NULL, NULL, '2026-09-25T00:00:00.000Z', 'selected', '["n"]', 0, 1, 0, 'archived', '2026-09-25T00:00:00.000Z')`);
+    return db;
+  };
+
+  it('reads an un-migrated table as all trial 1, without throwing', () => {
+    recreateOldTable();
+    expect(trialStatus()).toMatchObject({ notesChosen: 0, qualifying: 0 });
+    expect(trialOneSessions()).toBe(1);
+  });
+
+  it('the migration marks existing rows as trial 1 and can run twice', async () => {
+    const { migrateLessonTrialId } = await import('../../src/memory/local.js');
+    const db = recreateOldTable();
+    migrateLessonTrialId(db);
+    migrateLessonTrialId(db);
+    expect({ ...(db.prepare('SELECT trial_id FROM lesson_trial_sessions').get() as object) }).toEqual({ trial_id: 1 });
   });
 });
