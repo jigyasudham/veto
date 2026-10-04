@@ -398,3 +398,32 @@ describe('a database from before trial 2', () => {
     expect({ ...(db.prepare('SELECT trial_id FROM lesson_trial_sessions').get() as object) }).toEqual({ trial_id: 1 });
   });
 });
+
+describe('what veto doctor says about the trial', () => {
+  it('counts notes, and stops promising to examine sessions once the trial is finished', async () => {
+    const { trialDoctorLines } = await import('../../src/cli/lessons.js');
+    rollout({ start: trialStart + 60_000, messages: ['inline script backslashes'] });
+    rollout({ start: trialStart + 120_000, messages: ['kubernetes ingress certificate'] }); // left unexamined below
+    runLessonsTrial({ budgetMs: 0 });
+    const running = trialDoctorLines(false);
+    expect(running.lines.join('\n')).toContain(`lessons trial ${TRIAL_ID}: 0/${TRIAL_NOTE_TARGET} notes chosen`);
+    expect(running.lines.join('\n')).toContain('the trial examines them on the next veto_session_save');
+    expect(running.issues).toBe(0);
+
+    const long = new Date(Date.now() - (TRIAL_DAYS + 1) * 24 * HOUR).toISOString();
+    setConfig({ lessons: { ...getConfig().lessons, trial: { ...getConfig().lessons.trial!, started_at: long } } });
+    const finished = trialDoctorLines(false).lines.join('\n');
+    expect(finished).toContain('complete');
+    expect(finished).not.toContain('examines them on the next veto_session_save');
+  });
+
+  it('warns when trial-2 records exist but no trial is running', async () => {
+    const { trialDoctorLines } = await import('../../src/cli/lessons.js');
+    rollout({ start: trialStart + 60_000, messages: ['inline script backslashes'] });
+    runLessonsTrial();
+    writeFileSync(process.env.VETO_CONFIG_PATH!, '{ not json');
+    const r = trialDoctorLines(false);
+    expect(r.lines.join('\n')).toContain('lessons trial 2 has records but is not running');
+    expect(r.issues).toBe(1);
+  });
+});

@@ -12,7 +12,9 @@ import {
   removeProjectAlias, setProjectAlias, turnLessonsOff, unresolvedFolders, type FindLesson,
 } from '../lessons/manage.js';
 import type { LessonRow } from '../lessons/store.js';
-import { TRIAL_DAYS, TRIAL_NOTE_TARGET, trialOneSessions, trialStatus, type TrialStatus } from '../lessons/trial.js';
+import {
+  TRIAL_DAYS, TRIAL_ID, TRIAL_NOTE_TARGET, trialBacklog, trialOneSessions, trialStalled, trialStatus, type TrialStatus,
+} from '../lessons/trial.js';
 import { addTrialProject, clearTrialLists, startTrial, trialPhase, trialSetup, type TrialRefusal } from '../lessons/trial-setup.js';
 import { isLessonsSharingEnabled } from '../memory/config.js';
 
@@ -476,6 +478,34 @@ async function trial(args: string[], cwd: string, out: Out, c: Colors, io: Conse
   out(c.green('  ✓ The trial has started.') + c.dim(` It ends ${r.endsAt.slice(0, 10)}, or sooner at ${TRIAL_NOTE_TARGET} chosen notes. Progress: veto lessons trial`));
   out('');
   return 0;
+}
+
+/**
+ * The trial's lines in `veto doctor`, and how many issues they raise. A finished
+ * trial examines nothing more, so it never promises to; trial-2 records with no
+ * trial running mean the config was damaged or edited (council a085b10e, K8).
+ */
+export function trialDoctorLines(color = true): { lines: string[]; issues: number } {
+  const c = color ? COLORS : PLAIN;
+  const lines: string[] = [];
+  let issues = 0;
+  const ts = trialStatus();
+  if (ts) {
+    const mark = ts.drift ? c.red('✗') : c.green('✓');
+    lines.push(`  ${mark} lessons trial ${ts.trialId}: ${ts.notesChosen}/${ts.target} notes chosen ${c.dim(`· ${ts.skipped} skipped · ends ${ts.endsAt.slice(0, 10)}${ts.complete ? ' · complete' : ''}`)}`);
+    if (ts.drift) {
+      lines.push(c.dim('      the last sessions in a row had no request Veto could read — Codex has likely changed its rollout format'));
+      issues++;
+    }
+    const backlog = ts.complete ? null : trialBacklog();
+    if (backlog && backlog.unexamined > 0) {
+      lines.push(c.dim(`      ${backlog.unexamined} Codex session(s) not examined yet (oldest ${backlog.oldestUnexamined?.slice(0, 10)}) — the trial examines them on the next veto_session_save`));
+    }
+  } else if (trialStalled()) {
+    lines.push(`  ${c.yellow('⚠')} lessons trial ${TRIAL_ID} has records but is not running — Veto's config may be damaged or sharing turned off by hand; see: veto lessons trial`);
+    issues++;
+  }
+  return { lines, issues };
 }
 
 /** Runs one `veto lessons` subcommand and returns its exit code (a promise only for `on` and `trial`, which may ask a question). */
