@@ -411,7 +411,11 @@ async function trial(args: string[], cwd: string, out: Out, c: Colors, io: Conse
   const [action, dir] = args;
   const refusal = (r: TrialRefusal): number => {
     if (r.reason === 'missing_folder') out(c.red(`  No such folder: ${dir ?? cwd}. Nothing changed.`));
-    else if (r.reason === 'running') out(c.yellow(`  The trial is running until ${r.until?.slice(0, 10)} or ${TRIAL_NOTE_TARGET} notes; the lists are fixed until then.`));
+    else if (r.reason === 'running') {
+      out(c.yellow(r.until
+        ? `  The trial is running until ${r.until.slice(0, 10)} or ${TRIAL_NOTE_TARGET} notes; the lists are fixed until then.`
+        : '  The trial has started, so the lists are fixed until it ends.'));
+    }
     else if (r.reason === 'finished') out(c.yellow('  The trial has finished. Its record is kept; veto lessons off deletes it.'));
     else if (r.reason === 'sharing_off') out(c.yellow('  The trial needs sharing on. Turn it on first, in a terminal of your own: veto lessons on'));
     else out(c.yellow('  The lists changed while this was showing them. Nothing started; run veto lessons trial again.'));

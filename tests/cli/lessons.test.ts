@@ -364,6 +364,15 @@ describe('veto lessons trial', () => {
     expect(refused.text).toMatch(/The trial is running until \d{4}-\d{2}-\d{2} or 12 notes; the lists are fixed until then\./);
   });
 
+  it('refuses list changes sensibly when a started trial has no end date to give (sharing turned off by hand)', async () => {
+    await trial([], { answer: 'yes' });
+    setConfig({ lessons: { ...getConfig().lessons, enabled: false } });
+    const refused = await trial(['ignore', projectA]);
+    expect(refused.code).toBe(1);
+    expect(refused.text).not.toContain('undefined');
+    expect(refused.text).toContain('The trial has started, so the lists are fixed until it ends.');
+  });
+
   it('needs sharing on', async () => {
     setConfig({ lessons: { ...getConfig().lessons, enabled: false } });
     const r = await trial([], { answer: 'yes' });
