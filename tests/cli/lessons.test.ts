@@ -85,6 +85,25 @@ describe('veto lessons without consent', () => {
   });
 });
 
+describe('the trial disclosure', () => {
+  it('says what it reads and keeps, both lists, the limits, and how to stop', async () => {
+    const { trialDisclosure } = await import('../../src/lessons/consent.js');
+    const flat = trialDisclosure({ id: 2, consent_version: 0, started_at: null, use: [], ignore: [{ identity: 'git:1', label: 'repo-a' }] }).replace(/\s+/g, ' ');
+    expect(flat).toContain('For 10 weeks, or until 12 notes have been chosen, whichever comes first');
+    expect(flat).toContain("Veto reads that session's first message from Codex's own session files, even when Veto took no part in the session.");
+    expect(flat).toContain('It never keeps your message.');
+    expect(flat).toContain('It does not read the message to choose notes.');
+    expect(flat).toContain('It gives no note to any AI, and sends nothing anywhere.');
+    expect(flat).toContain('Projects that count: every project except those ignored');
+    expect(flat).toContain('Ignored: repo-a');
+    expect(flat).toContain('These lists cannot change once the trial starts.');
+    expect(flat).toContain('`veto lessons off` stops the trial and deletes its record.');
+    const only = trialDisclosure({ id: 2, consent_version: 0, started_at: null, use: [{ identity: 'git:2', label: 'repo-b' }], ignore: [] }).replace(/\s+/g, ' ');
+    expect(only).toContain('Projects that count: only repo-b');
+    expect(only).toContain('Ignored: none');
+  });
+});
+
 describe('veto lessons on (consent v3)', () => {
   it('shows a disclosure that names both flows, the trial, and the controls', async () => {
     const { text } = await on();
@@ -92,19 +111,15 @@ describe('veto lessons on (consent v3)', () => {
     expect(text).toContain('BETWEEN AIs');
     expect(text).toContain("goes to that AI's company as part of your");
     expect(text).toContain('gives none of them to any AI yet');
-    // The trial must claim exactly what it does (councils 2ef0124f, 187593c4):
-    // it reads each Codex session's first message, even one Veto took no part
-    // in, keeps only the choice, never the message, and `off` deletes it. The
-    // v2 promise that it worked this out for nothing is no longer true, so it
-    // must be gone.
+    // Since 3.9.0 sharing starts no trial (council a085b10e): the paragraph
+    // only says a separate trial exists and asks for itself. Sharing consent
+    // stays at v3, because this only removes something it promised.
     const flat = text.replace(/\s+/g, ' ');
-    expect(flat).toContain("Veto reads that session's first message from Codex's own session files, even when Veto took no part in the session.");
-    expect(flat).toContain('keeps only that choice on this computer: which notes, which project, which AI, and when. It never keeps your message.');
-    expect(flat).toContain('for 8 weeks or 20 Codex sessions, whichever comes first');
-    expect(flat).toContain('`veto lessons off` deletes all of it.');
-    expect(flat).toContain('it tells you before it shows any of this to an AI.');
+    expect(flat).toContain('A separate trial, which you start yourself with `veto lessons trial`, can record which notes Veto would have given your Codex sessions.');
+    expect(flat).not.toContain('8 weeks');
+    expect(flat).not.toContain('20 Codex sessions');
     expect(flat).not.toContain('works out nothing');
-    expect(text).toContain('Before it starts giving notes to your AIs, Veto will ask you again.');
+    expect(flat).toContain('Before Veto starts giving notes to your AIs, it will ask you again.');
     for (const command of ['veto lessons list', 'veto lessons forget <id>', 'veto lessons exclude', 'veto lessons off']) expect(text).toContain(command);
   });
 

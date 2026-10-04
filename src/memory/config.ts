@@ -52,9 +52,9 @@ export type LessonsConfig = {
   trial: TrialConfig | null;
 };
 
-// Consent v3 covers the trial: reading notes, and recording which of them each
-// Codex session would have been given (owner, 2026-09-22). v2 had promised that
-// Veto worked out nothing about that, so the trial could not run under it. The
+// Consent v3 (owner, 2026-09-22). Since 3.9.0 it covers reading and keeping
+// notes only; the trial asks for itself (trial.ts TRIAL_CONSENT_VERSION,
+// council a085b10e), and removing it from this text needed no new version. The
 // disclosure still PROMISES to ask again before any note is given to an AI
 // (owner, 2026-09-20), so the release that starts delivery must bump this to 4,
 // which pauses sharing until each user accepts the new disclosure.

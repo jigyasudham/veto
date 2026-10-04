@@ -4,9 +4,10 @@
 // in a terminal of their own: a command an AI runs is refused, so no AI can
 // turn sharing on for them (owner decision, 2026-09-19).
 
-import { enableLessonsSharing } from '../memory/config.js';
+import { enableLessonsSharing, type TrialConfig, type TrialProject } from '../memory/config.js';
 import { syncLessonSources, type LessonSyncReport } from './harvest.js';
 import { lessonFlows, lessonsStatus, unresolvedFolders } from './manage.js';
+import { TRIAL_DAYS, TRIAL_NOTE_TARGET } from './trial.js';
 
 /**
  * What each AI CLI sets in the environment of the commands it runs.
@@ -23,9 +24,10 @@ export function detectAiSession(env: NodeJS.ProcessEnv = process.env): string | 
 }
 
 /**
- * The disclosure shown before the user accepts. Changing what it promises
+ * The disclosure shown before the user accepts. Adding to what it promises
  * means bumping LESSONS_CONSENT_VERSION, and so does starting delivery: this
- * text promises to ask again first.
+ * text promises to ask again first. Taking something away does not: everyone
+ * who accepted agreed to more (3.9.0 moved the trial out, council a085b10e).
  */
 export function lessonsDisclosure(): string {
   return [
@@ -58,21 +60,11 @@ export function lessonsDisclosure(): string {
     '    as an instruction to follow.',
     '',
     'For now this is a trial. Veto reads the notes and keeps its own masked',
-    'copy of them on this computer, and gives none of them to any AI yet. To',
-    'find out whether they would help, for 8 weeks or 20 Codex sessions,',
-    'whichever comes first, it also does this:',
-    '  • When you start a Codex session in one of your projects, Veto reads',
-    '    that session\'s first message from Codex\'s own session files, even',
-    '    when Veto took no part in the session.',
-    '  • It works out which notes it would have given that session, and keeps',
-    '    only that choice on this computer: which notes, which project, which',
-    '    AI, and when. It never keeps your message.',
-    '  • If transcript capture is on, it also archives those Codex sessions,',
-    '    so each choice can later be checked against what the session did.',
-    '    Checking is a separate step you start yourself, and it tells you',
-    '    before it shows any of this to an AI.',
-    '  • It sends nothing anywhere. `veto lessons off` deletes all of it.',
-    'Before it starts giving notes to your AIs, Veto will ask you again.',
+    'copy of them on this computer, and gives none of them to any AI yet. A',
+    'separate trial, which you start yourself with `veto lessons trial`, can',
+    'record which notes Veto would have given your Codex sessions. It tells you',
+    'what it records before it starts. Before Veto starts giving notes to your',
+    'AIs, it will ask you again.',
     '',
     'You stay in control:',
     '  veto lessons list          every note Veto has read',
@@ -80,6 +72,35 @@ export function lessonsDisclosure(): string {
     '  veto lessons forget <id>   stop one note for good',
     '  veto lessons exclude       keep the current project out entirely',
     '  veto lessons off           turn sharing off and delete everything Veto copied',
+  ].join('\n');
+}
+
+const names = (list: TrialProject[]) => list.map(p => p.label).join(', ');
+
+/** The trial's own disclosure (TRIAL_CONSENT_VERSION). It names both lists, which cannot change once accepted. */
+export function trialDisclosure(trial: TrialConfig): string {
+  return [
+    'What you are starting: the Veto Lessons trial',
+    '',
+    `For ${TRIAL_DAYS / 7} weeks, or until ${TRIAL_NOTE_TARGET} notes have been chosen, whichever comes first:`,
+    '  • When you start a Codex session in a project that counts, Veto reads',
+    '    that session\'s first message from Codex\'s own session files, even',
+    '    when Veto took no part in the session.',
+    '  • It works out which notes it would have given that session, and keeps',
+    '    only that choice on this computer: which notes, which project, which',
+    '    AI, and when. It never keeps your message.',
+    '  • In a project you ignore, it records only that a session happened and',
+    '    was skipped. It does not read the message to choose notes.',
+    '  • If transcript capture is on, it also archives the sessions that count,',
+    '    so each choice can later be checked against what the session did.',
+    '    Checking is a separate step you start yourself, and it tells you',
+    '    before it shows any of this to an AI.',
+    '  • It gives no note to any AI, and sends nothing anywhere.',
+    '',
+    `Projects that count: ${trial.use.length ? `only ${names(trial.use)}` : 'every project except those ignored'}`,
+    `Ignored: ${trial.ignore.length ? names(trial.ignore) : 'none'}`,
+    'These lists cannot change once the trial starts.',
+    '`veto lessons off` stops the trial and deletes its record.',
   ].join('\n');
 }
 
