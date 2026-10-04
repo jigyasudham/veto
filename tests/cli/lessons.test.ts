@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runLessonsCommand, type ConsentIo } from '../../src/cli/lessons.js';
 import { detectAiSession } from '../../src/lessons/consent.js';
-import { enableLessonsSharing, getConfig, isLessonsSharingEnabled } from '../../src/memory/config.js';
+import { enableLessonsSharing, getConfig, isLessonsSharingEnabled, setConfig } from '../../src/memory/config.js';
+import { TRIAL_DAYS, TRIAL_NOTE_TARGET } from '../../src/lessons/trial.js';
 import { getDb, resetDb } from '../../src/memory/local.js';
 import { claudeProjectSlug } from '../../src/lessons/source-project.js';
 import type { LessonRow } from '../../src/lessons/store.js';
@@ -85,6 +86,25 @@ describe('veto lessons without consent', () => {
   });
 });
 
+describe('the trial disclosure', () => {
+  it('says what it reads and keeps, both lists, the limits, and how to stop', async () => {
+    const { trialDisclosure } = await import('../../src/lessons/consent.js');
+    const flat = trialDisclosure({ id: 2, consent_version: 0, started_at: null, use: [], ignore: [{ identity: 'git:1', label: 'repo-a' }] }).replace(/\s+/g, ' ');
+    expect(flat).toContain('For 10 weeks, or until 12 notes have been chosen, whichever comes first');
+    expect(flat).toContain("Veto reads that session's first message from Codex's own session files, even when Veto took no part in the session.");
+    expect(flat).toContain('It never keeps your message.');
+    expect(flat).toContain('It does not read the message to choose notes.');
+    expect(flat).toContain('It gives no note to any AI, and sends nothing anywhere.');
+    expect(flat).toContain('Projects that count: every project except those ignored');
+    expect(flat).toContain('Ignored: repo-a');
+    expect(flat).toContain('These lists cannot change once the trial starts.');
+    expect(flat).toContain('`veto lessons off` stops the trial and deletes its record.');
+    const only = trialDisclosure({ id: 2, consent_version: 0, started_at: null, use: [{ identity: 'git:2', label: 'repo-b' }], ignore: [] }).replace(/\s+/g, ' ');
+    expect(only).toContain('Projects that count: only repo-b');
+    expect(only).toContain('Ignored: none');
+  });
+});
+
 describe('veto lessons on (consent v3)', () => {
   it('shows a disclosure that names both flows, the trial, and the controls', async () => {
     const { text } = await on();
@@ -92,19 +112,15 @@ describe('veto lessons on (consent v3)', () => {
     expect(text).toContain('BETWEEN AIs');
     expect(text).toContain("goes to that AI's company as part of your");
     expect(text).toContain('gives none of them to any AI yet');
-    // The trial must claim exactly what it does (councils 2ef0124f, 187593c4):
-    // it reads each Codex session's first message, even one Veto took no part
-    // in, keeps only the choice, never the message, and `off` deletes it. The
-    // v2 promise that it worked this out for nothing is no longer true, so it
-    // must be gone.
+    // Since 3.9.0 sharing starts no trial (council a085b10e): the paragraph
+    // only says a separate trial exists and asks for itself. Sharing consent
+    // stays at v3, because this only removes something it promised.
     const flat = text.replace(/\s+/g, ' ');
-    expect(flat).toContain("Veto reads that session's first message from Codex's own session files, even when Veto took no part in the session.");
-    expect(flat).toContain('keeps only that choice on this computer: which notes, which project, which AI, and when. It never keeps your message.');
-    expect(flat).toContain('for 8 weeks or 20 Codex sessions, whichever comes first');
-    expect(flat).toContain('`veto lessons off` deletes all of it.');
-    expect(flat).toContain('it tells you before it shows any of this to an AI.');
+    expect(flat).toContain('A separate trial, which you start yourself with `veto lessons trial`, can record which notes Veto would have given your Codex sessions.');
+    expect(flat).not.toContain('8 weeks');
+    expect(flat).not.toContain('20 Codex sessions');
     expect(flat).not.toContain('works out nothing');
-    expect(text).toContain('Before it starts giving notes to your AIs, Veto will ask you again.');
+    expect(flat).toContain('Before Veto starts giving notes to your AIs, it will ask you again.');
     for (const command of ['veto lessons list', 'veto lessons forget <id>', 'veto lessons exclude', 'veto lessons off']) expect(text).toContain(command);
   });
 
@@ -289,4 +305,82 @@ it('an unknown subcommand prints usage and fails', () => {
   expect(code).toBe(1);
   expect(text).toContain('Unknown lessons subcommand: share');
   expect(text).toContain('veto lessons why <id>');
+});
+
+describe('veto lessons trial', () => {
+  const trial = async (args: string[], io: Partial<ConsentIo> & { answer?: string } = {}) => {
+    const lines: string[] = [];
+    const asked: string[] = [];
+    const code = await runLessonsCommand(['trial', ...args], {
+      out: (line = '') => lines.push(line), color: false, home, cwd: projectA,
+      io: { env: io.env ?? {}, interactive: io.interactive ?? true, ask: async question => { asked.push(question); return io.answer ?? ''; } },
+    });
+    return { code, text: lines.join('\n'), asked };
+  };
+  beforeEach(() => { enableLessonsSharing(); });
+
+  it('ignore prints the label and identity kind, and warns that a path identity moves with the folder', async () => {
+    const r = await trial(['ignore', projectA]);
+    expect(r.code).toBe(0);
+    expect(r.text).toContain('Ignored for the trial: alpha');
+    expect(r.text).toContain('identified by its folder path, so moving the folder changes it');
+  });
+
+  it('refuses a folder that does not exist', async () => {
+    const r = await trial(['use', join(home, 'nope')]);
+    expect(r.code).toBe(1);
+    expect(r.text).toContain('No such folder');
+  });
+
+  it('shows the disclosure with both lists, and starts only on yes in a terminal', async () => {
+    await trial(['ignore', projectA]);
+    expect((await trial([], { answer: 'no' })).text).toContain('Nothing changed. The trial has not started.');
+    const r = await trial([], { answer: 'yes' });
+    expect(r.text).toContain('Ignored: alpha');
+    expect(r.asked).toEqual(['  Type yes to start the trial: ']);
+    expect(r.text).toContain('✓ The trial has started.');
+    expect(getConfig().lessons.trial?.started_at).toBeTruthy();
+  });
+
+  it('refuses to start when an AI runs it, without asking', async () => {
+    const r = await trial([], { env: { CODEX_SANDBOX: 'seatbelt' }, answer: 'yes' });
+    expect(r).toMatchObject({ code: 1, asked: [] });
+    expect(r.text).toContain('An AI is running this command (CODEX_SANDBOX is set), so it cannot start the trial for you.');
+    expect(getConfig().lessons.trial?.started_at ?? null).toBeNull();
+  });
+
+  it('refuses without a terminal', async () => {
+    const r = await trial([], { interactive: false, answer: 'yes' });
+    expect(r).toMatchObject({ code: 1, asked: [] });
+    expect(getConfig().lessons.trial?.started_at ?? null).toBeNull();
+  });
+
+  it('once running, shows progress and refuses list changes with the end date', async () => {
+    await trial([], { answer: 'yes' });
+    const progress = await trial([]);
+    expect(progress.text).toContain(`day 1 of ${TRIAL_DAYS} · 0 of ${TRIAL_NOTE_TARGET} notes chosen`);
+    const refused = await trial(['ignore', projectA]);
+    expect(refused.code).toBe(1);
+    expect(refused.text).toMatch(/The trial is running until \d{4}-\d{2}-\d{2} or 12 notes; the lists are fixed until then\./);
+  });
+
+  it('refuses list changes sensibly when a started trial has no end date to give (sharing turned off by hand)', async () => {
+    await trial([], { answer: 'yes' });
+    setConfig({ lessons: { ...getConfig().lessons, enabled: false } });
+    const refused = await trial(['ignore', projectA]);
+    expect(refused.code).toBe(1);
+    expect(refused.text).not.toContain('undefined');
+    expect(refused.text).toContain('The trial has started, so the lists are fixed until it ends.');
+  });
+
+  it('needs sharing on', async () => {
+    setConfig({ lessons: { ...getConfig().lessons, enabled: false } });
+    const r = await trial([], { answer: 'yes' });
+    expect(r.code).toBe(1);
+    expect(r.text).toContain('The trial needs sharing on. Turn it on first, in a terminal of your own: veto lessons on');
+  });
+
+  it('veto lessons status says how to start it while sharing is on', () => {
+    expect(run('status').text).toContain('Trial:        not started · you start it yourself with: veto lessons trial');
+  });
 });

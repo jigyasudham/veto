@@ -166,6 +166,7 @@ function initDb(db: DatabaseSync): void {
   migrateSessionCreatedAtIso(db);
   migrateLessonColumns(db);
   migrateDropShadowLog(db);
+  migrateLessonTrialId(db);
   // Stamp the read-contract version so external readers (veto-vscode, statusline)
   // can detect drift via `PRAGMA user_version`. See VETO_DB_SCHEMA_VERSION.
   db.exec(`PRAGMA user_version = ${VETO_DB_SCHEMA_VERSION}`);
@@ -227,6 +228,13 @@ function migrateDropShadowLog(db: DatabaseSync): void {
     const row = db.prepare('SELECT COUNT(*) AS n FROM lesson_shadow_log').get() as { n: number };
     if (row.n === 0) db.exec('DROP TABLE lesson_shadow_log');
   } catch { /* no such table: a database created by this build or before 3.4.0 */ }
+}
+
+// Rows recorded before 3.9.0 belong to trial 1 (council a085b10e): the column
+// default says so, and no row is rewritten.
+export function migrateLessonTrialId(db: DatabaseSync): void {
+  const names = new Set((db.prepare('PRAGMA table_info(lesson_trial_sessions)').all() as Array<{ name: string }>).map(c => c.name));
+  if (names.size && !names.has('trial_id')) db.exec('ALTER TABLE lesson_trial_sessions ADD COLUMN trial_id INTEGER NOT NULL DEFAULT 1');
 }
 
 // Creates tool_call_trace_log table for auditing and session replay (v1.8.0 migration)

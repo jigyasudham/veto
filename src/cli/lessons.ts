@@ -5,14 +5,18 @@
 import { createInterface } from 'node:readline';
 import { LESSON_SOURCES, type LessonSource } from '../lessons/adapters/index.js';
 import type { LessonScope } from '../lessons/classify.js';
-import { acceptLessonsConsent, detectAiSession, lessonsDisclosure } from '../lessons/consent.js';
+import { acceptLessonsConsent, detectAiSession, lessonsDisclosure, trialDisclosure } from '../lessons/consent.js';
 import {
   aliasGroups, explainLesson, excludeProjectDir, findLesson, forgetLesson, HOST_NAMES, includeProjectDir, lessonFlows,
   lessonReach, lessonsStatus, lessonTitle, listLessons, projectName, recheckSource, refreshLessons,
   removeProjectAlias, setProjectAlias, turnLessonsOff, unresolvedFolders, type FindLesson,
 } from '../lessons/manage.js';
 import type { LessonRow } from '../lessons/store.js';
-import { TRIAL_DAYS, type TrialStatus } from '../lessons/trial.js';
+import {
+  TRIAL_DAYS, TRIAL_ID, TRIAL_NOTE_TARGET, trialBacklog, trialOneSessions, trialStalled, trialStatus, type TrialStatus,
+} from '../lessons/trial.js';
+import { addTrialProject, clearTrialLists, startTrial, trialPhase, trialSetup, type TrialRefusal } from '../lessons/trial-setup.js';
+import { isLessonsSharingEnabled } from '../memory/config.js';
 
 type Out = (line?: string) => void;
 type Colors = Record<'bold' | 'dim' | 'green' | 'yellow' | 'cyan' | 'red', (s: string) => string>;
@@ -26,6 +30,8 @@ const SHADOW = 'shadow mode: nothing is delivered to any AI yet';
 const USAGE = [
   'veto lessons [status]',
   'veto lessons on             (in your own terminal: you type yes to accept)',
+  'veto lessons trial          (in your own terminal: shows the trial, starts it when you type yes)',
+  'veto lessons trial use|ignore [<dir>]   ·   veto lessons trial clear   (before it starts)',
   'veto lessons list [--scope=user|machine|project] [--source=claude|codex|gemini] [--shared] [--held] [--project=<dir>] [--json]',
   'veto lessons why <id>',
   'veto lessons forget <id>',
@@ -89,9 +95,10 @@ function sharingLine(c: Colors): string {
 function trialLines(t: TrialStatus, c: Colors, now = Date.now()): string[] {
   const n = (outcome: keyof TrialStatus['byOutcome']) => t.byOutcome[outcome] ?? 0;
   const day = Math.min(TRIAL_DAYS, Math.floor((now - Date.parse(t.startedAt)) / (24 * 60 * 60 * 1000)) + 1);
-  const progress = `${t.qualifying} of ${t.target} Codex sessions counted`;
+  const progress = `${t.notesChosen} of ${t.target} notes chosen`;
   const lines = [`  Trial:        ${t.complete ? `finished · ${progress} · ready to be judged` : `day ${day} of ${TRIAL_DAYS} · ${progress}`}`];
-  const parts = [`${n('selected')} with notes chosen`, `${n('no_match')} with none that fitted`];
+  const parts = [`${plural(t.qualifying, 'Codex session')} counted`, `${n('selected')} with notes chosen`, `${n('no_match')} with none that fitted`];
+  if (t.skipped) parts.push(`${t.skipped} skipped`);
   if (n('no_request')) parts.push(`${n('no_request')} with no request found`);
   const elsewhere = n('no_notes') + n('no_project') + n('project_excluded');
   if (elsewhere) parts.push(`${elsewhere} in projects with no notes to give`);
@@ -118,10 +125,13 @@ function status(out: Out, c: Colors, home: string | undefined): number {
   if (s.unresolved) out(`  Unlinked:     ${plural(s.unresolved, 'memory folder')} with no project Veto can find ${c.dim('→ veto lessons alias')}`);
   if (s.forgotten) out(`  Forgotten:    ${s.forgotten} ${c.dim('(permanent)')}`);
   if (s.trial) for (const line of trialLines(s.trial, c)) out(line);
+  else if (s.sharing) out(`  Trial:        ${c.dim('not started · you start it yourself with: veto lessons trial')}`);
+  const before = trialOneSessions();
+  if (before) out(c.dim(`  Trial 1:      ended · ${plural(before, 'Codex session')} recorded before 3.9.0 (deleted by veto lessons off)`));
   if (s.notes && !s.sharing) out(c.yellow('  Sharing is off, but notes harvested earlier are still stored.') + c.dim(' Delete them with: veto lessons off'));
   if (!s.sharing && !s.needsReconsent) out(c.dim('  Turn it on, in a terminal of your own: veto lessons on'));
   out('');
-  out(c.dim('  on · list · why <id> · forget <id> · flows · off · exclude|include [dir] · alias · recheck <host>'));
+  out(c.dim('  on · trial · list · why <id> · forget <id> · flows · off · exclude|include [dir] · alias · recheck <host>'));
   out('');
   return 0;
 }
@@ -392,7 +402,117 @@ async function on(out: Out, c: Colors, home: string | undefined, io: ConsentIo):
   return 0;
 }
 
-/** Runs one `veto lessons` subcommand and returns its exit code (a promise only for `on`, which may ask a question). */
+/**
+ * The shadow trial (council a085b10e): set the lists, see progress, start it.
+ * Anyone, an AI included, may set the lists before the start; only a person
+ * typing "yes" in their own terminal may start it, with exactly the lists shown.
+ */
+async function trial(args: string[], cwd: string, out: Out, c: Colors, io: ConsentIo): Promise<number> {
+  const [action, dir] = args;
+  const refusal = (r: TrialRefusal): number => {
+    if (r.reason === 'missing_folder') out(c.red(`  No such folder: ${dir ?? cwd}. Nothing changed.`));
+    else if (r.reason === 'running') {
+      out(c.yellow(r.until
+        ? `  The trial is running until ${r.until.slice(0, 10)} or ${TRIAL_NOTE_TARGET} notes; the lists are fixed until then.`
+        : '  The trial has started, so the lists are fixed until it ends.'));
+    }
+    else if (r.reason === 'finished') out(c.yellow('  The trial has finished. Its record is kept; veto lessons off deletes it.'));
+    else if (r.reason === 'sharing_off') out(c.yellow('  The trial needs sharing on. Turn it on first, in a terminal of your own: veto lessons on'));
+    else out(c.yellow('  The lists changed while this was showing them. Nothing started; run veto lessons trial again.'));
+    out('');
+    return 1;
+  };
+  out('');
+  if (action === 'use' || action === 'ignore') {
+    const r = addTrialProject(action, dir ?? cwd);
+    if (!r.ok) return refusal(r);
+    out(c.green(`  ✓ ${action === 'use' ? 'Counted' : 'Ignored'} for the trial: ${r.entry.label}`) + c.dim(r.added ? '' : ' (it already was)'));
+    out(c.dim(r.kind === 'git'
+      ? '    identified by its git history, so every checkout of it matches'
+      : '    identified by its folder path, so moving the folder changes it'));
+    out('');
+    return 0;
+  }
+  if (action === 'clear') {
+    const r = clearTrialLists();
+    if (!r.ok) return refusal(r);
+    out(c.green('  ✓ Both trial lists are empty.'));
+    out('');
+    return 0;
+  }
+  if (action !== undefined) {
+    out(c.red(`  Unknown trial action: ${action}`));
+    for (const line of USAGE) out(c.dim(`  ${line}`));
+    return 1;
+  }
+  if (!isLessonsSharingEnabled()) return refusal({ ok: false, reason: 'sharing_off' });
+  const phase = trialPhase();
+  if (phase !== 'setup') {
+    const status = trialStatus();
+    if (status) for (const line of trialLines(status, c)) out(line);
+    else out(`  Trial:        ${phase}`);
+    out('');
+    return 0;
+  }
+  const shown = trialSetup();
+  for (const line of trialDisclosure(shown).split('\n')) out(line ? `  ${line}` : '');
+  out('');
+  const marker = detectAiSession(io.env);
+  if (marker) {
+    out(c.yellow(`  An AI is running this command (${marker} is set), so it cannot start the trial for you. Nothing changed.`));
+    out('  To start it, open a terminal window yourself and run: veto lessons trial');
+    out('');
+    return 1;
+  }
+  if (!io.interactive) {
+    out(c.yellow('  Starting needs you to type yes in a terminal window. Nothing changed.'));
+    out('  Open one and run: veto lessons trial');
+    out('');
+    return 1;
+  }
+  let answer = '';
+  try { answer = await io.ask('  Type yes to start the trial: '); } catch { answer = ''; }
+  if (answer.trim().toLowerCase() !== 'yes') {
+    out(c.dim('  Nothing changed. The trial has not started.'));
+    out('');
+    return 0;
+  }
+  const r = startTrial(shown);
+  if (!r.ok) return refusal(r);
+  out(c.green('  ✓ The trial has started.') + c.dim(` It ends ${r.endsAt.slice(0, 10)}, or sooner at ${TRIAL_NOTE_TARGET} chosen notes. Progress: veto lessons trial`));
+  out('');
+  return 0;
+}
+
+/**
+ * The trial's lines in `veto doctor`, and how many issues they raise. A finished
+ * trial examines nothing more, so it never promises to; trial-2 records with no
+ * trial running mean the config was damaged or edited (council a085b10e, K8).
+ */
+export function trialDoctorLines(color = true): { lines: string[]; issues: number } {
+  const c = color ? COLORS : PLAIN;
+  const lines: string[] = [];
+  let issues = 0;
+  const ts = trialStatus();
+  if (ts) {
+    const mark = ts.drift ? c.red('✗') : c.green('✓');
+    lines.push(`  ${mark} lessons trial ${ts.trialId}: ${ts.notesChosen}/${ts.target} notes chosen ${c.dim(`· ${ts.skipped} skipped · ends ${ts.endsAt.slice(0, 10)}${ts.complete ? ' · complete' : ''}`)}`);
+    if (ts.drift) {
+      lines.push(c.dim('      the last sessions in a row had no request Veto could read — Codex has likely changed its rollout format'));
+      issues++;
+    }
+    const backlog = ts.complete ? null : trialBacklog();
+    if (backlog && backlog.unexamined > 0) {
+      lines.push(c.dim(`      ${backlog.unexamined} Codex session(s) not examined yet (oldest ${backlog.oldestUnexamined?.slice(0, 10)}) — the trial examines them on the next veto_session_save`));
+    }
+  } else if (trialStalled()) {
+    lines.push(`  ${c.yellow('⚠')} lessons trial ${TRIAL_ID} has records but is not running — Veto's config may be damaged or sharing turned off by hand; see: veto lessons trial`);
+    issues++;
+  }
+  return { lines, issues };
+}
+
+/** Runs one `veto lessons` subcommand and returns its exit code (a promise only for `on` and `trial`, which may ask a question). */
 export function runLessonsCommand(
   args: string[],
   options: { out?: Out; color?: boolean; cwd?: string; home?: string; io?: ConsentIo } = {},
@@ -405,6 +525,7 @@ export function runLessonsCommand(
   const home = options.home;
   switch (sub) {
     case 'on': return on(out, c, home, options.io ?? terminalIo());
+    case 'trial': return trial(positional, cwd, out, c, options.io ?? terminalIo());
     case 'status': return status(out, c, home);
     case 'list': return list(flags, out, c, home);
     case 'why': return why(positional[0], out, c, home);

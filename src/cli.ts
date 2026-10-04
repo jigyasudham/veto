@@ -569,20 +569,10 @@ async function doctorCommand(fix = false, quick = false) {
     }
   } catch { console.log(c.dim('  · transcript freshness unavailable')); }
   try {
-    const { trialStatus, trialBacklog } = await import('./lessons/trial.js');
-    const ts = trialStatus();
-    if (ts) {
-      const backlog = trialBacklog();
-      const mark = ts.drift ? c.red('✗') : c.green('✓');
-      console.log(`  ${mark} lessons trial ${ts.qualifying}/${ts.target} qualifying sessions ${c.dim(`· ends ${ts.endsAt.slice(0, 10)}${ts.complete ? ' · complete' : ''}`)}`);
-      if (ts.drift) {
-        console.log(c.dim('      the last sessions in a row had no request Veto could read — Codex has likely changed its rollout format'));
-        issues++;
-      }
-      if (backlog && backlog.unexamined > 0) {
-        console.log(c.dim(`      ${backlog.unexamined} Codex session(s) not examined yet (oldest ${backlog.oldestUnexamined?.slice(0, 10)}) — the trial examines them on the next veto_session_save`));
-      }
-    }
+    const { trialDoctorLines } = await import('./cli/lessons.js');
+    const trial = trialDoctorLines();
+    for (const line of trial.lines) console.log(line);
+    issues += trial.issues;
   } catch { /* lessons optional */ }
 
   // Billing mode

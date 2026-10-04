@@ -17,6 +17,7 @@ import {
   type LessonRow, type ProjectExclusion,
 } from './store.js';
 import { archiveTrialSessions, clearTrialSessions, runLessonsTrial, trialStatus, type TrialStatus } from './trial.js';
+import { clearTrialConfig } from './trial-setup.js';
 
 export const HOST_NAMES: Record<LessonSource, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' };
 
@@ -181,6 +182,7 @@ export type LessonsOffResult = { wasOn: boolean; notes: number; trialSessions: n
 export function turnLessonsOff(): LessonsOffResult {
   const wasOn = isLessonsSharingEnabled();
   disableLessonsSharing();
+  clearTrialConfig();
   const db = getDb();
   const notes = Number(db.prepare('DELETE FROM lessons').run().changes);
   clearLessonFileState();

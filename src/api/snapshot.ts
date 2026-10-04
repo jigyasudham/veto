@@ -103,10 +103,12 @@ export async function apiSnapshot(ctx: ApiContext, req: { project: string; db?: 
     trial = (() => {
       try {
         const t = trialStatus();
-        if (!t) return { state: 'unavailable', message: 'No trial is running — it starts when lessons sharing is accepted.' };
+        if (!t) return { state: 'unavailable', message: 'No trial is running — it starts when you run veto lessons trial.' };
         return {
           state: 'ok', mode: 'shadow', started_at: t.startedAt, ends_at: t.endsAt, qualifying: t.qualifying, target: t.target,
           complete: t.complete, outcomes: t.byOutcome, drift: t.drift,
+          // Counts only: the trial's lists name the user's folders (council a085b10e, K9).
+          trial_id: t.trialId, stop_on: t.stopOn, notes_chosen: t.notesChosen, notes_target: t.target, skipped: t.skipped,
         };
       } catch (err) {
         return sectionError(err);

@@ -347,8 +347,10 @@ export const CREATE_TABLES = `
   -- session's own request is read to choose and is never stored; the row keeps
   -- the choice and a pointer to Codex's rollout file. outcome is one of
   -- selected, no_match, no_request, no_notes, no_project, project_excluded,
-  -- subagent, before_trial. archive_state is pending, archived, capture_off or
-  -- failed.
+  -- subagent, before_trial, trial_skipped. archive_state is pending, archived,
+  -- capture_off or failed. trial_id says which trial's rules recorded the row:
+  -- 1 for the automatic trial of 3.6.0-3.8.0, 2 for the opt-in trial (council
+  -- a085b10e). A new id means new rules and a new sealed pre-registration.
   CREATE TABLE IF NOT EXISTS lesson_trial_sessions (
     source_session_id    TEXT PRIMARY KEY,
     source_cli           TEXT NOT NULL,
@@ -362,7 +364,8 @@ export const CREATE_TABLES = `
     pool_size            INTEGER NOT NULL,
     changed_since_start  INTEGER NOT NULL,
     archive_state        TEXT NOT NULL,
-    logged_at            TEXT NOT NULL
+    logged_at            TEXT NOT NULL,
+    trial_id             INTEGER NOT NULL DEFAULT 1
   );
 
   CREATE INDEX IF NOT EXISTS idx_tool_trace_session ON tool_call_trace_log(session_id);

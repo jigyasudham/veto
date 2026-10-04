@@ -16,6 +16,17 @@ export type TranscriptsConfig = {
   first_capture_at: string | null; // set on first real capture; drives the one-time note
 };
 
+/** A project on a trial list: its identity (git:… or path:…) and a readable folder name. */
+export type TrialProject = { identity: string; label: string };
+export type TrialConfig = {
+  id: number;
+  /** The trial disclosure accepted; 0 while the lists are being set up. */
+  consent_version: number;
+  started_at: string | null;
+  use: TrialProject[];
+  ignore: TrialProject[];
+};
+
 // Harvest-and-Share is separate from transcript capture. It is OFF until the
 // user explicitly accepts the wider cross-project and cross-vendor disclosure.
 export type LessonsConfig = {
@@ -33,11 +44,17 @@ export type LessonsConfig = {
   harvest_on_save: boolean;
   /** When saving a session first harvested; the one-time note is shown once. */
   first_harvest_at: string | null;
+  /**
+   * The shadow trial the user started themselves (`veto lessons trial`), or is
+   * setting up. Separate from sharing consent: accepting sharing never starts a
+   * trial (council a085b10e). Holds project identities, never note text.
+   */
+  trial: TrialConfig | null;
 };
 
-// Consent v3 covers the trial: reading notes, and recording which of them each
-// Codex session would have been given (owner, 2026-09-22). v2 had promised that
-// Veto worked out nothing about that, so the trial could not run under it. The
+// Consent v3 (owner, 2026-09-22). Since 3.9.0 it covers reading and keeping
+// notes only; the trial asks for itself (trial.ts TRIAL_CONSENT_VERSION,
+// council a085b10e), and removing it from this text needed no new version. The
 // disclosure still PROMISES to ask again before any note is given to an AI
 // (owner, 2026-09-20), so the release that starts delivery must bump this to 4,
 // which pauses sharing until each user accepts the new disclosure.
@@ -50,6 +67,7 @@ export const DEFAULT_LESSONS: LessonsConfig = {
   cross_vendor: false,
   harvest_on_save: true,
   first_harvest_at: null,
+  trial: null,
 };
 
 export type VetoConfig = {
@@ -119,6 +137,23 @@ function normalizeLessons(raw: Partial<LessonsConfig> | undefined): LessonsConfi
     cross_vendor: raw?.cross_vendor === true,
     harvest_on_save: raw?.harvest_on_save !== false,
     first_harvest_at: typeof raw?.first_harvest_at === 'string' ? raw.first_harvest_at : null,
+    trial: normalizeTrial((raw as { trial?: unknown } | undefined)?.trial),
+  };
+}
+
+function normalizeTrial(raw: unknown): TrialConfig | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const t = raw as Record<string, unknown>;
+  if (typeof t.id !== 'number') return null;
+  const list = (value: unknown): TrialProject[] => (Array.isArray(value) ? value : [])
+    .filter((p): p is TrialProject => !!p && typeof p === 'object' && typeof (p as TrialProject).identity === 'string' && typeof (p as TrialProject).label === 'string')
+    .map(p => ({ identity: p.identity, label: p.label }));
+  return {
+    id: t.id,
+    consent_version: typeof t.consent_version === 'number' ? t.consent_version : 0,
+    started_at: typeof t.started_at === 'string' ? t.started_at : null,
+    use: list(t.use),
+    ignore: list(t.ignore),
   };
 }
 
@@ -188,6 +223,7 @@ export function enableLessonsSharing(): LessonsConfig {
     // that had harvest-on-save off does not silently get it back.
     harvest_on_save: getConfig().lessons.harvest_on_save,
     first_harvest_at: getConfig().lessons.first_harvest_at,
+    trial: getConfig().lessons.trial,
   };
   setConfig({ lessons });
   return lessons;

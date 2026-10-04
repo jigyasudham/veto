@@ -204,10 +204,12 @@
           "type": "string"
         },
         "qualifying": {
-          "type": "number"
+          "type": "number",
+          "description": "Codex sessions that counted: a request, in a project with notes to choose from."
         },
         "target": {
-          "type": "number"
+          "type": "number",
+          "description": "The number the trial stops at, in the unit stop_on names; sessions when stop_on is absent."
         },
         "complete": {
           "type": "boolean"
@@ -223,6 +225,26 @@
         },
         "drift": {
           "type": "boolean"
+        },
+        "trial_id": {
+          "type": "number"
+        },
+        "stop_on": {
+          "type": "string",
+          "enum": [
+            "sessions",
+            "notes"
+          ]
+        },
+        "notes_chosen": {
+          "type": "number"
+        },
+        "notes_target": {
+          "type": "number"
+        },
+        "skipped": {
+          "description": "Sessions in projects the user ignored. A count only: the lists name the user's folders.",
+          "type": "number"
         }
       },
       "required": [
