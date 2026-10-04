@@ -121,6 +121,26 @@ describe('veto api snapshot', () => {
     });
     expect(env.data.lessons).toMatchObject({ state: 'ok', sharing: 'off', scope: 'all_projects' });
     expect(env.data.trial.state).toBe('unavailable');
+    expect(env.data.trial.message).toBe('No trial is running — it starts when you run veto lessons trial.');
+  });
+
+  it('reports trial 2 as counts only, never the folders on its lists', async () => {
+    const { enableLessonsSharing, getConfig, setConfig } = await import('../../src/memory/config.js');
+    const configPath = process.env.VETO_CONFIG_PATH!;
+    const saved = existsSync(configPath) ? readFileSync(configPath, 'utf8') : null;
+    try {
+      enableLessonsSharing();
+      setConfig({ lessons: { ...getConfig().lessons, trial: {
+        id: 2, consent_version: 1, started_at: new Date().toISOString(), use: [], ignore: [{ identity: 'path:d:/secret folder', label: 'Secret Folder' }],
+      } } });
+      closeAll();
+      const env = valid(await call(['snapshot'], { project: PROJECT_A }), contract.snapshotDataSchema);
+      expect(env.data.trial).toMatchObject({ state: 'ok', trial_id: 2, stop_on: 'notes', notes_target: 12, target: 12, notes_chosen: 0, skipped: 0 });
+      expect(JSON.stringify(env.data.trial)).not.toMatch(/secret/i);
+    } finally {
+      if (saved === null) rmSync(configPath, { force: true }); else writeFileSync(configPath, saved);
+      closeAll();
+    }
   });
 
   it('changes no file: not the databases, their WAL, the config or the archives', async () => {

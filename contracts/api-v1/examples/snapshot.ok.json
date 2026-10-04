@@ -44,7 +44,7 @@
     },
     "trial": {
       "state": "unavailable",
-      "message": "No trial is running — it starts when lessons sharing is accepted."
+      "message": "No trial is running — it starts when you run veto lessons trial."
     }
   }
 }

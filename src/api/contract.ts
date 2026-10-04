@@ -111,11 +111,17 @@ export const snapshotDataSchema = z.object({
     mode: z.literal('shadow'),
     started_at: z.string(),
     ends_at: z.string(),
-    qualifying: z.number(),
-    target: z.number(),
+    qualifying: z.number().describe('Codex sessions that counted: a request, in a project with notes to choose from.'),
+    target: z.number().describe('The number the trial stops at, in the unit stop_on names; sessions when stop_on is absent.'),
     complete: z.boolean(),
     outcomes: z.record(z.string(), z.number()),
     drift: z.boolean(),
+    // Added in Veto 3.9.0 (council a085b10e); absent from older backends.
+    trial_id: z.number().optional(),
+    stop_on: z.enum(['sessions', 'notes']).optional(),
+    notes_chosen: z.number().optional(),
+    notes_target: z.number().optional(),
+    skipped: z.number().optional().describe('Sessions in projects the user ignored. A count only: the lists name the user\'s folders.'),
   }),
 });
 
