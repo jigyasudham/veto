@@ -2,10 +2,9 @@
 // with the scope an extension's UI needs enforced here rather than trusted.
 //
 //   • A project is required. Search never widens to every project.
-//   • Expand checks that the event or archive belongs to that project; the MCP
-//     tool's expand does not, because an AI only expands ids its own search
-//     returned. A UI is handed ids from outside, so here the boundary is checked,
-//     and an id from another project is answered exactly like a missing one.
+//   • Expand checks that the event or archive belongs to that project. MCP
+//     expansion also checks scope through recallExpand. An id from another
+//     project is answered exactly like a missing one.
 //   • Text is masked again on the way out and never raw.
 //   • Search is the one command that writes: the first search of an archive
 //     indexes it (and may compute vectors). It never creates an index that does
