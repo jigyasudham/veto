@@ -5,8 +5,12 @@
 // the L0 file, leaving no orphan rows (Step 14 asserts zero orphans). Row deletes
 // run in one transaction; the L0 file is unlinked best-effort afterwards (a
 // leftover file is harmless disk, a dangling row is not).
+//
+// Prune is the same delete, applied to archives the retention window has passed
+// (council a9ac51e4): the consent text promised it from v3.0, and nothing ran it.
 
 import { statSync, existsSync, rmSync } from 'node:fs';
+import { basename, dirname, resolve } from 'node:path';
 import { getTranscriptsDb, transcriptsDbPath } from './store.js';
 import { resetCaches } from './cache.js';
 import { projectKey, projectKeySql } from './project-key.js';
@@ -66,6 +70,20 @@ export function showArchive(sourceSessionId: string, source?: string): ArchiveDe
 
 export type PurgeResult = { archives: number; events: number; indexRows: number; files: number; mappings: number };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const ARCHIVE_FILE_RE = /^[a-z]+__[A-Za-z0-9_-]+\.gz$/;
+
+/**
+ * Only a file capture itself wrote is ever removed: `<source>__<id>.gz` inside
+ * an `archives` folder. A row naming any other path loses its row, never that
+ * file. Checked by shape rather than against today's archive folder, so a
+ * purge still cleans up after the folder was moved.
+ */
+export function isArchiveFile(path: string): boolean {
+  const full = resolve(path);
+  return ARCHIVE_FILE_RE.test(basename(full)) && basename(dirname(full)) === 'archives';
+}
+
 function purgeArchiveRows(archives: ArchiveRow[]): PurgeResult {
   const db = getTranscriptsDb();
   const res: PurgeResult = { archives: 0, events: 0, indexRows: 0, files: 0, mappings: 0 };
@@ -109,7 +127,7 @@ function purgeArchiveRows(archives: ArchiveRow[]): PurgeResult {
   }
   // Rows are gone and committed; remove the L0 files best-effort.
   for (const p of paths) {
-    if (existsSync(p)) { try { rmSync(p); res.files += 1; } catch { /* leftover file is harmless */ } }
+    if (isArchiveFile(p) && existsSync(p)) { try { rmSync(p); res.files += 1; } catch { /* leftover file is harmless */ } }
   }
   return res;
 }
@@ -144,6 +162,34 @@ export function purgeAll(): PurgeResult {
   const m = db.prepare(`DELETE FROM session_map`).run();
   res.mappings = Math.max(res.mappings, Number(m.changes ?? 0));
   return res;
+}
+
+/** Archives last captured before the retention window began, oldest first. None when retention is off (0). */
+export function expiredArchives(retentionDays: number, now = Date.now()): ArchiveRow[] {
+  if (!(retentionDays > 0)) return [];
+  const cutoff = new Date(now - retentionDays * DAY_MS).toISOString();
+  return getTranscriptsDb().prepare(`SELECT * FROM archives WHERE updated_at < ? ORDER BY updated_at`).all(cutoff) as ArchiveRow[];
+}
+
+export type PruneResult = PurgeResult & { skipped?: 'clock_behind' };
+
+/**
+ * Delete the archives the retention window has passed. An archive's age is the
+ * time since its session last grew (updated_at), so a chat still in use is never
+ * old. If any archive was written after "now", the clock is not to be trusted
+ * and nothing is deleted on this pass.
+ */
+export function pruneExpiredArchives(retentionDays: number, now = Date.now()): PruneResult {
+  const newest = (getTranscriptsDb().prepare(`SELECT MAX(updated_at) AS t FROM archives`).get() as { t: string | null }).t;
+  if (newest && Date.parse(newest) > now + 60 * 60 * 1000) {
+    return { archives: 0, events: 0, indexRows: 0, files: 0, mappings: 0, skipped: 'clock_behind' };
+  }
+  return purgeArchiveRows(expiredArchives(retentionDays, now));
+}
+
+/** When the least recently captured archive was last captured, or null with no archives. */
+export function oldestArchiveAt(): string | null {
+  return (getTranscriptsDb().prepare(`SELECT MIN(updated_at) AS t FROM archives`).get() as { t: string | null }).t;
 }
 
 export type DiskUsage = { archives: number; archiveBytes: number; dbBytes: number; totalBytes: number };

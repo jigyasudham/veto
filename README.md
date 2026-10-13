@@ -518,8 +518,11 @@ veto transcripts sources         # Per-CLI: where sessions live + what Veto can 
 veto transcripts list            # Archived sessions
 veto transcripts show <id>       # One session's table-of-contents + facts (any AI's session id)
 veto transcripts purge <id>      # Delete an archive (also --project=<dir> | --all; --source=codex to narrow)
+veto transcripts retention 90    # Delete archives last captured more than 90 days ago (default 180; `off` keeps them)
 veto transcripts disable         # Stop capturing (existing archives are kept)
 ```
+
+Retention runs on every save, whether capture is on or off. An archive's age is the time since its chat last grew, so a chat you are still using is never deleted. If a new value would delete archives, `veto transcripts retention` says how many and changes nothing until you add `--yes`.
 
 ### Works in Claude Code, Codex CLI, Gemini CLI and Antigravity CLI
 
@@ -662,6 +665,10 @@ Sharing stays on, and you are not asked again. Those versions started a trial au
 ---
 
 ## Release Notes
+
+### 3.9.1
+- **Bug fix: archived chats were never deleted after 180 days.** The text you agreed to when turning on transcript capture said archives older than 180 days were pruned automatically, and that you could change or turn this off. Nothing deleted them, there was no command to change the window, and setting it to `0` was silently changed back to 180. Every save now deletes archives last captured more than `retention_days` ago, including archives kept after capture was turned off, and says how many in its response. `veto transcripts retention <days>|off` changes the window. When a new value would delete archives, it says how many (and how many the notes trial kept for scoring) and asks for `--yes`. `veto transcripts status` shows how old the oldest archive is. Veto only deletes files it wrote itself, and skips a pass if an archive is dated in the future, which means the clock cannot be trusted. Capture first shipped in v3.0.0 in August 2026, so at the default no archive is old enough to be deleted before February 2027.
+- **Bug fix: `veto_session_replay` expanded chats from other projects.** Search was limited to the current project, but expanding an event, archive or session id was not, so an id from another project returned its text. Expansion now answers an id from another project exactly like one that does not exist. The project is the `project_dir` you pass, then the active project, then the server's working folder.
 
 ### 3.9.0
 - **The notes trial is now something you start yourself.** Accepting sharing used to start a trial automatically, on every computer that turned sharing on, although nothing from those trials ever leaves the computer. Now `veto lessons trial` shows what the trial records and starts it only when you type `yes` in your own terminal; an AI cannot start it for you. Before starting, `veto lessons trial ignore <dir>` and `use <dir>` choose which projects count. A session in an ignored project is recorded as skipped and nothing is chosen for it. The trial stops after 10 weeks or 12 chosen notes. See [The trial](#the-trial).

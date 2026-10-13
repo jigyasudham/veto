@@ -87,6 +87,7 @@ just don't enter the search index. Nothing is ever dropped.
 ```
 veto transcripts enable          # opt in (off by default); prints what/where/retention
 veto transcripts status          # state, archive dir, retention, disk usage
+veto transcripts retention <days>|off  # change the window; --yes when it would delete archives
 veto transcripts sources         # per-CLI: where sessions live + what discovery can see
 veto transcripts metric          # the v3.0 success metric: is deep recall actually used?
 veto transcripts list            # archived sessions

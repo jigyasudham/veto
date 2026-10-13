@@ -142,6 +142,14 @@ export const sessionHandlers: HandlerMap = {
       });
     } catch { /* transcript capture is best-effort; never breaks save */ }
 
+    // Delete archives the retention window has passed (council a9ac51e4). Runs
+    // after capture, so the chat being saved is never the one that goes.
+    let transcriptsPruned = 0;
+    try {
+      const { pruneOnSave } = await import('../../transcripts/on-save.js');
+      transcriptsPruned = await pruneOnSave();
+    } catch { /* pruning is best-effort; never breaks save */ }
+
     // Re-read each AI's own memory so notes written during this session are
     // recorded without the user having to run anything. Time-boxed, consent-
     // gated, and never a reason a save fails. Delivers nothing to any AI.
@@ -186,6 +194,7 @@ export const sessionHandlers: HandlerMap = {
       ...(wasUpdate ? {} : { usage_pct: result.usage_pct, context_warning: result.context_warning }),
       ...(truncationWarnings.length > 0 ? { truncation_warnings: truncationWarnings } : {}),
       ...(transcriptOnSave ? { transcript: transcriptOnSave } : {}),
+      ...(transcriptsPruned > 0 ? { transcripts_pruned: transcriptsPruned } : {}),
       ...(lessonsOnSave ? { lessons: lessonsOnSave } : {}),
       ...(platformNote ? { platform_note: platformNote } : {}),
     };

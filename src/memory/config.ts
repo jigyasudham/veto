@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 export type TranscriptsConfig = {
   enabled: boolean;
   dir: string;
-  retention_days: number;
+  retention_days: number; // 0 = never prune
   consent_version: number; // 0 = never consented
   consent_at: string | null;
   first_capture_at: string | null; // set on first real capture; drives the one-time note
@@ -119,8 +119,10 @@ function normalizeTranscripts(raw: Partial<TranscriptsConfig> | undefined): Tran
   return {
     enabled: raw?.enabled === true,
     dir: typeof raw?.dir === 'string' ? raw.dir : '',
-    retention_days: typeof raw?.retention_days === 'number' && raw.retention_days > 0
-      ? raw.retention_days
+    // 0 is "never prune" (`veto transcripts retention off`); anything else
+    // that is not a whole number of days falls back to the default.
+    retention_days: Number.isInteger(raw?.retention_days) && (raw!.retention_days as number) >= 0
+      ? raw!.retention_days as number
       : DEFAULT_TRANSCRIPTS.retention_days,
     consent_version: typeof raw?.consent_version === 'number' ? raw.consent_version : 0,
     consent_at: typeof raw?.consent_at === 'string' ? raw.consent_at : null,

@@ -14,6 +14,9 @@ import { isCaptureEnabled, firstCaptureNote, effectiveTranscriptsDir } from './c
 import { captureSession } from './archive.js';
 import { ingestArchive } from './ingest.js';
 import { isTranscriptSource, type TranscriptSource } from './adapters/index.js';
+import { existsSync } from 'node:fs';
+import { getConfig } from '../memory/config.js';
+import { transcriptsAvailable, transcriptsDbPath } from './store.js';
 
 // Don't parse+index a monster transcript inline on the save path (architect:
 // keep save-time work bounded). Above this, capture still archives; indexing is
@@ -127,4 +130,26 @@ export async function captureOnSave(opts: {
       : note;
   }
   return out;
+}
+
+/**
+ * Apply the retention window the consent text promised (council a9ac51e4).
+ * Runs on every save whether capture is on or not, because archives kept after
+ * `veto transcripts disable` are covered by the same promise, but only against a
+ * store that already exists: this never creates a transcripts database for
+ * someone who never turned capture on. Returns how many archives were deleted.
+ * Never throws.
+ */
+export async function pruneOnSave(now = Date.now()): Promise<number> {
+  try {
+    const days = getConfig().transcripts.retention_days;
+    if (!(days > 0)) return 0;
+    const path = transcriptsDbPath();
+    if (path !== ':memory:' && !existsSync(path)) return 0;
+    if (!transcriptsAvailable()) return 0;
+    const { pruneExpiredArchives } = await import('./manage.js');
+    return pruneExpiredArchives(days, now).archives;
+  } catch {
+    return 0;
+  }
 }

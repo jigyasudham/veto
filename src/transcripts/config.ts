@@ -58,7 +58,7 @@ export type EnableResult = {
 export function enableCapture(): EnableResult {
   const current = getConfig().transcripts;
   const reconsented = current.enabled && current.consent_version !== CONSENT_VERSION;
-  const retention_days = current.retention_days > 0 ? current.retention_days : DEFAULT_RETENTION_DAYS;
+  const retention_days = current.retention_days;
   const next: TranscriptsConfig = {
     ...current,
     enabled: true,
@@ -95,7 +95,7 @@ export type CaptureStatus = {
   needsReconsent: boolean;
   dir: string;
   usingDefaultDir: boolean;
-  retention_days: number;
+  retention_days: number; // 0 = never prune
   consent_version: number | null; // null = never consented
   consent_at: string | null;
   cloudSyncWarning: string | null;
@@ -110,7 +110,7 @@ export function captureStatus(): CaptureStatus {
     needsReconsent: needsReconsent(cfg),
     dir,
     usingDefaultDir: !(cfg.dir && cfg.dir.trim()),
-    retention_days: cfg.retention_days > 0 ? cfg.retention_days : DEFAULT_RETENTION_DAYS,
+    retention_days: cfg.retention_days,
     consent_version: cfg.consent_at ? cfg.consent_version : null,
     consent_at: cfg.consent_at,
     cloudSyncWarning: detectCloudSync(dir),
@@ -152,8 +152,12 @@ export function consentText(dir: string, retentionDays: number): string {
     '  • WHERE: archives are stored on THIS machine only, at:',
     `      ${dir}`,
     '    Nothing is uploaded, sent to a server, or shared. No API keys involved.',
-    `  • RETENTION: archives older than ${retentionDays} days are pruned automatically`,
-    '    (configurable). You can change or turn this off at any time.',
+    ...(retentionDays > 0
+      ? [`  • RETENTION: archives older than ${retentionDays} days are pruned automatically`,
+         '    (configurable). You can change or turn this off at any time with',
+         '    `veto transcripts retention <days>|off`.']
+      : ['  • RETENTION: off. Archives are kept until you purge them; turn pruning',
+         '    back on with `veto transcripts retention <days>`.']),
     '  • SENSITIVITY: an archive inherits the sensitivity of everything you typed or',
     '    pasted during that session — including secrets and third parties\' data.',
     '    Detected secrets are masked in the search index and never returned to an',
