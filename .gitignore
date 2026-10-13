@@ -37,6 +37,7 @@ BUGS.md
 Prelaunch.md
 MCP-REGISTRY.md
 LAUNCH-KIT.md
+EXTENSION-UPGRADE-FINDINGS.md
 docs/
 # scripts/ stays private EXCEPT the model repack pipeline: condition #7 wants
 # it tracked so a published @jigyasudham/veto-model artifact is reproducible
