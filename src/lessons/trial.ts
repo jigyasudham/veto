@@ -17,17 +17,18 @@
 
 import { closeSync, openSync, readdirSync, readSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { getConfig, isLessonsSharingEnabled, type LessonsConfig, type TrialConfig } from '../memory/config.js';
+import { activeLessonsTrial, getConfig, isLessonsSharingEnabled, type LessonsConfig, type TrialConfig } from '../memory/config.js';
 import { getDb } from '../memory/local.js';
 import { isCaptureEnabled } from '../transcripts/config.js';
 import { codexSessionsDir } from '../transcripts/discover.js';
 import { resolvesOutsideRoot } from './harvest.js';
 import { resolveProjectIdentity } from './identity.js';
 import { selectLessonsForShadow } from './select.js';
+import { selectLessonsForTrialThree } from './select-candidate.js';
 
 /**
- * The trial these rules belong to. A new id means new rules in this file AND a
- * new sealed pre-registration (council a085b10e); it is never a re-run.
+ * Legacy trial id retained for Trial 2 callers. Trial 3 is explicitly prepared
+ * in its own config slot and selects lexical-alias-v1, never the old selector.
  */
 export const TRIAL_ID = 2;
 /** The trial disclosure (consent.ts trialDisclosure). Adding to what it promises means bumping this. */
@@ -131,8 +132,8 @@ export type TrialWindow = { startedAt: number; endsAt: number };
 
 /** The trial runs from when the user started it (`veto lessons trial`), for TRIAL_DAYS. Sharing consent alone never opens it. */
 export function trialWindow(config: LessonsConfig = getConfig().lessons): TrialWindow | null {
-  const trial = config.trial;
-  if (!isLessonsSharingEnabled(config) || !trial || trial.id !== TRIAL_ID || trial.consent_version !== TRIAL_CONSENT_VERSION || !trial.started_at) return null;
+  const trial = activeLessonsTrial(config);
+  if (!isLessonsSharingEnabled(config) || !trial || ![2, 3].includes(trial.id) || trial.consent_version !== TRIAL_CONSENT_VERSION || !trial.started_at) return null;
   const startedAt = Date.parse(trial.started_at);
   if (!Number.isFinite(startedAt)) return null;
   return { startedAt, endsAt: startedAt + TRIAL_DAYS * DAY_MS };
@@ -161,11 +162,12 @@ function rolloutFiles(root: string, from: number, to: number): string[] {
 function hasTrialId(): boolean {
   return (getDb().prepare('PRAGMA table_info(lesson_trial_sessions)').all() as Array<{ name: string }>).some(c => c.name === 'trial_id');
 }
-const thisTrial = (): string => (hasTrialId() ? `trial_id = ${TRIAL_ID}` : '0');
+const activeId = () => activeLessonsTrial()?.id ?? TRIAL_ID;
+const thisTrial = (id = activeId()): string => (hasTrialId() && [2, 3].includes(id) ? `trial_id = ${id}` : '0');
 
 /** Chosen notes so far: each note in each selected session, counted when the session was recorded. */
-export function chosenNoteCount(): number {
-  return (getDb().prepare(`SELECT lesson_ids FROM lesson_trial_sessions WHERE ${thisTrial()} AND outcome = 'selected'`).all() as Array<{ lesson_ids: string }>)
+export function chosenNoteCount(id = activeId()): number {
+  return (getDb().prepare(`SELECT lesson_ids FROM lesson_trial_sessions WHERE ${thisTrial(id)} AND outcome = 'selected'`).all() as Array<{ lesson_ids: string }>)
     .reduce((sum, row) => sum + (JSON.parse(row.lesson_ids) as string[]).length, 0);
 }
 
@@ -186,7 +188,7 @@ export function trialOneSessions(): number {
 
 /** Trial-2 records exist but no trial is running: the config was damaged or edited (council a085b10e, K8). */
 export function trialStalled(): boolean {
-  if (getConfig().lessons.trial?.consent_version === -1) return false;
+  if (activeLessonsTrial()?.consent_version === -1) return false;
   if (trialWindow()) return false;
   return (getDb().prepare(`SELECT COUNT(*) AS n FROM lesson_trial_sessions WHERE ${thisTrial()}`).get() as { n: number }).n > 0;
 }
@@ -199,7 +201,7 @@ function skippedBy(trial: TrialConfig | null, identity: string): boolean {
 
 type Recorded = {
   head: RolloutHead; path: string; outcome: TrialOutcome; identity?: string | null; lessonIds?: string[];
-  tokens?: number; pool?: number; changed?: number; captureOn: boolean;
+  tokens?: number; pool?: number; changed?: number; captureOn: boolean; trialId: number;
 };
 
 function record(r: Recorded): void {
@@ -209,7 +211,7 @@ function record(r: Recorded): void {
     VALUES (?, 'codex', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(r.head.sessionId, r.path, r.identity ?? null, r.head.cwd ? basename(r.head.cwd.replace(/[\\/]+$/, '')) || r.head.cwd : null,
       new Date(r.head.startedAt).toISOString(), r.outcome, JSON.stringify(r.lessonIds ?? []), r.tokens ?? 0, r.pool ?? 0, r.changed ?? 0,
-      r.captureOn ? 'pending' : 'capture_off', new Date().toISOString(), TRIAL_ID);
+      r.captureOn ? 'pending' : 'capture_off', new Date().toISOString(), r.trialId);
 }
 
 export type TrialPassReport = { logged: number; waiting: number; notReached: number };
@@ -222,8 +224,16 @@ export type TrialPassReport = { logged: number; waiting: number; notReached: num
  */
 export function runLessonsTrial(options: { budgetMs?: number; now?: number; captureOn?: boolean } = {}): TrialPassReport {
   const report: TrialPassReport = { logged: 0, waiting: 0, notReached: 0 };
-  const window = trialWindow();
-  if (!window) return report;
+  const config = getConfig().lessons;
+  const trial = activeLessonsTrial(config);
+  const window = trialWindow(config);
+  if (!window || !trial) return report;
+  const trialId = trial.id;
+  const stillConsented = () => {
+    const latest = getConfig().lessons;
+    const active = activeLessonsTrial(latest);
+    return active?.id === trialId && active.started_at === trial.started_at && trialWindow(latest) !== null;
+  };
   const began = Date.now();
   const now = options.now ?? Date.now();
   const captureOn = options.captureOn ?? isCaptureEnabled();
@@ -231,11 +241,10 @@ export function runLessonsTrial(options: { budgetMs?: number; now?: number; capt
   const db = getDb();
   const seen = new Set((db.prepare('SELECT rollout_path FROM lesson_trial_sessions').all() as Array<{ rollout_path: string }>).map(r => r.rollout_path));
   const files = rolloutFiles(root, window.startedAt, Math.min(now, window.endsAt)).filter(path => !seen.has(path));
-  const trial = getConfig().lessons.trial;
-  let chosen = chosenNoteCount();
+  let chosen = chosenNoteCount(trialId);
 
   for (let i = 0; i < files.length; i++) {
-    if (!trialWindow()) break; // Observe consent withdrawn by another process.
+    if (!stillConsented()) break; // Observe withdrawal or a different trial starting.
     if (options.budgetMs !== undefined && Date.now() - began >= options.budgetMs) { report.notReached = files.length - i; break; }
     // Checked before every session, so one pass stops at the session that reached the target (council a085b10e, K2).
     if (chosen >= TRIAL_NOTE_TARGET) break;
@@ -245,7 +254,7 @@ export function runLessonsTrial(options: { budgetMs?: number; now?: number; capt
     if (!head || head.startedAt > window.endsAt) continue;
     if (db.prepare('SELECT 1 FROM lesson_trial_sessions WHERE source_session_id = ?').get(head.sessionId)) continue;
 
-    const base = { head, path, captureOn };
+    const base = { head, path, captureOn, trialId };
     if (head.forked) { record({ ...base, outcome: 'subagent' }); report.logged++; continue; }
     if (head.startedAt < window.startedAt) { record({ ...base, outcome: 'before_trial' }); report.logged++; continue; }
     if (!head.cwd) { record({ ...base, outcome: 'no_project' }); report.logged++; continue; }
@@ -259,8 +268,8 @@ export function runLessonsTrial(options: { budgetMs?: number; now?: number; capt
       continue;
     }
 
-    const choice = selectLessonsForShadow({ query: head.request, targetProjectDir: head.cwd, targetHost: 'codex', asOf: head.startedAt });
-    if (!trialWindow()) break;
+    const choice = (trialId === 3 ? selectLessonsForTrialThree : selectLessonsForShadow)({ query: head.request, targetProjectDir: head.cwd, targetHost: 'codex', asOf: head.startedAt });
+    if (!stillConsented() || choice.reason === 'trial_running') break;
     if (choice.reason === 'consent_off') break;
     const outcome: TrialOutcome = choice.reason === 'project_excluded' ? 'project_excluded'
       : choice.poolSize === 0 ? 'no_notes'
@@ -330,23 +339,25 @@ export type TrialStatus = {
   drift: boolean;
 };
 
-export function trialStatus(now = Date.now()): TrialStatus | null {
-  const window = evidenceWindow();
+export function trialStatus(now = Date.now(), id = activeId()): TrialStatus | null {
+  const config = getConfig().lessons;
+  const trial = id === 3 ? config.trial3 : config.trial;
+  if (!trial || trial.id !== id) return null;
+  const window = evidenceWindow({ ...config, trial, trial3: null });
   if (!window) return null;
   const db = getDb();
   const byOutcome: Partial<Record<TrialOutcome, number>> = {};
-  const scope = thisTrial();
+  const scope = thisTrial(id);
   for (const row of db.prepare(`SELECT outcome, COUNT(*) AS n FROM lesson_trial_sessions WHERE ${scope} GROUP BY outcome`).all() as Array<{ outcome: TrialOutcome; n: number }>) {
     byOutcome[row.outcome] = row.n;
   }
   const qualifying = QUALIFYING.reduce((sum, outcome) => sum + (byOutcome[outcome] ?? 0), 0);
   const recent = (db.prepare(`SELECT outcome FROM lesson_trial_sessions WHERE ${scope} AND outcome NOT IN ('subagent', 'before_trial', 'trial_skipped')
     ORDER BY started_at DESC LIMIT ?`).all(DRIFT_RUN) as Array<{ outcome: TrialOutcome }>).map(r => r.outcome);
-  const notesChosen = chosenNoteCount();
-  const trial = getConfig().lessons.trial;
+  const notesChosen = chosenNoteCount(id);
   const closedEarly = trial?.consent_version === -1;
   return {
-    trialId: TRIAL_ID,
+    trialId: id,
     startedAt: new Date(window.startedAt).toISOString(),
     endsAt: new Date(window.endsAt).toISOString(),
     complete: closedEarly || notesChosen >= TRIAL_NOTE_TARGET || now > window.endsAt,
@@ -370,10 +381,10 @@ export function trialKeptSessionIds(): Set<string> {
 }
 
 /** Read/archival access after withdrawal is not permission to select more notes. */
-function evidenceWindow(): TrialWindow | null {
-  const config = getConfig().lessons;
-  if (config.trial?.consent_version === -1) {
-    return trialWindow({ ...config, trial: { ...config.trial, consent_version: TRIAL_CONSENT_VERSION } });
+function evidenceWindow(config = getConfig().lessons): TrialWindow | null {
+  const trial = activeLessonsTrial(config);
+  if (trial?.consent_version === -1) {
+    return trialWindow({ ...config, trial3: null, trial: { ...trial, consent_version: TRIAL_CONSENT_VERSION } });
   }
   return trialWindow(config);
 }
@@ -411,7 +422,7 @@ export function trialBacklog(now = Date.now()): TrialBacklog | null {
     unexamined++;
     if (oldest === null || mtime < oldest) oldest = mtime;
   }
-  const last = db.prepare('SELECT MAX(logged_at) AS t FROM lesson_trial_sessions').get() as { t: string | null };
+  const last = db.prepare(`SELECT MAX(logged_at) AS t FROM lesson_trial_sessions WHERE ${thisTrial()}`).get() as { t: string | null };
   return { rollouts: files.length, unexamined, oldestUnexamined: oldest === null ? null : new Date(oldest).toISOString(), lastLogged: last.t };
 }
 

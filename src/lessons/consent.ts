@@ -80,7 +80,8 @@ const names = (list: TrialProject[]) => list.map(p => p.label).join(', ');
 /** The trial's own disclosure (TRIAL_CONSENT_VERSION). It names both lists, which cannot change once accepted. */
 export function trialDisclosure(trial: TrialConfig): string {
   return [
-    'What you are starting: the Veto Lessons trial',
+    `What you are starting: the Veto Lessons trial ${trial.id}`,
+    ...(trial.id === 3 ? ['Selector: lexical-alias-v1. Trial 2 evidence stays separate.', 'Protocol: TRIAL-3.md in the reviewed release source.'] : []),
     '',
     `For ${TRIAL_DAYS / 7} weeks, or until ${TRIAL_NOTE_TARGET} notes have been chosen, whichever comes first:`,
     '  • When you start a Codex session in a project that counts, Veto reads',
@@ -100,6 +101,7 @@ export function trialDisclosure(trial: TrialConfig): string {
     `Projects that count: ${trial.use.length ? `only ${names(trial.use)}` : 'every project except those ignored'}`,
     `Ignored: ${trial.ignore.length ? names(trial.ignore) : 'none'}`,
     'These lists cannot change once the trial starts.',
+    '`veto lessons trial close` stops selection and keeps the evidence.',
     '`veto lessons off` stops the trial and deletes its record.',
   ].join('\n');
 }

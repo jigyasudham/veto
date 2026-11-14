@@ -145,6 +145,15 @@ describe('veto api snapshot', () => {
       const closed = valid(await call(['snapshot'], { project: PROJECT_A }), contract.snapshotDataSchema);
       expect(closed.data.trial).toMatchObject({ complete: true, closed_early: true, closed_at: closedAt });
       expect(JSON.stringify(closed.data.trial)).not.toMatch(/secret/i);
+      setConfig({ lessons: { ...getConfig().lessons, trial3: {
+        id: 3, consent_version: 1, started_at: new Date().toISOString(), use: [],
+        ignore: [{ identity: 'path:d:/secret folder', label: 'Secret Folder' }],
+      } } });
+      closeAll();
+      const third = valid(await call(['snapshot'], { project: PROJECT_A }), contract.snapshotDataSchema);
+      expect(third.data.trial).toMatchObject({ trial_id: 3, complete: false, notes_chosen: 0, notes_target: 12 });
+      expect(JSON.stringify(third.data.trial)).not.toMatch(/secret/i);
+      expect(getConfig().lessons.trial).toMatchObject({ id: 2, consent_version: -1, closed_at: closedAt });
     } finally {
       if (saved === null) rmSync(configPath, { force: true }); else writeFileSync(configPath, saved);
       closeAll();

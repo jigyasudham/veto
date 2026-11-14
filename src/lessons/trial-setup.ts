@@ -6,8 +6,9 @@
 
 import { existsSync, statSync } from 'node:fs';
 import { basename } from 'node:path';
-import { getConfig, isLessonsSharingEnabled, setConfig, type TrialConfig, type TrialProject } from '../memory/config.js';
+import { activeLessonsTrial, getConfig, isLessonsSharingEnabled, setConfig, type TrialConfig, type TrialProject } from '../memory/config.js';
 import { resolveProjectIdentity } from './identity.js';
+import { getDb } from '../memory/local.js';
 import { TRIAL_CONSENT_VERSION, TRIAL_DAYS, TRIAL_ID, trialStatus, trialWindow } from './trial.js';
 
 export type TrialList = 'use' | 'ignore';
@@ -15,12 +16,25 @@ export type TrialPhase = 'setup' | 'running' | 'finished';
 export type TrialRefusal = { ok: false; reason: 'running' | 'finished' | 'missing_folder' | 'sharing_off' | 'lists_changed'; until?: string };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const trialThreeRecords = () => (getDb().prepare('SELECT COUNT(*) AS n FROM lesson_trial_sessions WHERE trial_id = 3').get() as { n: number }).n;
 const empty = (): TrialConfig => ({ id: TRIAL_ID, consent_version: 0, started_at: null, use: [], ignore: [] });
 
-/** The trial-2 entry being set up or run, or an empty one. An entry for another trial id is not this trial's. */
+/** Explicitly prepared Trial 3 takes precedence; otherwise retain Trial 2. */
 export function trialSetup(): TrialConfig {
-  const trial = getConfig().lessons.trial;
-  return trial && trial.id === TRIAL_ID ? trial : empty();
+  const trial = activeLessonsTrial();
+  return trial && (trial.id === TRIAL_ID || trial.id === 3) ? trial : empty();
+}
+
+/** Prepare only; consent is still obtained by the terminal command. */
+export function prepareTrialThree(): { ok: true } | TrialRefusal {
+  const lessons = getConfig().lessons;
+  if (!isLessonsSharingEnabled()) return { ok: false, reason: 'sharing_off' };
+  if (lessons.trial3) return trialPhase() === 'setup' ? { ok: true } : { ok: false, reason: trialPhase() === 'running' ? 'running' : 'finished' };
+  if (lessons.trial?.started_at && trialPhase() !== 'finished') return { ok: false, reason: 'running' };
+  // Missing config must not allow a previously recorded trial to restart.
+  if (trialThreeRecords() > 0) return { ok: false, reason: 'finished' };
+  save({ id: 3, consent_version: 0, started_at: null, use: lessons.trial?.use ?? [], ignore: lessons.trial?.ignore ?? [] });
+  return { ok: true };
 }
 
 export function trialPhase(now = Date.now()): TrialPhase {
@@ -42,7 +56,7 @@ function frozen(): TrialRefusal | null {
 
 function save(trial: TrialConfig): void {
   // setConfig re-reads the file just before writing, so nothing written since is lost (K1).
-  setConfig({ lessons: { ...getConfig().lessons, trial } });
+  setConfig({ lessons: { ...getConfig().lessons, [trial.id === 3 ? 'trial3' : 'trial']: trial } });
 }
 
 /** Withdraw trial consent without deleting notes, records or sharing consent.
@@ -73,24 +87,25 @@ export function addTrialProject(list: TrialList, dir: string): { ok: true; entry
 export function clearTrialLists(): { ok: true } | TrialRefusal {
   const refused = frozen();
   if (refused) return refused;
-  save(empty());
+  save({ ...empty(), id: trialSetup().id });
   return { ok: true };
 }
 
-const sameLists = (a: TrialConfig, b: TrialConfig) => JSON.stringify([a.use, a.ignore]) === JSON.stringify([b.use, b.ignore]);
+const sameLists = (a: TrialConfig, b: TrialConfig) => JSON.stringify([a.id, a.use, a.ignore]) === JSON.stringify([b.id, b.use, b.ignore]);
 
-/** Start trial 2 with exactly the lists the user was shown, in one write (K1). */
+/** Start the selected trial with exactly the id and lists the user was shown. */
 export function startTrial(shown: TrialConfig, now = new Date()): { ok: true; startedAt: string; endsAt: string } | TrialRefusal {
   const refused = frozen();
   if (refused) return refused;
+  if (shown.id === 3 && trialThreeRecords() > 0) return { ok: false, reason: 'finished' };
   if (!isLessonsSharingEnabled()) return { ok: false, reason: 'sharing_off' };
   if (!sameLists(shown, trialSetup())) return { ok: false, reason: 'lists_changed' };
   const startedAt = now.toISOString();
-  save({ id: TRIAL_ID, consent_version: TRIAL_CONSENT_VERSION, started_at: startedAt, use: shown.use, ignore: shown.ignore });
+  save({ id: shown.id, consent_version: TRIAL_CONSENT_VERSION, started_at: startedAt, use: shown.use, ignore: shown.ignore });
   return { ok: true, startedAt, endsAt: new Date(now.getTime() + TRIAL_DAYS * DAY_MS).toISOString() };
 }
 
 /** `veto lessons off`: the trial entry goes with the records. */
 export function clearTrialConfig(): void {
-  setConfig({ lessons: { ...getConfig().lessons, trial: null } });
+  setConfig({ lessons: { ...getConfig().lessons, trial: null, ...(getConfig().lessons.trial3 !== undefined ? { trial3: null } : {}) } });
 }

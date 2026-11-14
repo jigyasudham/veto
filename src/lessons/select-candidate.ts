@@ -1,4 +1,4 @@
-// Candidate v1: explicit local preview only. Trial 2 keeps select.ts unchanged.
+// Candidate v1: local preview and consented Trial 3. Trial 2 keeps select.ts unchanged.
 import { basename, dirname } from 'node:path';
 import { getDb } from '../memory/local.js';
 import { tokenize } from '../transcripts/tokenize.js';
@@ -9,6 +9,8 @@ import { resolveProjectIdentity } from './identity.js';
 import { claudeProjectSlug, sameClaudeSlug } from './source-project.js';
 import { disabledLessonSources, isProjectExcluded, lessonEntryKey, type LessonRow } from './store.js';
 import { trialPhase } from './trial-setup.js';
+import { activeLessonsTrial } from '../memory/config.js';
+import { trialWindow } from './trial.js';
 
 export const CANDIDATE_VERSION = 'lexical-alias-v1';
 const ALIASES: Record<string, string> = {
@@ -110,8 +112,8 @@ function rank(query: string, candidates: LessonRow[], collection: LessonRow[]): 
 }
 
 /**
- * Deterministic, non-delivering candidate for explicit count-only preview.
- * Never called by the shadow trial; refused while that trial is running.
+ * Deterministic, non-delivering candidate. The preview entry refuses a running
+ * trial; the collector entry requires separate Trial 3 consent.
  *
  * `asOf` is when the session began. Only notes as they were then count: a note
  * harvested later did not exist for this session, and one that changed since
@@ -119,7 +121,18 @@ function rank(query: string, candidates: LessonRow[], collection: LessonRow[]): 
  * moves only when a note's content changes (store.ts syncLessons), which is
  * what makes this cut exact; tests/lessons/trial.test.ts holds it to that.
  */
-export function selectLessonsCandidate(input: { query: string; targetProjectDir: string; targetHost: LessonSource; now?: number; asOf?: number }): ShadowSelection {
+type SelectionInput = { query: string; targetProjectDir: string; targetHost: LessonSource; now?: number; asOf?: number };
+
+export function selectLessonsCandidate(input: SelectionInput): ShadowSelection {
+  return selectCandidate(input, trialPhase() === 'running');
+}
+
+/** Only the consented Trial 3 collector may evaluate the candidate while running. */
+export function selectLessonsForTrialThree(input: SelectionInput): ShadowSelection {
+  return selectCandidate(input, activeLessonsTrial()?.id !== 3 || !trialWindow());
+}
+
+function selectCandidate(input: SelectionInput, refused: boolean): ShadowSelection {
   const diagnostics: SelectionDiagnostics = {
     total: 0, notYetAvailable: 0, changedSinceStart: 0, disabledSource: 0,
     nativeContext: 0, staleStatus: 0, outsideScope: 0, eligible: 0,
@@ -127,7 +140,7 @@ export function selectLessonsCandidate(input: { query: string; targetProjectDir:
   };
   const none = { selectorVersion: CANDIDATE_VERSION as typeof CANDIDATE_VERSION, diagnostics, lessonIds: [], estimatedTokens: 0, poolSize: 0, changedSinceStart: 0 };
   if (!isLessonsSharingEnabled()) return { ...none, targetProjectIdentity: null, reason: 'consent_off' };
-  if (trialPhase() === 'running') return { ...none, targetProjectIdentity: null, reason: 'trial_running' };
+  if (refused) return { ...none, targetProjectIdentity: null, reason: 'trial_running' };
   const targetIdentity = resolveProjectIdentity(input.targetProjectDir);
   if (isProjectExcluded(targetIdentity)) return { ...none, targetProjectIdentity: targetIdentity, reason: 'project_excluded' };
   const now = input.asOf ?? input.now ?? Date.now();

@@ -15,7 +15,7 @@ import type { LessonRow } from '../lessons/store.js';
 import {
   TRIAL_DAYS, TRIAL_ID, TRIAL_NOTE_TARGET, trialBacklog, trialOneSessions, trialStalled, trialStatus, type TrialStatus,
 } from '../lessons/trial.js';
-import { addTrialProject, clearTrialLists, closeTrial, startTrial, trialPhase, trialSetup, type TrialRefusal } from '../lessons/trial-setup.js';
+import { addTrialProject, clearTrialLists, closeTrial, prepareTrialThree, startTrial, trialPhase, trialSetup, type TrialRefusal } from '../lessons/trial-setup.js';
 import { isLessonsSharingEnabled } from '../memory/config.js';
 import { selectLessonsCandidate } from '../lessons/select-candidate.js';
 
@@ -34,6 +34,8 @@ const USAGE = [
   'veto lessons trial          (in your own terminal: shows the trial, starts it when you type yes)',
   'veto lessons trial use|ignore [<dir>]   ·   veto lessons trial clear   (before it starts)',
   'veto lessons trial close    (withdraw trial consent; keep notes and evidence)',
+  'veto lessons trial prepare  (prepare Trial 3; retain Trial 2; does not start)',
+  'veto lessons trial previous (show the retained Trial 2 result)',
   'veto lessons preview <query> (candidate selector counts only; refused while trial runs)',
   'veto lessons list [--scope=user|machine|project] [--source=claude|codex|gemini] [--shared] [--held] [--project=<dir>] [--json]',
   'veto lessons why <id>',
@@ -98,7 +100,7 @@ function sharingLine(c: Colors): string {
 function trialLines(t: TrialStatus, c: Colors, now = Date.now()): string[] {
   const n = (outcome: keyof TrialStatus['byOutcome']) => t.byOutcome[outcome] ?? 0;
   const day = Math.min(TRIAL_DAYS, Math.floor((now - Date.parse(t.startedAt)) / (24 * 60 * 60 * 1000)) + 1);
-  const progress = `${t.notesChosen} of ${t.target} notes chosen`;
+  const progress = `${t.notesChosen} of ${t.target} notes chosen${t.trialId === 3 ? ' · Trial 3 · lexical-alias-v1' : ''}`;
   if (t.closedEarly) return [
     `  Trial:        closed by owner${t.closedAt ? ` at ${t.closedAt}` : ''} · ${progress}`,
     `                ${t.qualifying} sessions counted · ${t.skipped} skipped · ${t.archived} kept for checking`,
@@ -431,6 +433,21 @@ async function trial(args: string[], cwd: string, out: Out, c: Colors, io: Conse
     return 1;
   };
   out('');
+  if (action === 'prepare') {
+    if (args.length !== 1) { out('  Usage: veto lessons trial prepare'); return 1; }
+    const result = prepareTrialThree();
+    if (!result.ok) return refusal(result);
+    out('  Trial 3 prepared with lexical-alias-v1. Trial 2 evidence and receipt kept. Nothing started.');
+    out('  Review the project lists and frozen protocol, then run in your own terminal: veto lessons trial');
+    return 0;
+  }
+  if (action === 'previous') {
+    if (args.length !== 1) { out('  Usage: veto lessons trial previous'); return 1; }
+    const previous = trialStatus(Date.now(), 2);
+    if (previous) for (const line of trialLines(previous, c)) out(line);
+    else out('  No started Trial 2 receipt.');
+    return 0;
+  }
   if (action === 'use' || action === 'ignore') {
     const r = addTrialProject(action, dir ?? cwd);
     if (!r.ok) return refusal(r);
