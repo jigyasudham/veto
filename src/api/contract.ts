@@ -114,6 +114,8 @@ export const snapshotDataSchema = z.object({
     qualifying: z.number().describe('Codex sessions that counted: a request, in a project with notes to choose from.'),
     target: z.number().describe('The number the trial stops at, in the unit stop_on names; sessions when stop_on is absent.'),
     complete: z.boolean(),
+    closed_early: z.boolean().optional().describe('Owner terminated the trial; not a completed prospective result.'),
+    closed_at: z.string().nullable().optional(),
     outcomes: z.record(z.string(), z.number()),
     drift: z.boolean(),
     // Added in Veto 3.9.0 (council a085b10e); absent from older backends.

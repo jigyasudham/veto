@@ -25,6 +25,8 @@ export type TrialConfig = {
   started_at: string | null;
   use: TrialProject[];
   ignore: TrialProject[];
+  /** Owner termination; consent_version = -1 also stops pre-closure clients. */
+  closed_at?: string;
 };
 
 // Harvest-and-Share is separate from transcript capture. It is OFF until the
@@ -156,6 +158,8 @@ function normalizeTrial(raw: unknown): TrialConfig | null {
     started_at: typeof t.started_at === 'string' ? t.started_at : null,
     use: list(t.use),
     ignore: list(t.ignore),
+    ...(typeof t.closed_at === 'string' && Number.isFinite(Date.parse(t.closed_at))
+      ? { closed_at: t.closed_at } : {}),
   };
 }
 

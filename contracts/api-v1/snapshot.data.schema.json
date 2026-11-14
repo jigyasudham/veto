@@ -214,6 +214,20 @@
         "complete": {
           "type": "boolean"
         },
+        "closed_early": {
+          "description": "Owner terminated the trial; not a completed prospective result.",
+          "type": "boolean"
+        },
+        "closed_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "outcomes": {
           "type": "object",
           "propertyNames": {

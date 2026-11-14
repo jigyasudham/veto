@@ -186,6 +186,7 @@ export function trialOneSessions(): number {
 
 /** Trial-2 records exist but no trial is running: the config was damaged or edited (council a085b10e, K8). */
 export function trialStalled(): boolean {
+  if (getConfig().lessons.trial?.consent_version === -1) return false;
   if (trialWindow()) return false;
   return (getDb().prepare(`SELECT COUNT(*) AS n FROM lesson_trial_sessions WHERE ${thisTrial()}`).get() as { n: number }).n > 0;
 }
@@ -234,6 +235,7 @@ export function runLessonsTrial(options: { budgetMs?: number; now?: number; capt
   let chosen = chosenNoteCount();
 
   for (let i = 0; i < files.length; i++) {
+    if (!trialWindow()) break; // Observe consent withdrawn by another process.
     if (options.budgetMs !== undefined && Date.now() - began >= options.budgetMs) { report.notReached = files.length - i; break; }
     // Checked before every session, so one pass stops at the session that reached the target (council a085b10e, K2).
     if (chosen >= TRIAL_NOTE_TARGET) break;
@@ -258,6 +260,7 @@ export function runLessonsTrial(options: { budgetMs?: number; now?: number; capt
     }
 
     const choice = selectLessonsForShadow({ query: head.request, targetProjectDir: head.cwd, targetHost: 'codex', asOf: head.startedAt });
+    if (!trialWindow()) break;
     if (choice.reason === 'consent_off') break;
     const outcome: TrialOutcome = choice.reason === 'project_excluded' ? 'project_excluded'
       : choice.poolSize === 0 ? 'no_notes'
@@ -280,7 +283,7 @@ export function runLessonsTrial(options: { budgetMs?: number; now?: number; capt
 export async function archiveTrialSessions(options: { now?: number } = {}): Promise<number> {
   let archived = 0;
   try {
-    if (!trialWindow()) return 0;
+    if (!evidenceWindow()) return 0;
     const db = getDb();
     const rows = db.prepare(`SELECT source_session_id, rollout_path, archive_state FROM lesson_trial_sessions
       WHERE ${thisTrial()} AND archive_state IN ('pending', 'capture_off') AND outcome NOT IN ('subagent', 'before_trial', 'trial_skipped')`).all() as Array<{ source_session_id: string; rollout_path: string; archive_state: string }>;
@@ -312,6 +315,8 @@ export type TrialStatus = {
   startedAt: string;
   endsAt: string;
   complete: boolean;
+  closedEarly?: boolean;
+  closedAt?: string | null;
   /** Sessions that counted (selected or no_match): the denominator for yield. */
   qualifying: number;
   /** Where the trial stops, in the unit stopOn names. */
@@ -326,7 +331,7 @@ export type TrialStatus = {
 };
 
 export function trialStatus(now = Date.now()): TrialStatus | null {
-  const window = trialWindow();
+  const window = evidenceWindow();
   if (!window) return null;
   const db = getDb();
   const byOutcome: Partial<Record<TrialOutcome, number>> = {};
@@ -338,11 +343,14 @@ export function trialStatus(now = Date.now()): TrialStatus | null {
   const recent = (db.prepare(`SELECT outcome FROM lesson_trial_sessions WHERE ${scope} AND outcome NOT IN ('subagent', 'before_trial', 'trial_skipped')
     ORDER BY started_at DESC LIMIT ?`).all(DRIFT_RUN) as Array<{ outcome: TrialOutcome }>).map(r => r.outcome);
   const notesChosen = chosenNoteCount();
+  const trial = getConfig().lessons.trial;
+  const closedEarly = trial?.consent_version === -1;
   return {
     trialId: TRIAL_ID,
     startedAt: new Date(window.startedAt).toISOString(),
     endsAt: new Date(window.endsAt).toISOString(),
-    complete: notesChosen >= TRIAL_NOTE_TARGET || now > window.endsAt,
+    complete: closedEarly || notesChosen >= TRIAL_NOTE_TARGET || now > window.endsAt,
+    ...(closedEarly ? { closedEarly: true, closedAt: trial?.closed_at ?? null } : {}),
     qualifying,
     target: TRIAL_NOTE_TARGET,
     stopOn: 'notes',
@@ -356,9 +364,18 @@ export function trialStatus(now = Date.now()): TrialStatus | null {
 
 /** Codex sessions this trial archived for the judge; empty with no trial. Read-only. */
 export function trialKeptSessionIds(): Set<string> {
-  if (!trialWindow()) return new Set();
+  if (!evidenceWindow()) return new Set();
   return new Set((getDb().prepare(`SELECT source_session_id FROM lesson_trial_sessions WHERE ${thisTrial()} AND archive_state = 'archived'`)
     .all() as Array<{ source_session_id: string }>).map(r => r.source_session_id));
+}
+
+/** Read/archival access after withdrawal is not permission to select more notes. */
+function evidenceWindow(): TrialWindow | null {
+  const config = getConfig().lessons;
+  if (config.trial?.consent_version === -1) {
+    return trialWindow({ ...config, trial: { ...config.trial, consent_version: TRIAL_CONSENT_VERSION } });
+  }
+  return trialWindow(config);
 }
 
 export type TrialBacklog = {

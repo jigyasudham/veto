@@ -25,6 +25,7 @@ export function trialSetup(): TrialConfig {
 
 export function trialPhase(now = Date.now()): TrialPhase {
   const trial = trialSetup();
+  if (trial.consent_version === -1) return 'finished';
   if (!trial.started_at || trial.consent_version !== TRIAL_CONSENT_VERSION) return 'setup';
   const status = trialStatus(now);
   if (status) return status.complete ? 'finished' : 'running';
@@ -42,6 +43,19 @@ function frozen(): TrialRefusal | null {
 function save(trial: TrialConfig): void {
   // setConfig re-reads the file just before writing, so nothing written since is lost (K1).
   setConfig({ lessons: { ...getConfig().lessons, trial } });
+}
+
+/** Withdraw trial consent without deleting notes, records or sharing consent.
+ * The negative consent sentinel survives normalization by 3.9.0 clients.
+ */
+export function closeTrial(now = new Date()): { ok: true; closedAt: string | null; alreadyClosed: boolean } | { ok: false; reason: 'not_started' | 'finished' } {
+  const trial = trialSetup();
+  if (trial.consent_version === -1) return { ok: true, closedAt: trial.closed_at ?? null, alreadyClosed: true };
+  if (!trial.started_at || !Number.isFinite(Date.parse(trial.started_at))) return { ok: false, reason: 'not_started' };
+  if (trialStatus(now.getTime())?.complete) return { ok: false, reason: 'finished' };
+  const closedAt = now.toISOString();
+  save({ ...trial, consent_version: -1, closed_at: closedAt });
+  return { ok: true, closedAt, alreadyClosed: false };
 }
 
 export function addTrialProject(list: TrialList, dir: string): { ok: true; entry: TrialProject; kind: 'git' | 'path'; added: boolean } | TrialRefusal {

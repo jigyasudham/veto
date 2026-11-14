@@ -15,8 +15,9 @@ import type { LessonRow } from '../lessons/store.js';
 import {
   TRIAL_DAYS, TRIAL_ID, TRIAL_NOTE_TARGET, trialBacklog, trialOneSessions, trialStalled, trialStatus, type TrialStatus,
 } from '../lessons/trial.js';
-import { addTrialProject, clearTrialLists, startTrial, trialPhase, trialSetup, type TrialRefusal } from '../lessons/trial-setup.js';
+import { addTrialProject, clearTrialLists, closeTrial, startTrial, trialPhase, trialSetup, type TrialRefusal } from '../lessons/trial-setup.js';
 import { isLessonsSharingEnabled } from '../memory/config.js';
+import { selectLessonsCandidate } from '../lessons/select-candidate.js';
 
 type Out = (line?: string) => void;
 type Colors = Record<'bold' | 'dim' | 'green' | 'yellow' | 'cyan' | 'red', (s: string) => string>;
@@ -32,6 +33,8 @@ const USAGE = [
   'veto lessons on             (in your own terminal: you type yes to accept)',
   'veto lessons trial          (in your own terminal: shows the trial, starts it when you type yes)',
   'veto lessons trial use|ignore [<dir>]   ·   veto lessons trial clear   (before it starts)',
+  'veto lessons trial close    (withdraw trial consent; keep notes and evidence)',
+  'veto lessons preview <query> (candidate selector counts only; refused while trial runs)',
   'veto lessons list [--scope=user|machine|project] [--source=claude|codex|gemini] [--shared] [--held] [--project=<dir>] [--json]',
   'veto lessons why <id>',
   'veto lessons forget <id>',
@@ -96,6 +99,11 @@ function trialLines(t: TrialStatus, c: Colors, now = Date.now()): string[] {
   const n = (outcome: keyof TrialStatus['byOutcome']) => t.byOutcome[outcome] ?? 0;
   const day = Math.min(TRIAL_DAYS, Math.floor((now - Date.parse(t.startedAt)) / (24 * 60 * 60 * 1000)) + 1);
   const progress = `${t.notesChosen} of ${t.target} notes chosen`;
+  if (t.closedEarly) return [
+    `  Trial:        closed by owner${t.closedAt ? ` at ${t.closedAt}` : ''} · ${progress}`,
+    `                ${t.qualifying} sessions counted · ${t.skipped} skipped · ${t.archived} kept for checking`,
+    '                Early termination; no completed prospective result. Nothing delivered.',
+  ];
   const lines = [`  Trial:        ${t.complete ? `finished · ${progress} · ready to be judged` : `day ${day} of ${TRIAL_DAYS} · ${progress}`}`];
   const parts = [`${plural(t.qualifying, 'Codex session')} counted`, `${n('selected')} with notes chosen`, `${n('no_match')} with none that fitted`];
   if (t.skipped) parts.push(`${t.skipped} skipped`);
@@ -433,6 +441,18 @@ async function trial(args: string[], cwd: string, out: Out, c: Colors, io: Conse
     out('');
     return 0;
   }
+  if (action === 'close') {
+    if (args.length !== 1) { out(c.red('  Usage: veto lessons trial close')); return 1; }
+    const result = closeTrial();
+    if (!result.ok) {
+      out(c.yellow(result.reason === 'finished' ? '  The trial already finished under its original rules. Nothing changed.' : '  No started trial to close. Nothing changed.'));
+      return 1;
+    }
+    out(`  Trial ${result.alreadyClosed ? 'already closed' : 'closed by owner'}. Notes and evidence kept; sharing consent unchanged.`);
+    const status = trialStatus();
+    if (status) for (const line of trialLines(status, c)) out(line);
+    return 0;
+  }
   if (action === 'clear') {
     const r = clearTrialLists();
     if (!r.ok) return refusal(r);
@@ -495,6 +515,7 @@ export function trialDoctorLines(color = true): { lines: string[]; issues: numbe
   let issues = 0;
   const ts = trialStatus();
   if (ts) {
+    if (ts.closedEarly) return { lines: trialLines(ts, c), issues: 0 };
     const mark = ts.drift ? c.red('✗') : c.green('✓');
     lines.push(`  ${mark} lessons trial ${ts.trialId}: ${ts.notesChosen}/${ts.target} notes chosen ${c.dim(`· ${ts.skipped} skipped · ends ${ts.endsAt.slice(0, 10)}${ts.complete ? ' · complete' : ''}`)}`);
     if (ts.drift) {
@@ -525,7 +546,22 @@ export function runLessonsCommand(
   const home = options.home;
   switch (sub) {
     case 'on': return on(out, c, home, options.io ?? terminalIo());
-    case 'trial': return trial(positional, cwd, out, c, options.io ?? terminalIo());
+    case 'trial': {
+      if (flags.size) { out('Trial commands do not accept flags. Nothing changed.'); return 1; }
+      return trial(positional, cwd, out, c, options.io ?? terminalIo());
+    }
+    case 'preview': {
+      const query = positional.join(' ').trim();
+      if (!query || query.length > 4096 || flags.size) {
+        out('Usage: veto lessons preview <query> (1–4096 characters; current project, Codex target)');
+        return 1;
+      }
+      const result = selectLessonsCandidate({ query, targetProjectDir: cwd, targetHost: 'codex' });
+      // Counts only: explicit inspection must not turn into note delivery.
+      out(JSON.stringify({ selector: result.selectorVersion, reason: result.reason,
+        estimated_tokens: result.estimatedTokens, counts: result.diagnostics }));
+      return ['trial_running', 'consent_off', 'project_excluded'].includes(result.reason) ? 1 : 0;
+    }
     case 'status': return status(out, c, home);
     case 'list': return list(flags, out, c, home);
     case 'why': return why(positional[0], out, c, home);

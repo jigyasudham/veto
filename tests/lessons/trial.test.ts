@@ -9,6 +9,7 @@ import { harvestOnSave } from '../../src/lessons/on-save.js';
 import { claudeProjectSlug } from '../../src/lessons/source-project.js';
 import { disableLessonSource } from '../../src/lessons/store.js';
 import { runLessonsCommand } from '../../src/cli/lessons.js';
+import { closeTrial } from '../../src/lessons/trial-setup.js';
 import {
   TRIAL_CONSENT_VERSION, TRIAL_DAYS, TRIAL_ID, TRIAL_NOTE_TARGET, archiveTrialSessions, chosenNoteCount, readRolloutHead,
   runLessonsTrial, scoredTrialNotes, trialOneSessions, trialStalled, trialStatus,
@@ -82,6 +83,26 @@ afterEach(() => {
   delete process.env.VETO_CONFIG_PATH;
   delete process.env.CODEX_HOME;
   for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+describe('owner withdrawal', () => {
+  it('keeps existing nonempty evidence and stops recording later sessions', async () => {
+    rollout({ start: trialStart + HOUR, messages: ['inline script backslashes'] });
+    runLessonsTrial({ now: trialStart + 2 * HOUR });
+    const before = rows();
+    expect(before).toHaveLength(1);
+    expect(before[0].outcome).toBe('selected');
+    const lines: string[] = [];
+    expect(await runLessonsCommand(['trial', 'close', '--dry-run'], { out: () => {} })).toBe(1);
+    expect(trialStatus()?.closedEarly).toBeUndefined();
+    expect(await runLessonsCommand(['trial', 'close'], { out: line => lines.push(line ?? ''), color: false })).toBe(0);
+    expect(lines.join('\n')).toContain('Early termination');
+    expect(lines.join('\n')).not.toContain('ready to be judged');
+    rollout({ start: trialStart + 3 * HOUR, messages: ['inline script backslashes'] });
+    expect(runLessonsTrial({ now: trialStart + 4 * HOUR }).logged).toBe(0);
+    expect(rows()).toEqual(before);
+    expect(closeTrial()).toMatchObject({ ok: true, alreadyClosed: true });
+  });
 });
 
 describe("reading a Codex session's first request", () => {

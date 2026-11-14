@@ -107,6 +107,7 @@ export async function apiSnapshot(ctx: ApiContext, req: { project: string; db?: 
         return {
           state: 'ok', mode: 'shadow', started_at: t.startedAt, ends_at: t.endsAt, qualifying: t.qualifying, target: t.target,
           complete: t.complete, outcomes: t.byOutcome, drift: t.drift,
+          ...(t.closedEarly ? { closed_early: true, closed_at: t.closedAt ?? null } : {}),
           // Counts only: the trial's lists name the user's folders (council a085b10e, K9).
           trial_id: t.trialId, stop_on: t.stopOn, notes_chosen: t.notesChosen, notes_target: t.target, skipped: t.skipped,
         };

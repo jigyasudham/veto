@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { enableLessonsSharing, getConfig, isLessonsSharingEnabled, setConfig } from '../../src/memory/config.js';
-import { resetDb } from '../../src/memory/local.js';
-import { addTrialProject, clearTrialLists, startTrial, trialPhase, trialSetup } from '../../src/lessons/trial-setup.js';
-import { TRIAL_DAYS } from '../../src/lessons/trial.js';
+import { getDb, resetDb } from '../../src/memory/local.js';
+import { addTrialProject, clearTrialLists, closeTrial, startTrial, trialPhase, trialSetup } from '../../src/lessons/trial-setup.js';
+import { TRIAL_DAYS, runLessonsTrial, trialStatus, trialWindow, trialStalled } from '../../src/lessons/trial.js';
 
 let home: string;
 beforeEach(() => {
@@ -86,10 +86,41 @@ describe('setting up the trial', () => {
     expect(startTrial(trialSetup())).toEqual({ ok: false, reason: 'sharing_off' });
   });
 
+  it('closes without deleting records, changing sharing consent, or allowing restart', () => {
+    expect(closeTrial()).toEqual({ ok: false, reason: 'not_started' });
+    startTrial(trialSetup());
+    const before = getConfig().lessons;
+    const rows = getDb().prepare('SELECT COUNT(*) AS n FROM lesson_trial_sessions').get();
+    const closedAt = new Date().toISOString();
+    expect(closeTrial(new Date(closedAt))).toEqual({ ok: true, closedAt, alreadyClosed: false });
+    expect(trialWindow()).toBeNull();
+    expect(trialPhase()).toBe('finished');
+    expect(trialStatus()).toMatchObject({ complete: true, closedEarly: true, closedAt });
+    expect(trialStalled()).toBe(false);
+    expect(runLessonsTrial()).toEqual({ logged: 0, waiting: 0, notReached: 0 });
+    expect(getDb().prepare('SELECT COUNT(*) AS n FROM lesson_trial_sessions').get()).toEqual(rows);
+    expect(getConfig().lessons).toEqual({ ...before, trial: { ...before.trial!, consent_version: -1, closed_at: closedAt } });
+    expect(closeTrial()).toEqual({ ok: true, closedAt, alreadyClosed: true });
+    expect(startTrial(trialSetup())).toEqual({ ok: false, reason: 'finished' });
+    expect(clearTrialLists()).toEqual({ ok: false, reason: 'finished' });
+  });
+
+  it('recognizes withdrawal even when an old config writer drops closure metadata', () => {
+    startTrial(trialSetup());
+    closeTrial();
+    const config = getConfig();
+    delete config.lessons.trial!.closed_at;
+    setConfig(config);
+    expect(trialPhase()).toBe('finished');
+    expect(trialStatus()).toMatchObject({ closedEarly: true, closedAt: null });
+    expect(trialWindow()).toBeNull();
+  });
+
   it('cannot be started again once finished', () => {
     startTrial(trialSetup(), new Date(Date.now() - (TRIAL_DAYS + 1) * 24 * 60 * 60 * 1000));
     expect(trialPhase()).toBe('finished');
     expect(startTrial(trialSetup())).toEqual({ ok: false, reason: 'finished' });
+    expect(closeTrial()).toEqual({ ok: false, reason: 'finished' });
   });
 
   it('veto lessons off clears the trial entry with the records (K4)', async () => {
