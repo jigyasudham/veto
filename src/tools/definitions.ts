@@ -1548,7 +1548,7 @@ export const TOOL_DEFINITIONS = [
       properties: {
         session_id: { type: 'string', description: 'Event-trace mode: the veto session ID to replay.' },
         query: { type: 'string', description: 'Recall mode (Phase 1): free-text/identifier search over archived transcripts.' },
-        project_dir: { type: 'string', description: 'Recall scope: absolute project path (defaults to the active project).' },
+        project_dir: { type: 'string', description: 'Recall scope for search and expansion: absolute project path (defaults to the active project, then the server working directory). Expansion rejects IDs from other projects.' },
         source_session_id: { type: 'string', description: 'Recall scope: restrict to one source (e.g. Claude) session.' },
         limit: { type: 'number', description: 'Recall: max hits to return (default 8).' },
         expand: {

@@ -142,6 +142,14 @@ export const sessionHandlers: HandlerMap = {
       });
     } catch { /* transcript capture is best-effort; never breaks save */ }
 
+    // Delete archives the retention window has passed (council a9ac51e4). Runs
+    // after capture, so the chat being saved is never the one that goes.
+    let transcriptsPruned = 0;
+    try {
+      const { pruneOnSave } = await import('../../transcripts/on-save.js');
+      transcriptsPruned = await pruneOnSave();
+    } catch { /* pruning is best-effort; never breaks save */ }
+
     // Re-read each AI's own memory so notes written during this session are
     // recorded without the user having to run anything. Time-boxed, consent-
     // gated, and never a reason a save fails. Delivers nothing to any AI.
@@ -186,6 +194,7 @@ export const sessionHandlers: HandlerMap = {
       ...(wasUpdate ? {} : { usage_pct: result.usage_pct, context_warning: result.context_warning }),
       ...(truncationWarnings.length > 0 ? { truncation_warnings: truncationWarnings } : {}),
       ...(transcriptOnSave ? { transcript: transcriptOnSave } : {}),
+      ...(transcriptsPruned > 0 ? { transcripts_pruned: transcriptsPruned } : {}),
       ...(lessonsOnSave ? { lessons: lessonsOnSave } : {}),
       ...(platformNote ? { platform_note: platformNote } : {}),
     };
@@ -331,12 +340,14 @@ export const sessionHandlers: HandlerMap = {
   },
 
   veto_session_replay: async ({ args }) => {
+    const projectDir = normalizeProjectDir(String(args?.project_dir ?? '').trim() || getActiveProjectDir()?.trim() || process.cwd());
     // Transcript recall (VERSION-3 item 6). Phase 2 — expand to exact masked lines.
     if (args?.expand && typeof args.expand === 'object') {
       try {
         const { recallExpand } = await import('../../transcripts/recall.js');
         const e = args.expand as Record<string, unknown>;
         const res = recallExpand({
+          projectDir,
           eventId: e.event_id ? String(e.event_id) : undefined,
           archiveId: e.archive_id ? String(e.archive_id) : undefined,
           sourceSessionId: e.source_session_id ? String(e.source_session_id) : undefined,
@@ -354,7 +365,6 @@ export const sessionHandlers: HandlerMap = {
     if (args?.query) {
       try {
         const { recallQuery } = await import('../../transcripts/recall.js');
-        const projectDir = args.project_dir ? normalizeProjectDir(String(args.project_dir)) : (getActiveProjectDir() ?? undefined);
         const res = recallQuery({
           query: String(args.query),
           projectDir: projectDir ?? undefined,

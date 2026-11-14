@@ -354,6 +354,13 @@ export function trialStatus(now = Date.now()): TrialStatus | null {
   };
 }
 
+/** Codex sessions this trial archived for the judge; empty with no trial. Read-only. */
+export function trialKeptSessionIds(): Set<string> {
+  if (!trialWindow()) return new Set();
+  return new Set((getDb().prepare(`SELECT source_session_id FROM lesson_trial_sessions WHERE ${thisTrial()} AND archive_state = 'archived'`)
+    .all() as Array<{ source_session_id: string }>).map(r => r.source_session_id));
+}
+
 export type TrialBacklog = {
   /** Codex rollouts in the dated folders the window touches. */
   rollouts: number;

@@ -904,9 +904,61 @@ async function transcriptsCommand() {
     return;
   }
 
+  if (sub === 'retention') {
+    // Council a9ac51e4: a value that would delete anything needs --yes, and the
+    // trial's evidence is named separately, because the delete cannot be undone.
+    const value = args.find(a => !a.startsWith('--'));
+    const current = captureStatus();
+    const dayWord = (n: number) => `${n} day${n === 1 ? '' : 's'}`;
+    const showRetention = (days: number) => days > 0
+      ? `archives last captured more than ${dayWord(days)} ago are deleted at the next save`
+      : 'off — archives are kept until you purge them';
+    if (!value) {
+      console.log('');
+      console.log(`  Retention: ${showRetention(current.retention_days)}`);
+      console.log(c.dim('  Change it: veto transcripts retention <days 1-3650>|off'));
+      console.log('');
+      return;
+    }
+    const days = value === 'off' ? 0 : /^\d+$/.test(value) ? Number(value) : NaN;
+    if (!(days === 0 || (days >= 1 && days <= 3650))) {
+      console.error(c.red('  Usage: veto transcripts retention <days 1-3650>|off [--yes]'));
+      process.exit(1);
+    }
+    const { existsSync } = await import('node:fs');
+    const { transcriptsDbPath } = await import('./transcripts/store.js');
+    let doomed: Array<{ source: string; source_session_id: string }> = [];
+    if (days > 0 && existsSync(transcriptsDbPath())) {
+      const { expiredArchives } = await import('./transcripts/manage.js');
+      doomed = expiredArchives(days);
+    }
+    if (doomed.length && !args.includes('--yes')) {
+      let kept = 0;
+      try {
+        const { trialKeptSessionIds } = await import('./lessons/trial.js');
+        const ids = trialKeptSessionIds();
+        kept = doomed.filter(a => a.source === 'codex' && ids.has(a.source_session_id)).length;
+      } catch { /* no lessons store: nothing of the trial's to lose */ }
+      console.log('');
+      console.log(c.yellow(`  ${doomed.length} archived chat(s) were last captured more than ${dayWord(days)} ago.`));
+      console.log(c.yellow('  They would be deleted at the next save, and that cannot be undone.'));
+      if (kept) console.log(c.yellow(`  ${kept} of them are sessions the lessons trial kept for scoring; the trial loses that evidence.`));
+      console.log(c.dim(`  To go ahead: veto transcripts retention ${value} --yes`));
+      console.log('');
+      process.exit(1);
+    }
+    const { getConfig, setConfig } = await import('./memory/config.js');
+    setConfig({ transcripts: { ...getConfig().transcripts, retention_days: days } });
+    console.log('');
+    console.log(c.green(`  ✓ Retention: ${showRetention(days)}`));
+    if (doomed.length) console.log(c.dim(`  ${doomed.length} archived chat(s) will be deleted at the next save.`));
+    console.log('');
+    return;
+  }
+
   if (sub === 'status') {
     const s = captureStatus();
-    const { transcriptsDiskUsage, fmtBytes } = await import('./transcripts/manage.js');
+    const { transcriptsDiskUsage, fmtBytes, oldestArchiveAt } = await import('./transcripts/manage.js');
     let disk; try { disk = transcriptsDiskUsage(); } catch { disk = null; }
     console.log('');
     console.log(c.bold('  Veto Transcript Capture'));
@@ -914,12 +966,15 @@ async function transcriptsCommand() {
     const state = s.effective ? c.green('enabled') : s.needsReconsent ? c.yellow('needs re-consent — run: veto transcripts enable') : c.dim('disabled');
     console.log(`  Capture:     ${state}`);
     console.log(`  Archive dir: ${c.dim(s.dir)}${s.usingDefaultDir ? c.dim('  (default)') : ''}`);
-    console.log(`  Retention:   ${s.retention_days} days`);
+    let oldest: string | null = null;
+    try { oldest = disk?.archives ? oldestArchiveAt() : null; } catch { /* no store yet */ }
+    const oldestNote = oldest ? c.dim(` (oldest archive last captured ${Math.floor((Date.now() - Date.parse(oldest)) / 86_400_000)} days ago)`) : '';
+    console.log(`  Retention:   ${s.retention_days > 0 ? `${s.retention_days} days` : 'off — archives are kept until you purge them'}${oldestNote}`);
     if (disk) console.log(`  Disk usage:  ${fmtBytes(disk.totalBytes)} ${c.dim(`(${disk.archives} session(s); ${fmtBytes(disk.archiveBytes)} archives + ${fmtBytes(disk.dbBytes)} index)`)}`);
     if (s.consent_at) console.log(`  Consent:     ${c.dim(`v${s.consent_version} · accepted ${s.consent_at}`)}`);
     if (s.cloudSyncWarning) console.log(c.yellow(`  ⚠ Archive dir looks cloud-synced (${s.cloudSyncWarning}) — consider a local path.`));
     console.log('');
-    console.log(c.dim('  enable · disable · list · sources · metric · show <id> · purge <id>|--project <dir>|--all'));
+    console.log(c.dim('  enable · disable · retention <days>|off · list · sources · metric · show <id> · purge <id>|--project <dir>|--all'));
     console.log('');
     return;
   }
@@ -1033,7 +1088,7 @@ async function transcriptsCommand() {
   }
 
   console.error(c.red(`  Unknown transcripts subcommand: ${sub}`));
-  console.error(c.dim('  Usage: veto transcripts <enable|disable|status|list|show|purge>'));
+  console.error(c.dim('  Usage: veto transcripts <enable|disable|status|retention|list|show|purge>'));
   process.exit(1);
 }
 

@@ -33,11 +33,12 @@ export function archivesForProject(projectDir: string): { id: string; source_ses
 }
 
 /** A host session id names one session whichever CLI it came from. */
-function archiveForSession(sourceSessionId: string): { id: string; source_session_id: string } | null {
+function archiveForSession(sourceSessionId: string, projectDir?: string): { id: string; source_session_id: string } | null {
   const db = getTranscriptsDb();
+  const scope = projectDir ? ` AND ${projectKeySql('project_dir')} = ?` : '';
   return (db.prepare(
-    `SELECT id, source_session_id FROM archives WHERE source_session_id = ? ORDER BY updated_at DESC LIMIT 1`
-  ).get(sourceSessionId) as { id: string; source_session_id: string } | undefined) ?? null;
+    `SELECT id, source_session_id FROM archives WHERE source_session_id = ?${scope} ORDER BY updated_at DESC LIMIT 1`
+  ).get(...(projectDir ? [sourceSessionId, projectKey(projectDir)] : [sourceSessionId])) as { id: string; source_session_id: string } | undefined) ?? null;
 }
 
 export type RecallQueryInput = {
@@ -65,7 +66,7 @@ export type RecallQueryResult = {
 /** Phase 1 — search + navigate. Ensures scope is indexed, returns TOC + hits. */
 export function recallQuery(input: RecallQueryInput): RecallQueryResult {
   const scopeArchives = input.sourceSessionId
-    ? ([archiveForSession(input.sourceSessionId)].filter(Boolean) as { id: string; source_session_id: string }[])
+    ? ([archiveForSession(input.sourceSessionId, input.projectDir)].filter(Boolean) as { id: string; source_session_id: string }[])
     : input.projectDir
       ? archivesForProject(input.projectDir)
       : [];
@@ -140,6 +141,8 @@ export function recallQuery(input: RecallQueryInput): RecallQueryResult {
 }
 
 export type RecallExpandInput = {
+  /** When supplied, reject foreign and missing targets identically before reading text. */
+  projectDir?: string;
   eventId?: string;
   archiveId?: string;
   sourceSessionId?: string;
@@ -156,12 +159,25 @@ export type RecallExpandResult = ExpandResult & { disclaimer: string };
 export function recallExpand(input: RecallExpandInput): RecallExpandResult {
   const wrap = (r: ExpandResult): RecallExpandResult => ({ ...r, disclaimer: DATA_NOTE });
 
+  if (input.projectDir && (input.eventId || input.archiveId || input.sourceSessionId)) {
+    const db = getTranscriptsDb();
+    const archiveId = input.eventId
+      ? (db.prepare('SELECT archive_id FROM events WHERE id = ?').get(input.eventId) as { archive_id: string } | undefined)?.archive_id
+      : input.archiveId ?? (input.sourceSessionId ? archiveForSession(input.sourceSessionId, input.projectDir)?.id : undefined);
+    const archive = archiveId
+      ? db.prepare('SELECT project_dir FROM archives WHERE id = ?').get(archiveId) as { project_dir: string | null } | undefined
+      : undefined;
+    if (!archive?.project_dir || projectKey(archive.project_dir) !== projectKey(input.projectDir)) {
+      return wrap({ ok: false, reason: 'not_found' });
+    }
+  }
+
   if (input.eventId) return wrap(expandEvent(input.eventId, input.raw === true));
 
   // Resolve the archive from an explicit id or a session id.
   let archiveId = input.archiveId;
   if (!archiveId && input.sourceSessionId) {
-    archiveId = archiveForSession(input.sourceSessionId)?.id;
+    archiveId = archiveForSession(input.sourceSessionId, input.projectDir)?.id;
   }
   if (!archiveId) return wrap({ ok: false, reason: 'need eventId, archiveId, or sourceSessionId' });
 
