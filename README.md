@@ -1,6 +1,6 @@
 # veto
 
-Release candidate: [3.10.0 — trial closure and candidate selection diagnostics](RELEASE-NOTES.md).
+Release candidate: [3.11.0 — separately consented Trial 3](RELEASE-NOTES.md).
 
 [![npm version](https://img.shields.io/npm/v/@jigyasudham/veto)](https://www.npmjs.com/package/@jigyasudham/veto)
 [![npm downloads](https://img.shields.io/npm/dt/@jigyasudham/veto)](https://www.npmjs.com/package/@jigyasudham/veto)
@@ -638,6 +638,15 @@ veto lessons off                 # Turn sharing off and delete everything Veto c
 With sharing on, every `veto_session_save` also re-reads each AI's memory and records what changed, so a note an AI wrote today is picked up without you running anything. A file that has not changed costs one check of its size and date, which adds about 20 ms to a save. The pass is capped at 150 ms a save, anything it does not reach waits for the next save, and it can never cause a save to fail. Turning sharing on reads everything once, up front, and `veto lessons` commands always check every file. To stop only the save-time pass, set `lessons.harvest_on_save` to `false` in `~/.veto/config.json`.
 
 ### The trial
+
+**Trial 3 (3.11.0):** after Trial 2 closes or finishes, run
+`veto lessons trial prepare`. This preserves Trial 2 and prepares the improved
+lexical alias selector with fresh consent and the previous project lists.
+Review the [Trial 3 protocol](TRIAL-3.md), adjust the lists if needed, and then
+run `veto lessons trial` in your own terminal to start. Preparation alone does
+not start collection. `veto lessons trial previous` shows the retained Trial 2
+status; `veto lessons trial close` stops the active trial without deletion.
+Upgrade and reconnect every client first. No note is delivered to any AI.
 
 Before Veto gives any AI a note, it has to show that the notes it would give are real and useful. The trial is how: it records what Veto *would* have given, and gives nothing. It is opt-in on its own: turning sharing on does not start it.
 

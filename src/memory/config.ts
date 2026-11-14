@@ -52,6 +52,8 @@ export type LessonsConfig = {
    * trial (council a085b10e). Holds project identities, never note text.
    */
   trial: TrialConfig | null;
+  /** Trial 3 has separate consent; the Trial 2 receipt is never overwritten. */
+  trial3?: TrialConfig | null;
 };
 
 // Consent v3 (owner, 2026-09-22). Since 3.9.0 it covers reading and keeping
@@ -142,7 +144,13 @@ function normalizeLessons(raw: Partial<LessonsConfig> | undefined): LessonsConfi
     harvest_on_save: raw?.harvest_on_save !== false,
     first_harvest_at: typeof raw?.first_harvest_at === 'string' ? raw.first_harvest_at : null,
     trial: normalizeTrial((raw as { trial?: unknown } | undefined)?.trial),
+    ...(raw?.trial3 !== undefined ? { trial3: normalizeTrial(raw.trial3) } : {}),
   };
+}
+
+/** Unknown trial ids fail closed in the collector. */
+export function activeLessonsTrial(config: LessonsConfig = getConfig().lessons): TrialConfig | null {
+  return config.trial3 ?? config.trial;
 }
 
 function normalizeTrial(raw: unknown): TrialConfig | null {
@@ -230,6 +238,7 @@ export function enableLessonsSharing(): LessonsConfig {
     harvest_on_save: getConfig().lessons.harvest_on_save,
     first_harvest_at: getConfig().lessons.first_harvest_at,
     trial: getConfig().lessons.trial,
+    ...(getConfig().lessons.trial3 !== undefined ? { trial3: getConfig().lessons.trial3 } : {}),
   };
   setConfig({ lessons });
   return lessons;

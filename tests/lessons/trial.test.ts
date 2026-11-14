@@ -1,15 +1,18 @@
 import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as configModule from '../../src/memory/config.js';
 import { enableLessonsSharing, getConfig, setConfig } from '../../src/memory/config.js';
 import { getDb, resetDb } from '../../src/memory/local.js';
 import { syncLessonSources } from '../../src/lessons/harvest.js';
 import { harvestOnSave } from '../../src/lessons/on-save.js';
 import { claudeProjectSlug } from '../../src/lessons/source-project.js';
-import { disableLessonSource } from '../../src/lessons/store.js';
+import { disableLessonSource, syncLessons } from '../../src/lessons/store.js';
+import { resolveProjectIdentity } from '../../src/lessons/identity.js';
 import { runLessonsCommand } from '../../src/cli/lessons.js';
-import { closeTrial } from '../../src/lessons/trial-setup.js';
+import { closeTrial, prepareTrialThree, startTrial as acceptTrial, trialSetup } from '../../src/lessons/trial-setup.js';
+import { selectLessonsCandidate } from '../../src/lessons/select-candidate.js';
 import {
   TRIAL_CONSENT_VERSION, TRIAL_DAYS, TRIAL_ID, TRIAL_NOTE_TARGET, archiveTrialSessions, chosenNoteCount, readRolloutHead,
   runLessonsTrial, scoredTrialNotes, trialOneSessions, trialStalled, trialStatus,
@@ -86,6 +89,89 @@ afterEach(() => {
 });
 
 describe('owner withdrawal', () => {
+  it('stops if another client switches trials during a collection pass', () => {
+    rollout({ start: trialStart + HOUR, messages: ['inline script backslashes'] });
+    const previous = getConfig();
+    closeTrial();
+    prepareTrialThree();
+    acceptTrial(trialSetup(), new Date(trialStart + 2 * HOUR));
+    const latest = getConfig();
+    // The pass sees Trial 2 at entry; another client has started Trial 3 by its next config read.
+    const read = vi.spyOn(configModule, 'getConfig').mockReturnValueOnce(previous).mockReturnValue(latest);
+    try {
+      expect(runLessonsTrial({ now: trialStart + 3 * HOUR }).logged).toBe(0);
+      expect(rows()).toEqual([]);
+    } finally { read.mockRestore(); }
+  });
+
+  it('enforces the note stop and ignores old trial counts in Trial 3', () => {
+    closeTrial();
+    prepareTrialThree();
+    acceptTrial(trialSetup(), new Date(trialStart));
+    for (let i = 1; i <= 20; i++) rollout({ start: trialStart + i * HOUR, messages: ['inline script backslashes'] });
+    runLessonsTrial({ now: trialStart + 21 * HOUR });
+    expect(trialStatus(trialStart + 21 * HOUR)).toMatchObject({ trialId: 3, complete: true, notesChosen: 12 });
+    expect(runLessonsTrial({ now: trialStart + 22 * HOUR }).logged).toBe(0);
+    expect(trialStatus(Date.now(), 2)?.notesChosen).toBe(0);
+  });
+
+  it('applies Trial 3 project exclusions and the fixed time window', () => {
+    closeTrial();
+    prepareTrialThree();
+    const ignored = join(home, 'ignored');
+    mkdirSync(ignored);
+    const config = getConfig();
+    config.lessons.trial3!.ignore = [{ identity: resolveProjectIdentity(ignored), label: 'ignored' }];
+    setConfig(config);
+    acceptTrial(trialSetup(), new Date(trialStart));
+    rollout({ start: trialStart + HOUR, cwd: ignored, messages: ['inline script backslashes'] });
+    rollout({ start: trialStart + (TRIAL_DAYS * 24 - 1) * HOUR, messages: ['inline script backslashes'] });
+    rollout({ start: trialStart + (TRIAL_DAYS * 24 + 1) * HOUR, messages: ['inline script backslashes'] });
+    runLessonsTrial({ now: trialStart + (TRIAL_DAYS * 24 + 2) * HOUR });
+    expect(outcomes()).toEqual(['trial_skipped', 'selected']);
+    expect(trialStatus(trialStart + (TRIAL_DAYS * 24 + 2) * HOUR)).toMatchObject({ trialId: 3, complete: true, skipped: 1, notesChosen: 1 });
+  });
+
+  it('prepares and runs Trial 3 separately, preserving Trial 2 and requiring fresh consent', async () => {
+    expect(prepareTrialThree()).toMatchObject({ ok: false, reason: 'running' });
+    rollout({ start: trialStart + HOUR, messages: ['inline script backslashes'] });
+    runLessonsTrial({ now: trialStart + 2 * HOUR });
+    closeTrial();
+    const oldRows = rows();
+    const oldReceipt = getConfig().lessons.trial;
+    const previous = trialStatus();
+    expect(prepareTrialThree()).toEqual({ ok: true });
+    expect(getConfig().lessons.trial).toEqual(oldReceipt);
+    expect(trialSetup()).toMatchObject({ id: 3, consent_version: 0, started_at: null });
+    enableLessonsSharing();
+    expect(trialSetup().id).toBe(3);
+    expect(runLessonsTrial().logged).toBe(0);
+    const lines: string[] = [];
+    expect(await runLessonsCommand(['trial'], { color: false, out: line => lines.push(line ?? ''), io: { interactive: true, env: { CODEX_SANDBOX: 'test' }, ask: async () => { throw new Error('must not ask'); } } })).toBe(1);
+    expect(lines.join('\n')).toContain('trial 3');
+    expect(trialSetup().started_at).toBeNull();
+    syncLessons({ sourceCli: 'claude', sourcePath: join(home, 'alias-note.md'),
+      projectIdentity: resolveProjectIdentity(projectA), projectLabel: 'synthetic', sourceMtime: new Date().toISOString(),
+      sections: [{ anchor: 'body', textMasked: 'PowerShell encoding requires explicit UTF-8 output.', scope: 'project', scopeReason: 'project-default', kind: 'lesson', quarantineReason: null }] });
+    const start = trialStart + 3 * HOUR;
+    expect(acceptTrial(trialSetup(), new Date(start))).toMatchObject({ ok: true });
+    rollout({ start: start + HOUR, messages: ['pwsh encoding'] });
+    expect(runLessonsTrial({ now: start + 2 * HOUR }).logged).toBe(1);
+    expect(trialStatus()).toMatchObject({ trialId: 3, qualifying: 1, notesChosen: 1 });
+    expect(getDb().prepare('SELECT COUNT(*) AS n FROM lesson_trial_sessions WHERE trial_id = 3').get()).toMatchObject({ n: 1 });
+    expect(rows().slice(0, oldRows.length)).toEqual(oldRows);
+    expect(trialStatus(Date.now(), 2)).toEqual(previous);
+    expect(selectLessonsCandidate({ query: 'inline script backslashes', targetProjectDir: projectA, targetHost: 'codex' }).reason).toBe('trial_running');
+    closeTrial();
+    expect(prepareTrialThree()).toMatchObject({ ok: false, reason: 'finished' });
+    expect(acceptTrial(trialSetup())).toMatchObject({ ok: false, reason: 'finished' });
+    expect(runLessonsTrial().logged).toBe(0);
+    expect(getConfig().lessons.trial).toEqual(oldReceipt);
+    const config = getConfig();
+    delete config.lessons.trial3;
+    setConfig(config);
+    expect(prepareTrialThree()).toMatchObject({ ok: false, reason: 'finished' });
+  });
   it('keeps existing nonempty evidence and stops recording later sessions', async () => {
     rollout({ start: trialStart + HOUR, messages: ['inline script backslashes'] });
     runLessonsTrial({ now: trialStart + 2 * HOUR });

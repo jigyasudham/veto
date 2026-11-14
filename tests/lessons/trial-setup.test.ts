@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { enableLessonsSharing, getConfig, isLessonsSharingEnabled, setConfig } from '../../src/memory/config.js';
 import { getDb, resetDb } from '../../src/memory/local.js';
-import { addTrialProject, clearTrialLists, closeTrial, startTrial, trialPhase, trialSetup } from '../../src/lessons/trial-setup.js';
+import { addTrialProject, clearTrialLists, closeTrial, prepareTrialThree, startTrial, trialPhase, trialSetup } from '../../src/lessons/trial-setup.js';
 import { TRIAL_DAYS, runLessonsTrial, trialStatus, trialWindow, trialStalled } from '../../src/lessons/trial.js';
 
 let home: string;
@@ -53,6 +53,28 @@ describe('setting up the trial', () => {
     expect(first.ok && first.entry.identity.startsWith('path:')).toBe(true);
     expect(addTrialProject('ignore', folder)).toMatchObject({ ok: true, added: false });
     expect(trialSetup().ignore).toHaveLength(1);
+  });
+
+  it('inherits lists without consent, prepares idempotently, and erases both trials only on off', async () => {
+    addTrialProject('ignore', folder);
+    startTrial(trialSetup());
+    closeTrial();
+    const previous = getConfig().lessons.trial;
+    expect(prepareTrialThree()).toEqual({ ok: true });
+    expect(trialSetup()).toMatchObject({ id: 3, consent_version: 0, started_at: null, ignore: previous!.ignore });
+    const stale = trialSetup();
+    clearTrialLists();
+    expect(prepareTrialThree()).toEqual({ ok: true });
+    expect(trialSetup().ignore).toEqual([]);
+    expect(startTrial(stale)).toMatchObject({ ok: false, reason: 'lists_changed' });
+    expect(getConfig().lessons.trial).toEqual(previous);
+    startTrial(trialSetup());
+    expect(prepareTrialThree()).toMatchObject({ ok: false, reason: 'running' });
+    const { turnLessonsOff } = await import('../../src/lessons/manage.js');
+    turnLessonsOff();
+    expect(getConfig().lessons.trial).toBeNull();
+    expect(getConfig().lessons.trial3).toBeNull();
+    expect(isLessonsSharingEnabled()).toBe(false);
   });
 
   it('refuses a folder that does not exist, and stores nothing', () => {
