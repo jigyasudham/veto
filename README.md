@@ -1,5 +1,7 @@
 # veto
 
+Release candidate: [3.10.0 — trial closure and candidate selection diagnostics](RELEASE-NOTES.md).
+
 [![npm version](https://img.shields.io/npm/v/@jigyasudham/veto)](https://www.npmjs.com/package/@jigyasudham/veto)
 [![npm downloads](https://img.shields.io/npm/dt/@jigyasudham/veto)](https://www.npmjs.com/package/@jigyasudham/veto)
 [![license](https://img.shields.io/npm/l/@jigyasudham/veto)](https://github.com/jigyasudham/veto/blob/main/LICENSE)
