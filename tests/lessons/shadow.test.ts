@@ -142,7 +142,8 @@ describe('shadow selection', () => {
     const memory = claudeFolder(copy, {});
     const stale = join(memory, 'feedback_quoting_rule.md');
     writeFileSync(stale, '---\nname: quoting-rule\ndescription: old copy\ntype: feedback\n---\nOLD COPY inline script backslashes\n');
-    const past = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    // Older than the already-harvested fixture, regardless of checkout age.
+    const past = new Date('2000-01-01T00:00:00Z');
     utimesSync(stale, past, past);
     syncLessonSources(home);
 
